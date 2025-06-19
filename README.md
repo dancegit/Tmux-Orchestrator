@@ -15,6 +15,15 @@ The Tmux Orchestrator is designed to monitor, manage, and coordinate multiple de
 - **Interactive command interface**: Direct control over sessions and agents
 - **Automated scheduling**: Schedule check-ins and maintain continuous orchestration
 
+### New: Project Startup Automation 🚀
+
+- **Automatic project discovery**: Scans ~/Coding for all development projects
+- **Framework detection**: Identifies Next.js, FastAPI, Django, React, and more
+- **One-command startup**: Launch any project with proper environment setup
+- **AI agent briefing**: Claude agents receive project-specific instructions
+- **GitHub integration**: Pulls issues and PRs for agent context
+- **Health monitoring**: Track agent and server status automatically
+
 ## Architecture
 
 ### Core Components
@@ -26,6 +35,15 @@ The Tmux Orchestrator is designed to monitor, manage, and coordinate multiple de
 5. **`schedule_with_note.sh`**: Automated scheduling system for continuous operation
 6. **`session_registry.py`**: Session tracking and registry management
 
+### New Project Automation Components
+
+7. **`project_startup.py`**: Automated project discovery and setup
+8. **`orchestrator_launcher.py`**: Unified interface for all operations
+9. **`github_integration.py`**: GitHub issues and PR management
+10. **`orchestrator_integration.py`**: Health monitoring and task management
+11. **`quick_start.sh`**: Simple command-line interface
+12. **`project_configs.json`**: Project-specific configurations
+
 ### Safety Features
 
 - **Confirmation required** for all potentially destructive commands
@@ -36,7 +54,23 @@ The Tmux Orchestrator is designed to monitor, manage, and coordinate multiple de
 
 ## Quick Start
 
-### Basic Usage
+### Project Startup (New!)
+
+```bash
+# Launch interactive menu
+./quick_start.sh
+
+# List all discovered projects
+./quick_start.sh list
+
+# Start a specific project
+./quick_start.sh start ai-chat
+
+# Find idle agents
+./quick_start.sh idle
+```
+
+### Traditional Usage
 
 ```bash
 # Start the orchestrator with interactive monitoring
@@ -57,10 +91,14 @@ python3 claude_control.py analyze <session> <window> [lines]
 Once running, the orchestrator provides these interactive commands:
 
 - `status` - Overview of all sessions/windows
+- `projects` - Show all project sessions (New!)
 - `analyze` - Latest Claude analysis of all activity
 - `window <session>:<index>` - Deep dive into specific window
 - `send <session>:<index> <command>` - Execute commands with safety checks
 - `find <name>` - Locate windows by name
+- `idle` - Find idle agents (New!)
+- `suggest <session>` - Get task suggestions (New!)
+- `health <session>` - Check project health (New!)
 - `interval <seconds>` - Adjust monitoring frequency
 
 ## Critical Workflows
@@ -220,6 +258,43 @@ The orchestrator maintains persistent state in the `registry/` directory:
 - `orchestrator_log.json`: System status and logs
 - `loop_checks.json`: Scheduled check history
 
+## Project Startup Automation
+
+### How It Works
+
+1. **Discovery**: Scans ~/Coding for projects with recognizable patterns
+2. **Analysis**: Detects project type, framework, and configuration
+3. **Session Creation**: Sets up tmux with standard window layout
+4. **Agent Briefing**: Provides context-aware instructions to Claude
+5. **Server Startup**: Automatically starts development servers
+6. **Monitoring**: Tracks health and suggests tasks for idle agents
+
+### Supported Frameworks
+
+- **Node.js**: Next.js, React, Express, Vue
+- **Python**: FastAPI, Django, Flask
+- **Others**: Ruby on Rails, Go, Rust (basic support)
+
+### Project Configuration
+
+Customize projects in `project_configs.json`:
+
+```json
+{
+  "my-project": {
+    "auto_start_server": true,
+    "briefing": "Focus on authentication implementation",
+    "github_integration": {
+      "check_issues": true,
+      "priority_labels": ["bug", "critical"]
+    },
+    "monitoring": {
+      "check_interval": 300
+    }
+  }
+}
+```
+
 ## Common Project Patterns
 
 ### Development Server Management
@@ -275,6 +350,7 @@ When adding new features or fixing issues:
 - tmux
 - Claude CLI (for AI analysis features)
 - bash (for scheduling scripts)
+- GitHub CLI (optional, for issue integration)
 
 ---
 

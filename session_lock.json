@@ -1,0 +1,33 @@
+{
+  "locked_sessions": ["ai-chat", "glacier-backend"],
+  "lock_reason": "User specified only these sessions should be modified overnight",
+  "locked_at": "2025-06-18T20:55:00+08:00",
+  "instructions": {
+    "ai-chat": {
+      "tasks": [
+        "Commit all changes before making new ones",
+        "Find and read vision document",
+        "Create 5 homepage layout variants",
+        "Fix workflow execution for multi-connected nodes",
+        "Create 5 workflow card style variations",
+        "Create center-based node inspector variant (3-pane)",
+        "Add chat functionality for sources/entities",
+        "Implement git checkpoint naming"
+      ]
+    },
+    "glacier-backend": {
+      "tasks": [
+        "Find analytics documentation and DuckDB notebook",
+        "Work with agent to check all table schemas",
+        "Create SQL queries for Customer LTV",
+        "Create SQL queries for Lead-to-Conversion ratio",
+        "Create SQL queries for common first/second products",
+        "Create SQL queries for repeat purchase rate",
+        "Optimize queries for fast loading",
+        "Document all queries",
+        "Let agent finish after queries are complete"
+      ]
+    }
+  },
+  "forbidden_sessions": ["task-templates", "glacier-frontend", "tmux-orc"]
+}
