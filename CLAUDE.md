@@ -3,6 +3,395 @@
 ## Project Overview
 The Tmux Orchestrator is an AI-powered session management system where Claude acts as the orchestrator for multiple Claude agents across tmux sessions, managing codebases and keeping development moving forward 24/7.
 
+## Startup Behavior - Tmux Window Naming
+
+### Auto-Rename Feature
+When Claude starts in the orchestrator, it should:
+1. **Ask the user**: "Would you like me to rename all tmux windows with descriptive names for better organization?"
+2. **If yes**: Analyze each window's content and rename them with meaningful names
+3. **If no**: Continue with existing names
+
+### Window Naming Convention
+Windows should be named based on their actual function:
+- **Claude Agents**: `Claude-Frontend`, `Claude-Backend`, `Claude-Convex`
+- **Dev Servers**: `NextJS-Dev`, `Frontend-Dev`, `Uvicorn-API`
+- **Shells/Utilities**: `Backend-Shell`, `Frontend-Shell`
+- **Services**: `Convex-Server`, `Orchestrator`
+- **Project Specific**: `Notion-Agent`, etc.
+
+### How to Rename Windows
+```bash
+# Rename a specific window
+tmux rename-window -t session:window-index "New-Name"
+
+# Example:
+tmux rename-window -t ai-chat:0 "Claude-Convex"
+tmux rename-window -t glacier-backend:3 "Uvicorn-API"
+```
+
+### Benefits
+- **Quick Navigation**: Easy to identify windows at a glance
+- **Better Organization**: Know exactly what's running where
+- **Reduced Confusion**: No more generic "node" or "zsh" names
+- **Project Context**: Names reflect actual purpose
+
+## Project Startup Sequence
+
+### When User Says "Open/Start/Fire up [Project Name]"
+
+Follow this systematic sequence to start any project:
+
+#### 1. Find the Project
+```bash
+# List all directories in ~/Coding to find projects
+ls -la ~/Coding/ | grep "^d" | awk '{print $NF}' | grep -v "^\."
+
+# If project name is ambiguous, list matches
+ls -la ~/Coding/ | grep -i "task"  # for "task templates"
+```
+
+#### 2. Create Tmux Session
+```bash
+# Create session with project name (use hyphens for spaces)
+PROJECT_NAME="task-templates"  # or whatever the folder is called
+PROJECT_PATH="/Users/jasonedward/Coding/$PROJECT_NAME"
+tmux new-session -d -s $PROJECT_NAME -c "$PROJECT_PATH"
+```
+
+#### 3. Set Up Standard Windows
+```bash
+# Window 0: Claude Agent
+tmux rename-window -t $PROJECT_NAME:0 "Claude-Agent"
+
+# Window 1: Shell
+tmux new-window -t $PROJECT_NAME -n "Shell" -c "$PROJECT_PATH"
+
+# Window 2: Dev Server (will start app here)
+tmux new-window -t $PROJECT_NAME -n "Dev-Server" -c "$PROJECT_PATH"
+```
+
+#### 4. Brief the Claude Agent
+```bash
+# Send briefing message to Claude agent
+tmux send-keys -t $PROJECT_NAME:0 "claude" Enter
+sleep 5  # Wait for Claude to start
+
+# Send the briefing
+tmux send-keys -t $PROJECT_NAME:0 "You are responsible for the $PROJECT_NAME codebase. Your duties include:
+1. Getting the application running
+2. Checking GitHub issues for priorities  
+3. Working on highest priority tasks
+4. Keeping the orchestrator informed of progress
+
+First, analyze the project to understand:
+- What type of project this is (check package.json, requirements.txt, etc.)
+- How to start the development server
+- What the main purpose of the application is
+
+Then start the dev server in window 2 (Dev-Server) and begin working on priority issues."
+sleep 1
+tmux send-keys -t $PROJECT_NAME:0 Enter
+```
+
+#### 5. Project Type Detection (Agent Should Do This)
+The agent should check for:
+```bash
+# Node.js project
+test -f package.json && cat package.json | grep scripts
+
+# Python project  
+test -f requirements.txt || test -f pyproject.toml || test -f setup.py
+
+# Ruby project
+test -f Gemfile
+
+# Go project
+test -f go.mod
+```
+
+#### 6. Start Development Server (Agent Should Do This)
+Based on project type, the agent should start the appropriate server in window 2:
+```bash
+# For Next.js/Node projects
+tmux send-keys -t $PROJECT_NAME:2 "npm install && npm run dev" Enter
+
+# For Python/FastAPI
+tmux send-keys -t $PROJECT_NAME:2 "source venv/bin/activate && uvicorn app.main:app --reload" Enter
+
+# For Django
+tmux send-keys -t $PROJECT_NAME:2 "source venv/bin/activate && python manage.py runserver" Enter
+```
+
+#### 7. Check GitHub Issues (Agent Should Do This)
+```bash
+# Check if it's a git repo with remote
+git remote -v
+
+# Use GitHub CLI to check issues
+gh issue list --limit 10
+
+# Or check for TODO.md, ROADMAP.md files
+ls -la | grep -E "(TODO|ROADMAP|TASKS)"
+```
+
+#### 8. Monitor and Report Back
+The orchestrator should:
+```bash
+# Check agent status periodically
+tmux capture-pane -t $PROJECT_NAME:0 -p | tail -30
+
+# Check if dev server started successfully  
+tmux capture-pane -t $PROJECT_NAME:2 -p | tail -20
+
+# Monitor for errors
+tmux capture-pane -t $PROJECT_NAME:2 -p | grep -i error
+```
+
+### Example: Starting "Task Templates" Project
+```bash
+# 1. Find project
+ls -la ~/Coding/ | grep -i task
+# Found: task-templates
+
+# 2. Create session
+tmux new-session -d -s task-templates -c "/Users/jasonedward/Coding/task-templates"
+
+# 3. Set up windows
+tmux rename-window -t task-templates:0 "Claude-Agent"
+tmux new-window -t task-templates -n "Shell" -c "/Users/jasonedward/Coding/task-templates"
+tmux new-window -t task-templates -n "Dev-Server" -c "/Users/jasonedward/Coding/task-templates"
+
+# 4. Start Claude and brief
+tmux send-keys -t task-templates:0 "claude" Enter
+# ... (briefing as above)
+```
+
+### Important Notes
+- Always verify project exists before creating session
+- Use project folder name for session name (with hyphens for spaces)
+- Let the agent figure out project-specific details
+- Monitor for successful startup before considering task complete
+
+## Agent System Architecture
+
+### Orchestrator Role
+As the Orchestrator, you maintain high-level oversight without getting bogged down in implementation details:
+- Deploy and coordinate agent teams
+- Monitor system health
+- Resolve cross-project dependencies
+- Make architectural decisions
+- Ensure quality standards are maintained
+
+### Agent Hierarchy
+```
+                    Orchestrator (You)
+                    /              \
+            Project Manager    Project Manager
+           /      |       \         |
+    Developer    QA    DevOps   Developer
+```
+
+### Agent Types
+1. **Project Manager**: Quality-focused team coordination
+2. **Developer**: Implementation and technical decisions
+3. **QA Engineer**: Testing and verification
+4. **DevOps**: Infrastructure and deployment
+5. **Code Reviewer**: Security and best practices
+6. **Researcher**: Technology evaluation
+7. **Documentation Writer**: Technical documentation
+
+## Creating a Project Manager
+
+### When User Says "Create a project manager for [session]"
+
+#### 1. Analyze the Session
+```bash
+# List windows in the session
+tmux list-windows -t [session] -F "#{window_index}: #{window_name}"
+
+# Check each window to understand project
+tmux capture-pane -t [session]:0 -p | tail -50
+```
+
+#### 2. Create PM Window
+```bash
+# Get project path from existing window
+PROJECT_PATH=$(tmux display-message -t [session]:0 -p '#{pane_current_path}')
+
+# Create new window for PM
+tmux new-window -t [session] -n "Project-Manager" -c "$PROJECT_PATH"
+```
+
+#### 3. Start and Brief the PM
+```bash
+# Start Claude
+tmux send-keys -t [session]:[PM-window] "claude" Enter
+sleep 5
+
+# Send PM-specific briefing
+tmux send-keys -t [session]:[PM-window] "You are the Project Manager for this project. Your responsibilities:
+
+1. **Quality Standards**: Maintain exceptionally high standards. No shortcuts, no compromises.
+2. **Verification**: Test everything. Trust but verify all work.
+3. **Team Coordination**: Manage communication between team members efficiently.
+4. **Progress Tracking**: Monitor velocity, identify blockers, report to orchestrator.
+5. **Risk Management**: Identify potential issues before they become problems.
+
+Key Principles:
+- Be meticulous about testing and verification
+- Create test plans for every feature
+- Ensure code follows best practices
+- Track technical debt
+- Communicate clearly and constructively
+
+First, analyze the project and existing team members, then introduce yourself to the developer in window 0."
+sleep 1
+tmux send-keys -t [session]:[PM-window] Enter
+```
+
+#### 4. PM Introduction Protocol
+The PM should:
+```bash
+# Check developer window
+tmux capture-pane -t [session]:0 -p | tail -30
+
+# Introduce themselves
+tmux send-keys -t [session]:0 "Hello! I'm the new Project Manager for this project. I'll be helping coordinate our work and ensure we maintain high quality standards. Could you give me a brief status update on what you're currently working on?"
+sleep 1
+tmux send-keys -t [session]:0 Enter
+```
+
+## Communication Protocols
+
+### Hub-and-Spoke Model
+To prevent communication overload (n² complexity), use structured patterns:
+- Developers report to PM only
+- PM aggregates and reports to Orchestrator
+- Cross-functional communication goes through PM
+- Emergency escalation directly to Orchestrator
+
+### Daily Standup (Async)
+```bash
+# PM asks each team member
+tmux send-keys -t [session]:[dev-window] "STATUS UPDATE: Please provide: 1) Completed tasks, 2) Current work, 3) Any blockers"
+# Wait for response, then aggregate
+```
+
+### Message Templates
+
+#### Status Update
+```
+STATUS [AGENT_NAME] [TIMESTAMP]
+Completed: 
+- [Specific task 1]
+- [Specific task 2]
+Current: [What working on now]
+Blocked: [Any blockers]
+ETA: [Expected completion]
+```
+
+#### Task Assignment
+```
+TASK [ID]: [Clear title]
+Assigned to: [AGENT]
+Objective: [Specific goal]
+Success Criteria:
+- [Measurable outcome]
+- [Quality requirement]
+Priority: HIGH/MED/LOW
+```
+
+## Team Deployment
+
+### When User Says "Work on [new project]"
+
+#### 1. Project Analysis
+```bash
+# Find project
+ls -la ~/Coding/ | grep -i "[project-name]"
+
+# Analyze project type
+cd ~/Coding/[project-name]
+test -f package.json && echo "Node.js project"
+test -f requirements.txt && echo "Python project"
+```
+
+#### 2. Propose Team Structure
+
+**Small Project**: 1 Developer + 1 PM
+**Medium Project**: 2 Developers + 1 PM + 1 QA  
+**Large Project**: Lead + 2 Devs + PM + QA + DevOps
+
+#### 3. Deploy Team
+Create session and deploy all agents with specific briefings for their roles.
+
+## Agent Lifecycle Management
+
+### Creating Temporary Agents
+For specific tasks (code review, bug fix):
+```bash
+# Create with clear temporary designation
+tmux new-window -t [session] -n "TEMP-CodeReview"
+```
+
+### Ending Agents Properly
+```bash
+# 1. Capture complete conversation
+tmux capture-pane -t [session]:[window] -S - -E - > \
+  ~/Coding/Tmux\ orchestrator/agent_logs/[session]_[role]_$(date +%Y%m%d_%H%M%S).log
+
+# 2. Create summary of work completed
+echo "=== Agent Summary ===" >> [logfile]
+echo "Tasks Completed:" >> [logfile]
+echo "Issues Encountered:" >> [logfile]
+echo "Handoff Notes:" >> [logfile]
+
+# 3. Close window
+tmux kill-window -t [session]:[window]
+```
+
+### Agent Logging Structure
+```
+~/Coding/Tmux orchestrator/agent_logs/
+├── permanent/       # Long-running agents
+├── temporary/       # Task-specific agents
+└── summaries/       # Daily and project summaries
+```
+
+## Quality Assurance Protocols
+
+### PM Verification Checklist
+- [ ] All code has tests
+- [ ] Error handling is comprehensive
+- [ ] Performance is acceptable
+- [ ] Security best practices followed
+- [ ] Documentation is updated
+- [ ] No technical debt introduced
+
+### Continuous Verification
+PMs should implement:
+1. Code review before any merge
+2. Test coverage monitoring
+3. Performance benchmarking
+4. Security scanning
+5. Documentation audits
+
+## Communication Rules
+
+1. **No Chit-Chat**: All messages work-related
+2. **Use Templates**: Reduces ambiguity
+3. **Acknowledge Receipt**: Simple "ACK" for tasks
+4. **Escalate Quickly**: Don't stay blocked >10 min
+5. **One Topic Per Message**: Keep focused
+
+## Anti-Patterns to Avoid
+
+- ❌ **Meeting Hell**: Use async updates only
+- ❌ **Endless Threads**: Max 3 exchanges, then escalate
+- ❌ **Broadcast Storms**: No "FYI to all" messages
+- ❌ **Micromanagement**: Trust agents to work
+- ❌ **Quality Shortcuts**: Never compromise standards
+
 ## Critical Lessons Learned
 
 ### Tmux Window Management Mistakes and Solutions
@@ -146,6 +535,57 @@ When a command fails:
    
    **Why the sleep is critical**: Claude's interface needs time to register text input before Enter can be processed. Sending Enter too quickly after text will cause it to be ignored. Always add at least 1 second delay between sending text and Enter.
 
+3. **Using Claude Plan Mode for Complex Tasks**
+   ```bash
+   # Activate plan mode - requires careful key sequence:
+   # 1. Hold down Shift
+   # 2. Press Tab once
+   # 3. Press Tab again (while still holding Shift)
+   # 4. Release Shift
+   tmux send-keys -t session:window S-Tab S-Tab
+   
+   # Wait for plan mode to activate
+   sleep 1
+   
+   # CRITICAL: Verify plan mode is on by checking for "⏸ plan mode on"
+   tmux capture-pane -t session:window -p | tail -10 | grep "plan mode on"
+   
+   # If not activated, try again:
+   # Sometimes requires additional Shift+Tab presses
+   tmux send-keys -t session:window S-Tab
+   sleep 1
+   tmux capture-pane -t session:window -p | tail -10 | grep "plan mode on"
+   
+   # Send your planning request
+   tmux send-keys -t session:window "Plan out the implementation for [detailed task description]"
+   sleep 1
+   tmux send-keys -t session:window Enter
+   
+   # Wait for Claude to generate the plan
+   sleep 10
+   
+   # Claude will ask if you want to proceed with the plan
+   # To accept: send Enter (default is Yes)
+   tmux send-keys -t session:window Enter
+   
+   # To continue planning: send Down arrow then Enter
+   # tmux send-keys -t session:window Down Enter
+   ```
+   
+   **When to Use Plan Mode**:
+   - Complex multi-step implementations
+   - Architecture decisions requiring careful thought
+   - Refactoring existing code
+   - When you want the agent to think through edge cases
+   - Before making significant changes to the codebase
+   
+   **Benefits of Plan Mode**:
+   - Agent outlines full approach before starting
+   - Identifies potential issues early
+   - Creates structured implementation plan
+   - Allows PM to review approach before execution
+   - Reduces wasted effort on wrong approaches
+
 ## Common Project-Specific Issues
 
 ### Glacier Backend Server
@@ -217,6 +657,190 @@ done
 2. Use clear, specific messages about what you need
 3. Wait for responses before proceeding
 4. Document any dependencies between projects
+
+## Status Sync - Cross-Team Intelligence Gathering
+
+**Status Sync** is a critical orchestrator workflow for gathering comprehensive intelligence across multiple active sessions before making coordination decisions.
+
+### When to Use Status Sync
+- User requests coordination between multiple projects/teams
+- Need to understand current state before assigning new tasks
+- Debugging issues that span multiple sessions
+- Before making architectural decisions affecting multiple agents
+- When agents report conflicting information or blocking issues
+
+### Status Sync Workflow
+
+#### 1. Rapid Multi-Session Reconnaissance
+```bash
+# Capture recent activity from all relevant sessions (run in parallel)
+tmux capture-pane -t session1 -S -2000 -p | tail -1000
+tmux capture-pane -t session2 -S -2000 -p | tail -1000
+tmux capture-pane -t session3 -S -2000 -p | tail -1000
+```
+
+#### 2. Intelligence Analysis Pattern
+For each session, identify:
+- **Current Task**: What the agent is actively working on
+- **Recent Progress**: What they've accomplished in the last 30-60 minutes
+- **Technical Issues**: Any errors, blockers, or challenges encountered
+- **Dependencies**: What they're waiting for from other teams
+- **System State**: Server status, compilation state, test results
+
+#### 3. Cross-Session Correlation
+Look for:
+- **Complementary Work**: Agent A needs info Agent B has discovered
+- **Duplicate Efforts**: Multiple agents solving the same problem
+- **Blocking Chains**: Agent A blocked on Agent B's work
+- **Resource Conflicts**: Port conflicts, file locks, etc.
+- **Integration Points**: APIs, data formats, authentication
+
+#### 4. Coordinated Status Report
+Provide user with:
+```
+## 🔍 Status Sync Report
+
+### Session A (Project/Role)
+- ✅ Completed: [Specific achievements]
+- ⏳ Current: [Active work]
+- ⚠️ Issues: [Blockers/challenges]
+- 📅 Next: [Planned steps]
+
+### Session B (Project/Role)  
+- ✅ Completed: [Specific achievements]
+- ⏳ Current: [Active work] 
+- ⚠️ Issues: [Blockers/challenges]
+- 📅 Next: [Planned steps]
+
+### 🎯 Coordination Opportunities
+- [Specific ways teams can help each other]
+- [Dependencies to resolve]
+- [Resource sharing opportunities]
+
+### 🚨 Critical Issues Requiring Attention
+- [Blockers needing user intervention]
+- [Conflicts between teams]
+- [Technical debt accumulating]
+```
+
+### Status Sync Command Patterns
+```bash
+# Quick status check across all sessions
+for session in $(tmux list-sessions -F "#{session_name}"); do
+    echo "=== $session Status ==="
+    tmux capture-pane -t $session:0 -p | tail -20
+    echo ""
+done
+
+# Deep dive into specific sessions
+tmux capture-pane -t glacier-backend -S -1000 -p | grep -E "(ERROR|SUCCESS|COMPLETED|FAILED|BLOCKED)"
+tmux capture-pane -t glacier-frontend -S -1000 -p | grep -E "(ERROR|SUCCESS|COMPLETED|FAILED|BLOCKED)"
+
+# Check server/process status
+tmux capture-pane -t session:server-window -p | tail -30
+```
+
+### Benefits of Status Sync
+1. **Prevents Miscommunication**: Get ground truth from agent logs
+2. **Identifies Hidden Dependencies**: See what agents actually need
+3. **Spots Integration Issues**: Catch API mismatches early
+4. **Enables Smart Coordination**: Make informed decisions about priorities
+5. **Reduces Context Switching**: One comprehensive update vs. multiple check-ins
+
+### Status Sync Anti-Patterns
+- ❌ **Shallow Checking**: Only looking at last few lines
+- ❌ **Single Session Focus**: Missing cross-session dependencies  
+- ❌ **No Analysis**: Just copying logs without interpretation
+- ❌ **Outdated Intel**: Using stale information for decisions
+- ❌ **Over-Reporting**: Including irrelevant details instead of key insights
+
+### Example Status Sync Scenarios
+
+**Scenario 1: Backend/Frontend Integration**
+```
+User: "Check status on Glacier backend and frontend"
+Orchestrator: [Runs Status Sync]
+Finding: Backend returning campaign data to flow endpoints, frontend expecting flow data structure
+Action: Coordinate fix - backend needs schema alignment, frontend has field logging ready
+```
+
+**Scenario 2: Cross-Project Authentication**
+```
+User: "Why is auth not working consistently?"
+Orchestrator: [Runs Status Sync across all auth-related sessions]
+Finding: ai-chat has Clerk working, glacier-frontend has Clerk, glacier-backend expects Basic auth
+Action: Standardize auth approach or create auth translation layer
+```
+
+**Status Sync Frequency**: Use this pattern at the start of any coordination task and whenever you need to make informed decisions about multiple active projects.
+
+## Database Schema Verification Protocol
+
+### CRITICAL: Always Check Database Schema FIRST
+When debugging data issues, empty results, or field mismatches:
+
+#### 1. Open Database and Inspect Schema
+```bash
+# For DuckDB
+tmux send-keys -t backend:window "python3" Enter
+tmux send-keys -t backend:window "import duckdb" Enter
+tmux send-keys -t backend:window "conn = duckdb.connect('warehouse.db')" Enter
+tmux send-keys -t backend:window "conn.execute('SHOW TABLES').fetchall()" Enter
+tmux send-keys -t backend:window "conn.execute('DESCRIBE table_name').fetchall()" Enter
+
+# Or use SQL directly
+tmux send-keys -t backend:window "duckdb warehouse.db" Enter
+tmux send-keys -t backend:window ".tables" Enter
+tmux send-keys -t backend:window "DESCRIBE stg_klaviyo_flows;" Enter
+```
+
+#### 2. Common Schema Issues to Check
+- **Column names**: `id` vs `flow_id`, `campaign_id` vs `id`
+- **Data types**: String vs Integer IDs
+- **NULL constraints**: Required fields that might be NULL
+- **Foreign key relationships**: JOIN columns must exist
+- **Naming conventions**: snake_case vs camelCase
+
+#### 3. SQL JOIN Debugging Pattern
+```sql
+-- ALWAYS verify column exists before JOINing
+DESCRIBE table1;
+DESCRIBE table2;
+
+-- Test JOIN with limited data first
+SELECT t1.*, t2.*
+FROM table1 t1
+LEFT JOIN table2 t2 ON t1.column = t2.column
+LIMIT 5;
+```
+
+#### 4. Field Mapping Verification
+When frontend expects different fields than backend provides:
+```bash
+# Backend: Check actual API response
+curl -s "http://localhost:8000/api/endpoint" | python3 -m json.tool | head -50
+
+# Compare with frontend expectations
+# Look for: opens_unique vs unique_opens, clicks_unique vs unique_clicks, etc.
+```
+
+### Example: The Flow ID Issue
+**Problem**: 3+ hours debugging empty results
+**Root Cause**: `LEFT JOIN stg_klaviyo_flows f ON fs.flow_id = f.id`
+**Issue**: Table had `flow_id` column, not `id`
+**Solution**: `LEFT JOIN stg_klaviyo_flows f ON fs.flow_id = f.flow_id`
+**Lesson**: ALWAYS check schema before debugging complex issues
+
+### Browser Console Direct Access
+Instead of asking user for console logs:
+```bash
+# Start browser console monitor
+cd /Users/jasonedward/Coding/Tmux\ orchestrator
+node setup_puppeteer_console_monitor.js
+
+# Or use single visible browser for testing
+node single_visible_browser.js
+```
 
 ## Remember: Always Learn from Mistakes
 When something goes wrong:
