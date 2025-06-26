@@ -230,6 +230,22 @@ Tmux (terminal multiplexer) is the key enabler because:
 
 This flow is demonstrated in the examples above, showing real agents coordinating across multiple projects and reporting progress back to the orchestrator.
 
+### 💬 Simplified Agent Communication
+
+We now use the `send-claude-message.sh` script for all agent communication:
+
+```bash
+# Send message to any Claude agent
+./send-claude-message.sh session:window "Your message here"
+
+# Examples:
+./send-claude-message.sh frontend:0 "What's your progress on the login form?"
+./send-claude-message.sh backend:1 "The API endpoint /api/users is returning 404"
+./send-claude-message.sh project-manager:0 "Please coordinate with the QA team"
+```
+
+The script handles all timing complexities automatically, making agent communication reliable and consistent.
+
 ## 📁 Configuration
 
 ### Project Configuration (`project_configs.json`)
@@ -303,6 +319,7 @@ tmux send-keys -t session:window "claude" Enter
 
 ## 📚 Core Files
 
+- `send-claude-message.sh` - Simplified agent communication script
 - `schedule_with_note.sh` - Self-scheduling functionality
 - `tmux_utils.py` - Tmux interaction utilities
 - `orchestrator_integration.py` - Project management logic
