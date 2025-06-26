@@ -3,6 +3,34 @@
 ## Project Overview
 The Tmux Orchestrator is an AI-powered session management system where Claude acts as the orchestrator for multiple Claude agents across tmux sessions, managing codebases and keeping development moving forward 24/7.
 
+## Agent System Architecture
+
+### Orchestrator Role
+As the Orchestrator, you maintain high-level oversight without getting bogged down in implementation details:
+- Deploy and coordinate agent teams
+- Monitor system health
+- Resolve cross-project dependencies
+- Make architectural decisions
+- Ensure quality standards are maintained
+
+### Agent Hierarchy
+```
+                    Orchestrator (You)
+                    /              \
+            Project Manager    Project Manager
+           /      |       \         |
+    Developer    QA    DevOps   Developer
+```
+
+### Agent Types
+1. **Project Manager**: Quality-focused team coordination
+2. **Developer**: Implementation and technical decisions
+3. **QA Engineer**: Testing and verification
+4. **DevOps**: Infrastructure and deployment
+5. **Code Reviewer**: Security and best practices
+6. **Researcher**: Technology evaluation
+7. **Documentation Writer**: Technical documentation
+
 ## 🔐 Git Discipline - MANDATORY FOR ALL AGENTS
 
 ### Core Git Safety Rules
@@ -242,34 +270,6 @@ tmux send-keys -t task-templates:0 "claude" Enter
 - Use project folder name for session name (with hyphens for spaces)
 - Let the agent figure out project-specific details
 - Monitor for successful startup before considering task complete
-
-## Agent System Architecture
-
-### Orchestrator Role
-As the Orchestrator, you maintain high-level oversight without getting bogged down in implementation details:
-- Deploy and coordinate agent teams
-- Monitor system health
-- Resolve cross-project dependencies
-- Make architectural decisions
-- Ensure quality standards are maintained
-
-### Agent Hierarchy
-```
-                    Orchestrator (You)
-                    /              \
-            Project Manager    Project Manager
-           /      |       \         |
-    Developer    QA    DevOps   Developer
-```
-
-### Agent Types
-1. **Project Manager**: Quality-focused team coordination
-2. **Developer**: Implementation and technical decisions
-3. **QA Engineer**: Testing and verification
-4. **DevOps**: Infrastructure and deployment
-5. **Code Reviewer**: Security and best practices
-6. **Researcher**: Technology evaluation
-7. **Documentation Writer**: Technical documentation
 
 ## Creating a Project Manager
 
@@ -671,72 +671,6 @@ sleep 5
 # Check what the agent said
 tmux capture-pane -t session:0 -p | tail -50
 ```
-
-3. **Using Claude Plan Mode for Complex Tasks**
-   ```bash
-   # Activate plan mode - requires careful key sequence:
-   # 1. Hold down Shift
-   # 2. Press Tab once
-   # 3. Press Tab again (while still holding Shift)
-   # 4. Release Shift
-   tmux send-keys -t session:window S-Tab S-Tab
-   
-   # Wait for plan mode to activate
-   sleep 1
-   
-   # CRITICAL: Verify plan mode is on by checking for "⏸ plan mode on"
-   tmux capture-pane -t session:window -p | tail -10 | grep "plan mode on"
-   
-   # If not activated, try again:
-   # Sometimes requires additional Shift+Tab presses
-   tmux send-keys -t session:window S-Tab
-   sleep 1
-   tmux capture-pane -t session:window -p | tail -10 | grep "plan mode on"
-   
-   # Send your planning request
-   tmux send-keys -t session:window "Plan out the implementation for [detailed task description]"
-   sleep 1
-   tmux send-keys -t session:window Enter
-   
-   # Wait for Claude to generate the plan
-   sleep 10
-   
-   # Claude will ask if you want to proceed with the plan
-   # To accept: send Enter (default is Yes)
-   tmux send-keys -t session:window Enter
-   
-   # To continue planning: send Down arrow then Enter
-   # tmux send-keys -t session:window Down Enter
-   ```
-   
-   **When to Use Plan Mode**:
-   - Complex multi-step implementations
-   - Architecture decisions requiring careful thought
-   - Refactoring existing code
-   - When you want the agent to think through edge cases
-   - Before making significant changes to the codebase
-   
-   **Benefits of Plan Mode**:
-   - Agent outlines full approach before starting
-   - Identifies potential issues early
-   - Creates structured implementation plan
-   - Allows PM to review approach before execution
-   - Reduces wasted effort on wrong approaches
-
-## Common Project-Specific Issues
-
-### Glacier Backend Server
-- **Location**: `/Users/jasonedward/Coding/Glacier-Analytics`
-- **Server Command**: `uvicorn app.main:app --reload`
-- **Common Issues**:
-  - Needs virtual environment activated first
-  - Check for `.env` file with required variables
-  - Default port is 8000
-
-### Glacier Frontend
-- **Location**: `/Users/jasonedward/Coding/glacier-frontend`
-- **Dev Server**: `npm run dev`
-- **Default Port**: Usually 3000 or specified in package.json
 
 ## Orchestrator-Specific Patterns
 
