@@ -1,41 +1,13 @@
-# Tmux Orchestrator 🎭
+![Orchestrator Hero](/Orchestrator.png)
 
 **Run AI agents 24/7 while you sleep** - The Tmux Orchestrator enables Claude agents to work autonomously, schedule their own check-ins, and coordinate across multiple projects without human intervention.
 
-> *"Set up agents that run for you on a 24/7 basis, working in the background while you sleep"*
-
-## 🚀 The Vision
-
-Imagine waking up to find your codebase has new features, bugs have been fixed, and everything is properly tested and committed to git. The Tmux Orchestrator makes this possible by creating a hierarchy of AI agents that can:
+## 🤖 Key Capabilities & Autonomous Features
 
 - **Self-trigger** - Agents schedule their own check-ins and continue work autonomously
 - **Coordinate** - Project managers assign tasks to engineers across multiple codebases  
 - **Persist** - Work continues even when you close your laptop
 - **Scale** - Run multiple teams working on different projects simultaneously
-
-## ⚠️ Critical Prerequisites & Precautions
-
-### Before You Start - MUST HAVE:
-
-1. **Clear Specifications** 
-   - Write detailed spec sheets for each project
-   - Define exact outcomes and constraints
-   - Be specific - vague instructions lead to agent drift
-
-2. **Git Discipline**
-   - All projects MUST be in git repositories
-   - Agents will commit frequently (every 30 minutes)
-   - Enable automatic backups to prevent work loss
-
-3. **Concise Instructions**
-   - Agents have limited context windows
-   - Keep instructions clear and focused
-   - One task at a time prevents confusion
-
-### Why This Matters:
-- **Without specs**: Agents drift off-task and waste compute
-- **Without git**: Hours of work can vanish in seconds  
-- **Without clarity**: Results become unpredictable
 
 ## 🏗️ Architecture
 
@@ -221,15 +193,6 @@ Tmux (terminal multiplexer) is the key enabler because:
 - Claude runs in the terminal, so it can control other Claude instances
 - Commands can be sent programmatically to any window
 
-### Agent Communication Flow
-1. **Orchestrator** reads all project states
-2. **Project Managers** receive high-level objectives
-3. **Engineers** get specific implementation tasks
-4. **Check-ins** happen automatically via scheduled scripts
-5. **Git commits** preserve all progress
-
-This flow is demonstrated in the examples above, showing real agents coordinating across multiple projects and reporting progress back to the orchestrator.
-
 ### 💬 Simplified Agent Communication
 
 We now use the `send-claude-message.sh` script for all agent communication:
@@ -245,25 +208,6 @@ We now use the `send-claude-message.sh` script for all agent communication:
 ```
 
 The script handles all timing complexities automatically, making agent communication reliable and consistent.
-
-## 📁 Configuration
-
-### Project Configuration (`project_configs.json`)
-```json
-{
-  "my-project": {
-    "spec_file": "specs/my-project.md",
-    "git_commit_interval": 1800,
-    "check_in_interval": 3600,
-    "branch_prefix": "auto/",
-    "test_command": "npm test",
-    "constraints": {
-      "max_files_per_commit": 10,
-      "require_tests": true
-    }
-  }
-}
-```
 
 ### Scheduling Check-ins
 ```bash
@@ -295,57 +239,28 @@ The orchestrator can share insights between projects:
 - "Authentication is working in Project A, use same pattern in Project B"
 - "Performance issue found in shared library, fix across all projects"
 
-## 🔧 Troubleshooting
-
-### Agent Not Responding
-```bash
-# Check agent status
-tmux capture-pane -t session:window -p | tail -50
-
-# Restart if needed
-tmux send-keys -t session:window C-c
-tmux send-keys -t session:window "claude" Enter
-```
-
-### Git Merge Conflicts
-- Agents create feature branches to avoid conflicts
-- Manual resolution may be needed for complex merges
-- Set up notifications for merge failures
-
-### Context Window Exhaustion
-- Restart agent with fresh context
-- Provide summary of completed work
-- Continue from last git commit
-
 ## 📚 Core Files
 
 - `send-claude-message.sh` - Simplified agent communication script
 - `schedule_with_note.sh` - Self-scheduling functionality
 - `tmux_utils.py` - Tmux interaction utilities
-- `orchestrator_integration.py` - Project management logic
-- `project_configs.json` - Project-specific settings
 - `CLAUDE.md` - Agent behavior instructions
 - `LEARNINGS.md` - Accumulated knowledge base
 
-## 🚀 What's Possible?
+## 🤝 Contributing & Optimization
 
-With the Tmux Orchestrator running overnight, you might wake up to:
+The orchestrator evolves through community discoveries and optimizations. When contributing:
 
-- ✅ New features implemented and tested
-- ✅ Bug fixes with regression tests
-- ✅ Refactored code with improved performance
-- ✅ Updated documentation
-- ✅ Cleaned up technical debt
-- ✅ All changes properly committed to git
+1. Document new tmux commands and patterns in CLAUDE.md
+2. Share novel use cases and agent coordination strategies
+3. Submit optimizations for claudes synchronization
+4. Keep command reference up-to-date with latest findings
+5. Test improvements across multiple sessions and scenarios
 
-## 🤝 Contributing
-
-The orchestrator thrives on community improvements. When contributing:
-
-1. Test with multiple tmux sessions
-2. Ensure git safety mechanisms work
-3. Update LEARNINGS.md with new insights
-4. Keep the orchestrator's instructions in CLAUDE.md current
+Key areas for enhancement:
+- Agent communication patterns
+- Cross-project coordination
+- Novel automation workflows
 
 ## 📄 License
 
@@ -353,4 +268,4 @@ MIT License - Use freely but wisely. Remember: with great automation comes great
 
 ---
 
-*"The best code is written while you sleep" - The Tmux Orchestrator*
+*"The tools we build today will program themselves tomorrow"* - Alan Kay, 1971
