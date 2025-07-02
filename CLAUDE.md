@@ -455,6 +455,48 @@ PMs should implement:
 4. **Escalate Quickly**: Don't stay blocked >10 min
 5. **One Topic Per Message**: Keep focused
 
+## Critical Self-Scheduling Protocol
+
+### 🚨 MANDATORY STARTUP CHECK FOR ALL ORCHESTRATORS
+
+**EVERY TIME you start or restart as an orchestrator, you MUST perform this check:**
+
+```bash
+# 1. Check your current tmux location
+echo "Current pane: $TMUX_PANE"
+CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
+echo "Current window: $CURRENT_WINDOW"
+
+# 2. Test the scheduling script with your current window
+./schedule_with_note.sh 1 "Test schedule for $CURRENT_WINDOW" "$CURRENT_WINDOW"
+
+# 3. If scheduling fails, you MUST fix the script before proceeding
+```
+
+### Schedule Script Requirements
+
+The `schedule_with_note.sh` script MUST:
+- Accept a third parameter for target window: `./schedule_with_note.sh <minutes> "<note>" <target_window>`
+- Default to `tmux-orc:0` if no target specified
+- Always verify the target window exists before scheduling
+
+### Why This Matters
+
+- **Continuity**: Orchestrators must maintain oversight without gaps
+- **Window Accuracy**: Scheduling to wrong window breaks the oversight chain
+- **Self-Recovery**: Orchestrators must be able to restart themselves reliably
+
+### Scheduling Best Practices
+
+```bash
+# Always use current window for self-scheduling
+CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
+./schedule_with_note.sh 15 "Regular PM oversight check" "$CURRENT_WINDOW"
+
+# For scheduling other agents, specify their windows explicitly
+./schedule_with_note.sh 30 "Developer progress check" "ai-chat:2"
+```
+
 ## Anti-Patterns to Avoid
 
 - ❌ **Meeting Hell**: Use async updates only
@@ -462,6 +504,7 @@ PMs should implement:
 - ❌ **Broadcast Storms**: No "FYI to all" messages
 - ❌ **Micromanagement**: Trust agents to work
 - ❌ **Quality Shortcuts**: Never compromise standards
+- ❌ **Blind Scheduling**: Never schedule without verifying target window
 
 ## Critical Lessons Learned
 
@@ -671,318 +714,3 @@ sleep 5
 # Check what the agent said
 tmux capture-pane -t session:0 -p | tail -50
 ```
-
-## Orchestrator-Specific Patterns
-
-### Agent Communication & Assistance
-
-**Critical Insight**: You can send messages to agents even when they're busy! Messages will be queued and the agent will see them after their current task.
-
-#### When to Send Queued Messages:
-1. **Cross-Window Intelligence**: You see errors or important info in one window that the agent needs
-2. **Steering Guidance**: Agent seems stuck or heading in wrong direction
-3. **Resource Sharing**: You have access to information from other sessions/windows
-4. **Proactive Assistance**: Preventing issues before they become blockers
-
-#### Examples of Helpful Interventions:
-```bash
-# Frontend agent struggling with port issues, but you see in npm window:
-"I see in your npm-run-dev window that the server is running on port 3002, not 3001"
-
-# Backend agent looking for files, but you checked another window:
-"The frontend is using /api/v1/public/* endpoints - I confirmed this from their window"
-
-# Agent getting errors you can see in server logs:
-"Check the server window - seeing 'module not found' errors for uvicorn"
-
-# Sharing cross-session insights:
-"The ai-chat session has auth working with Clerk - might help with your implementation"
-```
-
-#### Your Orchestrator Advantages:
-1. **Multi-Window Vision**: See all windows across all sessions
-2. **Cross-Project Knowledge**: Connect solutions from different codebases
-3. **Real-Time Monitoring**: Spot issues as they happen in logs/servers
-4. **Pattern Recognition**: Notice similar problems across projects
-
-#### Best Practices:
-- Always specify WHERE you saw the information ("in your server window", "from the frontend agent")
-- Be specific about errors/issues you observe
-- Suggest concrete next steps based on what you see
-- Use your bird's-eye view to prevent agents from duplicating work
-
-### Checking All Sessions Status
-```bash
-# Manually check each session
-for session in $(tmux list-sessions -F "#{session_name}"); do
-    echo "=== Session: $session ==="
-    tmux list-windows -t $session
-done
-
-# Check specific window contents
-tmux capture-pane -t session:window -p | tail -50
-```
-
-### Coordinating Between Agents
-1. Always verify both agents are ready before cross-communication
-2. Use clear, specific messages about what you need
-3. Wait for responses before proceeding
-4. Document any dependencies between projects
-
-## Status Sync - Cross-Team Intelligence Gathering
-
-**Status Sync** is a critical orchestrator workflow for gathering comprehensive intelligence across multiple active sessions before making coordination decisions.
-
-### When to Use Status Sync
-- User requests coordination between multiple projects/teams
-- Need to understand current state before assigning new tasks
-- Debugging issues that span multiple sessions
-- Before making architectural decisions affecting multiple agents
-- When agents report conflicting information or blocking issues
-
-### Status Sync Workflow
-
-#### 1. Rapid Multi-Session Reconnaissance
-```bash
-# Capture recent activity from all relevant sessions (run in parallel)
-tmux capture-pane -t session1 -S -2000 -p | tail -1000
-tmux capture-pane -t session2 -S -2000 -p | tail -1000
-tmux capture-pane -t session3 -S -2000 -p | tail -1000
-```
-
-#### 2. Intelligence Analysis Pattern
-For each session, identify:
-- **Current Task**: What the agent is actively working on
-- **Recent Progress**: What they've accomplished in the last 30-60 minutes
-- **Technical Issues**: Any errors, blockers, or challenges encountered
-- **Dependencies**: What they're waiting for from other teams
-- **System State**: Server status, compilation state, test results
-
-#### 3. Cross-Session Correlation
-Look for:
-- **Complementary Work**: Agent A needs info Agent B has discovered
-- **Duplicate Efforts**: Multiple agents solving the same problem
-- **Blocking Chains**: Agent A blocked on Agent B's work
-- **Resource Conflicts**: Port conflicts, file locks, etc.
-- **Integration Points**: APIs, data formats, authentication
-
-#### 4. Coordinated Status Report
-Provide user with:
-```
-## 🔍 Status Sync Report
-
-### Session A (Project/Role)
-- ✅ Completed: [Specific achievements]
-- ⏳ Current: [Active work]
-- ⚠️ Issues: [Blockers/challenges]
-- 📅 Next: [Planned steps]
-
-### Session B (Project/Role)  
-- ✅ Completed: [Specific achievements]
-- ⏳ Current: [Active work] 
-- ⚠️ Issues: [Blockers/challenges]
-- 📅 Next: [Planned steps]
-
-### 🎯 Coordination Opportunities
-- [Specific ways teams can help each other]
-- [Dependencies to resolve]
-- [Resource sharing opportunities]
-
-### 🚨 Critical Issues Requiring Attention
-- [Blockers needing user intervention]
-- [Conflicts between teams]
-- [Technical debt accumulating]
-```
-
-### Status Sync Command Patterns
-```bash
-# Quick status check across all sessions
-for session in $(tmux list-sessions -F "#{session_name}"); do
-    echo "=== $session Status ==="
-    tmux capture-pane -t $session:0 -p | tail -20
-    echo ""
-done
-
-# Deep dive into specific sessions
-tmux capture-pane -t glacier-backend -S -1000 -p | grep -E "(ERROR|SUCCESS|COMPLETED|FAILED|BLOCKED)"
-tmux capture-pane -t glacier-frontend -S -1000 -p | grep -E "(ERROR|SUCCESS|COMPLETED|FAILED|BLOCKED)"
-
-# Check server/process status
-tmux capture-pane -t session:server-window -p | tail -30
-```
-
-### Benefits of Status Sync
-1. **Prevents Miscommunication**: Get ground truth from agent logs
-2. **Identifies Hidden Dependencies**: See what agents actually need
-3. **Spots Integration Issues**: Catch API mismatches early
-4. **Enables Smart Coordination**: Make informed decisions about priorities
-5. **Reduces Context Switching**: One comprehensive update vs. multiple check-ins
-
-### Status Sync Anti-Patterns
-- ❌ **Shallow Checking**: Only looking at last few lines
-- ❌ **Single Session Focus**: Missing cross-session dependencies  
-- ❌ **No Analysis**: Just copying logs without interpretation
-- ❌ **Outdated Intel**: Using stale information for decisions
-- ❌ **Over-Reporting**: Including irrelevant details instead of key insights
-
-### Example Status Sync Scenarios
-
-**Scenario 1: Backend/Frontend Integration**
-```
-User: "Check status on Glacier backend and frontend"
-Orchestrator: [Runs Status Sync]
-Finding: Backend returning campaign data to flow endpoints, frontend expecting flow data structure
-Action: Coordinate fix - backend needs schema alignment, frontend has field logging ready
-```
-
-**Scenario 2: Cross-Project Authentication**
-```
-User: "Why is auth not working consistently?"
-Orchestrator: [Runs Status Sync across all auth-related sessions]
-Finding: ai-chat has Clerk working, glacier-frontend has Clerk, glacier-backend expects Basic auth
-Action: Standardize auth approach or create auth translation layer
-```
-
-**Status Sync Frequency**: Use this pattern at the start of any coordination task and whenever you need to make informed decisions about multiple active projects.
-
-## Database Schema Verification Protocol
-
-### CRITICAL: Always Check Database Schema FIRST
-When debugging data issues, empty results, or field mismatches:
-
-#### 1. Open Database and Inspect Schema
-```bash
-# For DuckDB
-tmux send-keys -t backend:window "python3" Enter
-tmux send-keys -t backend:window "import duckdb" Enter
-tmux send-keys -t backend:window "conn = duckdb.connect('warehouse.db')" Enter
-tmux send-keys -t backend:window "conn.execute('SHOW TABLES').fetchall()" Enter
-tmux send-keys -t backend:window "conn.execute('DESCRIBE table_name').fetchall()" Enter
-
-# Or use SQL directly
-tmux send-keys -t backend:window "duckdb warehouse.db" Enter
-tmux send-keys -t backend:window ".tables" Enter
-tmux send-keys -t backend:window "DESCRIBE stg_klaviyo_flows;" Enter
-```
-
-#### 2. Common Schema Issues to Check
-- **Column names**: `id` vs `flow_id`, `campaign_id` vs `id`
-- **Data types**: String vs Integer IDs
-- **NULL constraints**: Required fields that might be NULL
-- **Foreign key relationships**: JOIN columns must exist
-- **Naming conventions**: snake_case vs camelCase
-
-#### 3. SQL JOIN Debugging Pattern
-```sql
--- ALWAYS verify column exists before JOINing
-DESCRIBE table1;
-DESCRIBE table2;
-
--- Test JOIN with limited data first
-SELECT t1.*, t2.*
-FROM table1 t1
-LEFT JOIN table2 t2 ON t1.column = t2.column
-LIMIT 5;
-```
-
-#### 4. Field Mapping Verification
-When frontend expects different fields than backend provides:
-```bash
-# Backend: Check actual API response
-curl -s "http://localhost:8000/api/endpoint" | python3 -m json.tool | head -50
-
-# Compare with frontend expectations
-# Look for: opens_unique vs unique_opens, clicks_unique vs unique_clicks, etc.
-```
-
-### Example: The Flow ID Issue
-**Problem**: 3+ hours debugging empty results
-**Root Cause**: `LEFT JOIN stg_klaviyo_flows f ON fs.flow_id = f.id`
-**Issue**: Table had `flow_id` column, not `id`
-**Solution**: `LEFT JOIN stg_klaviyo_flows f ON fs.flow_id = f.flow_id`
-**Lesson**: ALWAYS check schema before debugging complex issues
-
-### Browser Console Direct Access
-Instead of asking user for console logs:
-```bash
-# Start browser console monitor
-cd /Users/jasonedward/Coding/Tmux\ orchestrator
-node setup_puppeteer_console_monitor.js
-
-# Or use single visible browser for testing
-node single_visible_browser.js
-```
-
-## Remember: Always Learn from Mistakes
-When something goes wrong:
-1. Document it immediately in this file
-2. Include the specific error
-3. Explain why it happened
-4. Document how to prevent it
-5. Add any commands that would have caught it earlier
-
-This creates a growing knowledge base that prevents repeated mistakes and improves orchestration efficiency.
-
-## CRITICAL: Always Schedule Next Check-in Before Ending
-
-**NEVER end a conversation without scheduling your return!**
-
-### Using schedule_with_note.sh
-```bash
-# Schedule check-in with practical note about what to check
-./schedule_with_note.sh <minutes> "<practical note about what to check>"
-
-# Examples of GOOD notes:
-./schedule_with_note.sh 5 "Check if frontend agent finished identifying used endpoints"
-./schedule_with_note.sh 10 "Verify backend cleanup completed and no endpoints are broken"
-./schedule_with_note.sh 3 "Check server logs for errors, review agent progress on migrations"
-./schedule_with_note.sh 15 "Review if DuckDB data load completed, check for any errors"
-./schedule_with_note.sh 0.5 "Quick check on agent response to endpoint question"
-
-# Examples of BAD notes (too vague/motivational):
-# "Victory awaits!" 
-# "Continue the great work!"
-# "Legendary progress incoming!"
-```
-
-**Technical Note**: The script now properly sends Enter as a separate command after a 1-second delay, following our tmux communication best practices.
-
-### When to Schedule Check-ins
-- **Quick tasks (2-5 min)**: Check back in 5 minutes
-- **Medium tasks (5-15 min)**: Check back in 10-15 minutes  
-- **Long tasks (15+ min)**: Check back in 20-30 minutes
-- **Overnight tasks**: Check back in 1-2 hours
-
-### What to Include in Notes
-1. **Specific tasks to check**: "Verify frontend test results"
-2. **Agent coordination**: "Check if backend agent responded about directory structure"
-3. **Error monitoring**: "Review server logs for connection errors"
-4. **Progress tracking**: "Check if data migration completed"
-5. **Next steps**: "Ready to start endpoint cleanup after getting used endpoints list"
-
-### Check-in Workflow
-When you return from a scheduled check-in:
-1. First check all sessions using tmux commands to get overall status
-2. Check specific windows mentioned in your note
-3. Address any errors or blockers
-4. Coordinate next steps between agents
-5. Schedule your next check-in before leaving
-
-### Example End-of-Session Pattern
-```bash
-# Before ending any orchestrator session:
-# 1. Keep the note SHORT (what to check)
-./schedule_with_note.sh 1 "Check frontend endpoint analysis"
-
-# 2. Provide detailed status summary separately
-```
-
-Then provide a **Current Status Summary** with:
-- ✅ Completed tasks
-- ⏳ In-progress work  
-- 📅 Next steps
-- Any important context (ports, file paths, etc.)
-
-This ensures continuous orchestration without gaps or forgotten tasks.
-
-**Note**: schedule_with_note.sh accepts decimal minutes (0.17 for 10 seconds, 0.5 for 30 seconds, 1.5 for 90 seconds, etc.)
