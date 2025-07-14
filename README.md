@@ -217,6 +217,11 @@ The script handles all timing complexities automatically, making agent communica
 ./schedule_with_note.sh 120 "Full system check, rotate tasks if needed"
 ```
 
+**Important**: The orchestrator needs to know which tmux window it's running in to schedule its own check-ins correctly. If scheduling isn't working, verify the orchestrator knows its current window with:
+```bash
+echo "Current window: $(tmux display-message -p "#{session_name}:#{window_index}")"
+```
+
 ## 🎓 Advanced Usage
 
 ### Multi-Project Orchestration
