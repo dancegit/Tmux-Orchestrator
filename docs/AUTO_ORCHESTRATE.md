@@ -258,9 +258,19 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ## Limitations
 
 - Requires Claude CLI to be configured
+- Claude CLI v1.0.24+ recommended for context priming features
 - Best for projects with clear specifications
 - May need manual intervention for complex dependencies
 - Limited to 4 predefined roles (can be extended)
+
+### Claude Version Compatibility
+
+The script works with older Claude versions but provides enhanced features with v1.0.24+:
+- **v1.0.24+**: Full context priming support for better project understanding
+- **v1.0.22 and older**: Works without context priming, agents analyze projects manually
+
+To check your version: `claude --version`
+To update: `claude update`
 
 ## Future Enhancements
 

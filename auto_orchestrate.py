@@ -172,6 +172,46 @@ class AutoOrchestrator:
                 console.print(f"  • {warning}")
         
         console.print("\n[green]✓ All required dependencies are installed[/green]")
+    
+    def get_claude_version(self) -> Optional[str]:
+        """Get the Claude CLI version"""
+        try:
+            result = subprocess.run(['claude', '--version'], capture_output=True, text=True)
+            if result.returncode == 0:
+                # Parse version from output like "claude version 1.0.22"
+                version_line = result.stdout.strip()
+                parts = version_line.split()
+                if len(parts) >= 3:
+                    return parts[2]
+            return None
+        except:
+            return None
+    
+    def check_claude_version(self) -> bool:
+        """Check if Claude version supports context priming"""
+        version = self.get_claude_version()
+        if not version:
+            return False
+        
+        try:
+            # Parse version string like "1.0.22"
+            parts = version.split('.')
+            if len(parts) >= 3:
+                major = int(parts[0])
+                minor = int(parts[1])
+                patch = int(parts[2])
+                
+                # Context priming requires 1.0.24 or higher
+                if major > 1:
+                    return True
+                if major == 1 and minor > 0:
+                    return True
+                if major == 1 and minor == 0 and patch >= 24:
+                    return True
+            
+            return False
+        except:
+            return False
         
     def analyze_spec_with_claude(self) -> Dict[str, Any]:
         """Use Claude to analyze the spec and generate implementation plan"""
@@ -179,47 +219,69 @@ class AutoOrchestrator:
         # Read the spec file
         spec_content = self.spec_path.read_text()
         
+        # Check if Claude version supports context priming
+        supports_context_prime = self.check_claude_version()
+        claude_version = self.get_claude_version()
+        
+        if not supports_context_prime and claude_version:
+            console.print(f"[yellow]Note: Claude CLI v{claude_version} detected. Context priming requires v1.0.24+[/yellow]")
+            console.print("[yellow]Continuing without context priming. Consider running: claude update[/yellow]\n")
+        
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
-            task = progress.add_task("Context priming Claude for project understanding...", total=None)
             
-            # First, context prime Claude with the project
-            context_prime_cmd = f'/context-prime "Analyze the project at {self.project_path} to understand its structure, technologies, and conventions"'
-            
-            # Create a script to run Claude with context priming
-            context_script = f'''#!/bin/bash
+            # Try context priming if supported
+            if supports_context_prime:
+                task = progress.add_task("Context priming Claude for project understanding...", total=None)
+                
+                # First, context prime Claude with the project
+                context_prime_cmd = f'/context-prime "Analyze the project at {self.project_path} to understand its structure, technologies, and conventions"'
+                
+                # Create a script to run Claude with context priming
+                context_script = f'''#!/bin/bash
 cd "{self.project_path}"
 echo "{context_prime_cmd}" | claude -c /dev/stdin
 '''
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
-                f.write(context_script)
-                context_script_file = f.name
-            
-            os.chmod(context_script_file, 0o755)
-            
-            try:
-                # Run context priming
-                result = subprocess.run(
-                    ['bash', context_script_file],
-                    capture_output=True,
-                    text=True,
-                    timeout=120
-                )
                 
-                if result.returncode != 0:
-                    console.print(f"[yellow]Warning: Context priming had issues: {result.stderr}[/yellow]")
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
+                    f.write(context_script)
+                    context_script_file = f.name
                 
-            finally:
-                os.unlink(context_script_file)
-            
-            progress.update(task, description="Analyzing specification with Claude...")
+                os.chmod(context_script_file, 0o755)
+                
+                try:
+                    # Run context priming
+                    result = subprocess.run(
+                        ['bash', context_script_file],
+                        capture_output=True,
+                        text=True,
+                        timeout=120
+                    )
+                    
+                    if result.returncode != 0:
+                        console.print(f"[yellow]Context priming skipped due to error[/yellow]")
+                        supports_context_prime = False  # Disable for this run
+                    
+                except Exception as e:
+                    console.print(f"[yellow]Context priming skipped: {str(e)}[/yellow]")
+                    supports_context_prime = False
+                finally:
+                    os.unlink(context_script_file)
+                
+                progress.update(task, description="Analyzing specification with Claude...")
+            else:
+                task = progress.add_task("Analyzing specification with Claude...", total=None)
         
         # Create a prompt for Claude
-        prompt = f"""You are an AI project planning assistant. You have just analyzed the project at {self.project_path}. Now analyze the following specification and create a detailed implementation plan in JSON format.
+        if supports_context_prime:
+            prompt = f"""You are an AI project planning assistant. You have just analyzed the project at {self.project_path}. Now analyze the following specification and create a detailed implementation plan in JSON format."""
+        else:
+            prompt = f"""You are an AI project planning assistant. Analyze the following specification for the project at {self.project_path} and create a detailed implementation plan in JSON format."""
+        
+        prompt += f"""
 
 PROJECT PATH: {self.project_path}
 SPECIFICATION:
@@ -445,6 +507,9 @@ IMPORTANT:
     def brief_all_roles(self, session_name: str, spec: ImplementationSpec):
         """Start Claude in each window and provide role-specific briefings"""
         
+        # Check if Claude version supports context priming
+        supports_context_prime = self.check_claude_version()
+        
         roles = [
             ('Orchestrator', 0, 'orchestrator'),
             ('Project-Manager', 1, 'project_manager'),
@@ -463,22 +528,26 @@ IMPORTANT:
             time.sleep(5)
             
             # Send context priming command first (except for orchestrator who doesn't need project context)
-            if role_key != 'orchestrator':
+            if role_key != 'orchestrator' and supports_context_prime:
                 send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
                 context_prime_msg = f'/context-prime "You are about to work on {spec.project.name} at {spec.project.path}. Understand the project structure, dependencies, and conventions."'
-                subprocess.run([
-                    str(send_script),
-                    f'{session_name}:{window_idx}',
-                    context_prime_msg
-                ])
-                # Wait for context priming to complete
-                time.sleep(8)
+                try:
+                    subprocess.run([
+                        str(send_script),
+                        f'{session_name}:{window_idx}',
+                        context_prime_msg
+                    ])
+                    # Wait for context priming to complete
+                    time.sleep(8)
+                except Exception as e:
+                    console.print(f"[yellow]Context priming skipped for {window_name}: {str(e)}[/yellow]")
             
             # Get role config
             role_config = spec.roles[role_key]
             
             # Create briefing
-            briefing = self.create_role_briefing(role_key, spec, role_config)
+            briefing = self.create_role_briefing(role_key, spec, role_config, 
+                                                context_primed=supports_context_prime)
             
             # Send briefing using send-claude-message.sh
             send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
@@ -507,8 +576,21 @@ IMPORTANT:
                     f"{session_name}:{window_idx}"
                 ])
     
-    def create_role_briefing(self, role: str, spec: ImplementationSpec, role_config: RoleConfig) -> str:
+    def create_role_briefing(self, role: str, spec: ImplementationSpec, role_config: RoleConfig, 
+                           context_primed: bool = True) -> str:
         """Create a role-specific briefing message"""
+        
+        # Add note about context priming if not available
+        context_note = ""
+        if not context_primed and role != 'orchestrator':
+            context_note = """
+NOTE: Context priming was not available. Please take a moment to:
+1. Explore the project structure: ls -la
+2. Check for README or documentation files
+3. Identify the main technologies and frameworks used
+4. Understand the project conventions
+
+"""
         
         if role == 'orchestrator':
             return f"""You are the Orchestrator for {spec.project.name}.
@@ -534,7 +616,7 @@ Use these commands:
 Schedule your first check-in for {role_config.check_in_interval} minutes."""
 
         elif role == 'project_manager':
-            return f"""You are the Project Manager for {spec.project.name}.
+            return f"""{context_note}You are the Project Manager for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -558,7 +640,7 @@ Coordinate with:
 Maintain EXCEPTIONAL quality standards. No compromises."""
 
         elif role == 'developer':
-            return f"""You are the Developer for {spec.project.name}.
+            return f"""{context_note}You are the Developer for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -585,7 +667,7 @@ Start by:
 Report progress to PM (window 1) regularly."""
 
         else:  # tester
-            return f"""You are the Tester for {spec.project.name}.
+            return f"""{context_note}You are the Tester for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
