@@ -58,9 +58,15 @@ The Tmux Orchestrator uses a three-tier hierarchy to overcome context window lim
 
 ### Prerequisites
 - tmux installed on your system
-- Claude CLI (`claude` command available)
-- Python 3 (for optional utilities)
+- Claude Code (`claude` command available) - NOT the old Claude CLI
+- Python 3.11+ (for utilities)
+- UV (for Python script management) - Recommended for dependencies
 - Basic familiarity with tmux commands
+
+**Note**: All Python scripts use UV shebangs for dependency management. Install UV with:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
 ### Initial Setup
 

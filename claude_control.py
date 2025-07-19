@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """
 Claude Control - Status monitoring for Tmux Orchestrator
 Provides status information about running tmux sessions and Claude agents
@@ -6,6 +10,11 @@ Provides status information about running tmux sessions and Claude agents
 
 import sys
 import json
+import subprocess
+from pathlib import Path
+
+# Import tmux_utils from the same directory
+sys.path.insert(0, str(Path(__file__).parent))
 from tmux_utils import TmuxOrchestrator
 
 def print_status(detailed=False):

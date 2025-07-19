@@ -136,10 +136,15 @@ class AutoOrchestrator:
         if tmux_result.returncode != 0:
             errors.append("tmux is not installed. Install with: sudo apt install tmux (Linux) or brew install tmux (macOS)")
         
-        # Check Claude CLI
-        claude_result = subprocess.run(['which', 'claude'], capture_output=True)
-        if claude_result.returncode != 0:
-            errors.append("Claude CLI is not installed. Visit https://claude.ai/cli for installation instructions")
+        # Check Claude CLI - use full path
+        claude_path = '/usr/bin/claude'
+        if not Path(claude_path).exists():
+            # Fallback to which
+            claude_result = subprocess.run(['which', 'claude'], capture_output=True, text=True)
+            if claude_result.returncode != 0:
+                errors.append("Claude Code is not installed. Visit https://claude.ai/code for installation instructions")
+            else:
+                claude_path = claude_result.stdout.strip()
         
         # Check Python
         python_result = subprocess.run(['which', 'python3'], capture_output=True)
@@ -177,7 +182,8 @@ class AutoOrchestrator:
     def get_claude_version(self) -> Optional[str]:
         """Get the Claude CLI version"""
         try:
-            result = subprocess.run(['claude', '--version'], capture_output=True, text=True)
+            # Use full path to avoid Python packages
+            result = subprocess.run(['/usr/bin/claude', '--version'], capture_output=True, text=True)
             if result.returncode == 0:
                 # Parse version from output like "1.0.56 (Claude Code)" or "claude version 1.0.22"
                 version_line = result.stdout.strip()
@@ -252,9 +258,10 @@ class AutoOrchestrator:
                 context_prime_cmd = '/context-prime "Analyze the project to understand its structure, technologies, and conventions"'
                 
                 try:
-                    # Send the command directly to Claude Code
+                    # Send the command directly to Claude Code - use system path
+                    claude_cmd = '/usr/bin/claude' if Path('/usr/bin/claude').exists() else 'claude'
                     result = subprocess.run(
-                        ['claude', '-p', context_prime_cmd],
+                        [claude_cmd, '-p', context_prime_cmd],
                         capture_output=True,
                         text=True,
                         timeout=120,
@@ -363,12 +370,21 @@ IMPORTANT:
                 with open(prompt_file, 'r') as f:
                     prompt_content = f.read()
                 
+                # Use system claude to avoid Python package conflicts
+                claude_cmd = '/usr/bin/claude' if Path('/usr/bin/claude').exists() else 'claude'
+                
+                # Create clean environment to avoid Python path issues
+                env = os.environ.copy()
+                # Remove any Python-specific paths that might interfere
+                env.pop('PYTHONPATH', None)
+                
                 result = subprocess.run(
-                    ['claude', '-p', prompt_content],
+                    [claude_cmd, '-p', prompt_content],
                     capture_output=True,
                     text=True,
                     timeout=120,
-                    cwd=str(self.project_path)
+                    cwd=str(self.project_path),
+                    env=env
                 )
                 
                 if result.returncode != 0:
@@ -379,12 +395,13 @@ IMPORTANT:
                         # Try without the -p flag, using stdin instead
                         try:
                             process = subprocess.Popen(
-                                ['claude'],
+                                [claude_cmd],
                                 stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE,
                                 text=True,
-                                cwd=str(self.project_path)
+                                cwd=str(self.project_path),
+                                env=env
                             )
                             
                             # Send prompt and exit command
