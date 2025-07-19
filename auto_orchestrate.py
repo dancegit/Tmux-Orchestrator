@@ -269,44 +269,7 @@ class AutoOrchestrator:
             supports_context_prime = context_prime_path.exists()
             
             if supports_context_prime:
-                task = progress.add_task("Context priming Claude for project understanding...", total=None)
-                
-                # Use Claude Code to run the context-prime command
-                context_prime_cmd = '/context-prime "Analyze the project to understand its structure, technologies, and conventions"'
-                
-                try:
-                    # Send the command directly to Claude Code
-                    import uuid
-                    context_script = f"""#!/bin/bash
-cd "{self.project_path}"
-echo '{context_prime_cmd}' | /usr/bin/claude --dangerously-skip-permissions
-"""
-                    
-                    script_file = f"/tmp/claude_context_{uuid.uuid4().hex}.sh"
-                    with open(script_file, 'w') as f:
-                        f.write(context_script)
-                    os.chmod(script_file, 0o755)
-                    
-                    try:
-                        result = subprocess.run(
-                            ['bash', script_file],
-                            capture_output=True,
-                            text=True,
-                            timeout=240
-                        )
-                        
-                        if result.returncode != 0:
-                            console.print(f"[yellow]Context priming had issues: {result.stderr}[/yellow]")
-                            supports_context_prime = False
-                    finally:
-                        if os.path.exists(script_file):
-                            os.unlink(script_file)
-                    
-                except Exception as e:
-                    console.print(f"[yellow]Context priming skipped: {str(e)}[/yellow]")
-                    supports_context_prime = False
-                
-                progress.update(task, description="Analyzing specification with Claude...")
+                task = progress.add_task("Context priming and analyzing specification with Claude...", total=None)
             else:
                 task = progress.add_task("Analyzing specification with Claude...", total=None)
                 if self.project_path.exists():
@@ -322,7 +285,10 @@ echo '{context_prime_cmd}' | /usr/bin/claude --dangerously-skip-permissions
         
         # Create a prompt for Claude
         if supports_context_prime:
-            prompt = f"""You are an AI project planning assistant. You have just analyzed the project at {self.project_path}. Now analyze the following specification and create a detailed implementation plan in JSON format."""
+            # Include context priming in the same session
+            prompt = f"""/context-prime "Analyze the project at {self.project_path} to understand its structure, technologies, and conventions"
+
+After analyzing the project context above, now analyze the following specification and create a detailed implementation plan in JSON format."""
         else:
             prompt = f"""You are an AI project planning assistant. Analyze the following specification for the project at {self.project_path} and create a detailed implementation plan in JSON format."""
         
@@ -435,7 +401,7 @@ CLAUDE_EOF
                         ['bash', script_file],
                         capture_output=True,
                         text=True,
-                        timeout=180
+                        timeout=360  # Increased timeout for combined context prime + analysis
                     )
                 finally:
                     if os.path.exists(script_file):
