@@ -20,6 +20,7 @@ import sys
 import os
 import time
 import re
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -247,39 +248,11 @@ class AutoOrchestrator:
             console=console,
         ) as progress:
             
-            # Check if the project has a context-prime command
-            context_prime_path = self.project_path / '.claude' / 'commands' / 'context-prime.md'
-            supports_context_prime = context_prime_path.exists()
+            # Skip context priming due to version limitations
+            task = progress.add_task("Analyzing specification with Claude...", total=None)
+            supports_context_prime = False
             
-            if supports_context_prime:
-                task = progress.add_task("Context priming Claude for project understanding...", total=None)
-                
-                # Use Claude Code to run the context-prime command
-                context_prime_cmd = '/context-prime "Analyze the project to understand its structure, technologies, and conventions"'
-                
-                try:
-                    # Send the command directly to Claude Code - use system path
-                    claude_cmd = '/usr/bin/claude' if Path('/usr/bin/claude').exists() else 'claude'
-                    result = subprocess.run(
-                        [claude_cmd, '-p', context_prime_cmd],
-                        capture_output=True,
-                        text=True,
-                        timeout=120,
-                        cwd=str(self.project_path)
-                    )
-                    
-                    if result.returncode != 0:
-                        console.print(f"[yellow]Context priming had issues: {result.stderr}[/yellow]")
-                        supports_context_prime = False
-                    
-                except Exception as e:
-                    console.print(f"[yellow]Context priming skipped: {str(e)}[/yellow]")
-                    supports_context_prime = False
-                
-                progress.update(task, description="Analyzing specification with Claude...")
-            else:
-                task = progress.add_task("Analyzing specification with Claude...", total=None)
-                console.print(f"[yellow]Note: No context-prime command found at {context_prime_path}[/yellow]")
+            console.print(f"[yellow]Note: Using Claude v{claude_version} - context priming disabled due to version limitations[/yellow]")
         
         # Create a prompt for Claude
         if supports_context_prime:
@@ -370,72 +343,56 @@ IMPORTANT:
                 with open(prompt_file, 'r') as f:
                     prompt_content = f.read()
                 
-                # Use system claude to avoid Python package conflicts
-                claude_cmd = '/usr/bin/claude' if Path('/usr/bin/claude').exists() else 'claude'
+                # Try a simpler approach without -p flag
+                # Write prompt to temporary file and use cat | claude approach
+                import uuid
+                prompt_script = f"""#!/bin/bash
+cd "{self.project_path}"
+cat << 'CLAUDE_EOF' | /usr/bin/claude
+{prompt_content}
+
+Please provide ONLY the JSON response, no other text.
+CLAUDE_EOF
+"""
                 
-                # Create clean environment to avoid Python path issues
-                env = os.environ.copy()
-                # Remove any Python-specific paths that might interfere
-                env.pop('PYTHONPATH', None)
+                script_file = f"/tmp/claude_prompt_{uuid.uuid4().hex}.sh"
+                with open(script_file, 'w') as f:
+                    f.write(prompt_script)
+                os.chmod(script_file, 0o755)
                 
-                result = subprocess.run(
-                    [claude_cmd, '-p', prompt_content],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    cwd=str(self.project_path),
-                    env=env
-                )
+                try:
+                    result = subprocess.run(
+                        ['bash', script_file],
+                        capture_output=True,
+                        text=True,
+                        timeout=180
+                    )
+                finally:
+                    if os.path.exists(script_file):
+                        os.unlink(script_file)
                 
                 if result.returncode != 0:
-                    # Check if it's a version-related error
+                    # Just ignore version errors and extract any JSON from the output
                     if "needs an update" in result.stderr:
-                        console.print(f"[yellow]Claude is reporting a version issue. Trying alternative approach...[/yellow]")
-                        
-                        # Try without the -p flag, using stdin instead
-                        try:
-                            process = subprocess.Popen(
-                                [claude_cmd],
-                                stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                text=True,
-                                cwd=str(self.project_path),
-                                env=env
-                            )
-                            
-                            # Send prompt and exit command
-                            stdout, stderr = process.communicate(
-                                input=prompt_content + '\n/exit\n',
-                                timeout=120
-                            )
-                            
-                            if process.returncode == 0:
-                                result = type('obj', (object,), {
-                                    'returncode': 0,
-                                    'stdout': stdout,
-                                    'stderr': stderr
-                                })
-                                console.print("[green]✓ Successfully worked around version issue[/green]")
-                            else:
-                                raise Exception(f"Alternative approach failed: {stderr}")
-                                
-                        except Exception as e:
-                            console.print(f"[red]Both approaches failed. Error: {str(e)}[/red]")
-                            console.print("\n[yellow]Manual troubleshooting:[/yellow]")
-                            console.print("1. Try updating Claude: claude update")
-                            console.print("2. Test Claude manually:")
+                        console.print(f"[yellow]Claude reported a version warning. Checking if we got a valid response anyway...[/yellow]")
+                        # Sometimes Claude still provides output despite the version warning
+                        if result.stdout and result.stdout.strip():
+                            result.returncode = 0  # Override the error
+                        else:
+                            console.print(f"[red]No valid response from Claude[/red]")
+                            console.print("\n[yellow]This appears to be a Claude Code version issue.[/yellow]")
+                            console.print("[yellow]You have v1.0.56 installed but Claude is internally reporting v1.0.22[/yellow]")
+                            console.print("\n[yellow]Workaround: Try running Claude in a clean shell:[/yellow]")
+                            console.print(f"   env -i bash")
                             console.print(f"   cd {self.project_path}")
-                            console.print(f"   claude")
-                            console.print("   # Then paste your prompt and press Ctrl+D")
+                            console.print(f"   /usr/bin/claude")
+                            console.print(f"   # Paste the prompt from: {prompt_file}")
                             sys.exit(1)
                     else:
                         console.print(f"[red]Error running Claude: {result.stderr}[/red]")
-                        console.print("\n[yellow]Troubleshooting tips:[/yellow]")
-                        console.print("1. Ensure Claude Code is working: claude --help")
-                        console.print("2. Try running the prompt manually:")
-                        console.print(f"   cd {self.project_path}")
-                        console.print(f"   claude -p 'Test prompt'")
+                        console.print("\n[yellow]Debug info:[/yellow]")
+                        console.print(f"Script file: {script_file}")
+                        console.print(f"Exit code: {result.returncode}")
                         sys.exit(1)
                 
                 # Extract JSON from Claude's response
