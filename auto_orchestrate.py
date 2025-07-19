@@ -1,0 +1,522 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "click",
+#     "rich",
+#     "pydantic",
+# ]
+# ///
+
+"""
+Auto-Orchestrate: Automated Tmux Orchestrator Setup
+Analyzes a specification file and automatically sets up a complete
+tmux orchestration environment with Orchestrator, PM, Developer, and Tester.
+"""
+
+import subprocess
+import json
+import sys
+import os
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+import tempfile
+
+import click
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm
+from rich.json import JSON
+from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from pydantic import BaseModel, Field
+
+console = Console()
+
+# Pydantic models for structured data
+class Phase(BaseModel):
+    name: str
+    duration_hours: float
+    tasks: List[str]
+
+class ImplementationPlan(BaseModel):
+    phases: List[Phase]
+    total_estimated_hours: float
+
+class RoleConfig(BaseModel):
+    responsibilities: List[str]
+    check_in_interval: int
+    initial_commands: List[str]
+
+class Project(BaseModel):
+    name: str
+    path: str
+    type: str
+    main_tech: List[str]
+
+class GitWorkflow(BaseModel):
+    branch_name: str
+    commit_interval: int
+    pr_title: str
+
+class ImplementationSpec(BaseModel):
+    project: Project
+    implementation_plan: ImplementationPlan
+    roles: Dict[str, RoleConfig]
+    git_workflow: GitWorkflow
+    success_criteria: List[str]
+
+
+class AutoOrchestrator:
+    def __init__(self, project_path: str, spec_path: str):
+        self.project_path = Path(project_path).resolve()
+        self.spec_path = Path(spec_path).resolve()
+        self.tmux_orchestrator_path = Path(__file__).parent
+        self.implementation_spec: Optional[ImplementationSpec] = None
+        
+    def analyze_spec_with_claude(self) -> Dict[str, Any]:
+        """Use Claude to analyze the spec and generate implementation plan"""
+        
+        # Read the spec file
+        spec_content = self.spec_path.read_text()
+        
+        # Create a prompt for Claude
+        prompt = f"""You are an AI project planning assistant. Analyze the following specification and create a detailed implementation plan in JSON format.
+
+PROJECT PATH: {self.project_path}
+SPECIFICATION:
+{spec_content}
+
+Generate a JSON implementation plan with this EXACT structure:
+{{
+  "project": {{
+    "name": "Project name from spec",
+    "path": "{self.project_path}",
+    "type": "python|javascript|go|etc",
+    "main_tech": ["list", "of", "main", "technologies"]
+  }},
+  "implementation_plan": {{
+    "phases": [
+      {{
+        "name": "Phase name",
+        "duration_hours": 2.0,
+        "tasks": ["Task 1", "Task 2", "Task 3"]
+      }}
+    ],
+    "total_estimated_hours": 12.0
+  }},
+  "roles": {{
+    "orchestrator": {{
+      "responsibilities": ["Monitor progress", "Coordinate roles", "Handle blockers"],
+      "check_in_interval": 30,
+      "initial_commands": ["cd {self.tmux_orchestrator_path}", "python3 claude_control.py status detailed"]
+    }},
+    "project_manager": {{
+      "responsibilities": ["Ensure quality", "Track completion", "Review coverage"],
+      "check_in_interval": 30,
+      "initial_commands": ["cd {self.project_path}", "cat {self.spec_path.relative_to(self.project_path) if self.spec_path.is_relative_to(self.project_path) else self.spec_path}"]
+    }},
+    "developer": {{
+      "responsibilities": ["Implement features", "Write tests", "Fix bugs"],
+      "check_in_interval": 60,
+      "initial_commands": ["cd {self.project_path}", "git status"]
+    }},
+    "tester": {{
+      "responsibilities": ["Run tests", "Report failures", "Verify coverage"],
+      "check_in_interval": 45,
+      "initial_commands": ["cd {self.project_path}", "echo 'Ready to test'"]
+    }}
+  }},
+  "git_workflow": {{
+    "branch_name": "feature/implementation-branch",
+    "commit_interval": 30,
+    "pr_title": "Implementation title"
+  }},
+  "success_criteria": [
+    "Criterion 1",
+    "Criterion 2",
+    "Criterion 3"
+  ]
+}}
+
+IMPORTANT: 
+- Analyze the spec carefully to understand what needs to be implemented
+- Create realistic time estimates based on complexity
+- Include specific, actionable tasks for each phase
+- Ensure role responsibilities align with the implementation needs
+- Output ONLY valid JSON, no other text"""
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Analyzing specification with Claude...", total=None)
+            
+            # Create a temporary file for the prompt
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                f.write(prompt)
+                prompt_file = f.name
+            
+            try:
+                # Use claude CLI to analyze
+                result = subprocess.run(
+                    ['claude', '-c', prompt_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                
+                if result.returncode != 0:
+                    console.print(f"[red]Error running Claude: {result.stderr}[/red]")
+                    sys.exit(1)
+                
+                # Extract JSON from Claude's response
+                response = result.stdout.strip()
+                
+                # Try to find JSON in the response
+                json_start = response.find('{')
+                json_end = response.rfind('}') + 1
+                
+                if json_start >= 0 and json_end > json_start:
+                    json_str = response[json_start:json_end]
+                    return json.loads(json_str)
+                else:
+                    console.print("[red]Could not find valid JSON in Claude's response[/red]")
+                    console.print(f"Response: {response}")
+                    sys.exit(1)
+                    
+            finally:
+                # Clean up temp file
+                os.unlink(prompt_file)
+    
+    def display_implementation_plan(self, spec: ImplementationSpec) -> bool:
+        """Display the implementation plan and get user approval"""
+        
+        # Project overview
+        console.print(Panel.fit(
+            f"[bold cyan]{spec.project.name}[/bold cyan]\n"
+            f"Path: {spec.project.path}\n"
+            f"Type: {spec.project.type}\n"
+            f"Technologies: {', '.join(spec.project.main_tech)}",
+            title="📋 Project Overview"
+        ))
+        
+        # Implementation phases
+        phases_table = Table(title="Implementation Phases")
+        phases_table.add_column("Phase", style="cyan")
+        phases_table.add_column("Duration", style="green")
+        phases_table.add_column("Tasks", style="yellow")
+        
+        for phase in spec.implementation_plan.phases:
+            tasks_str = "\n".join(f"• {task}" for task in phase.tasks)
+            phases_table.add_row(
+                phase.name,
+                f"{phase.duration_hours}h",
+                tasks_str
+            )
+        
+        console.print(phases_table)
+        console.print(f"\n[bold]Total Estimated Time:[/bold] {spec.implementation_plan.total_estimated_hours} hours\n")
+        
+        # Roles and responsibilities
+        roles_table = Table(title="Role Assignments")
+        roles_table.add_column("Role", style="cyan")
+        roles_table.add_column("Check-in", style="green")
+        roles_table.add_column("Responsibilities", style="yellow")
+        
+        for role_name, role_config in spec.roles.items():
+            resp_str = "\n".join(f"• {resp}" for resp in role_config.responsibilities[:3])
+            if len(role_config.responsibilities) > 3:
+                resp_str += f"\n• ... and {len(role_config.responsibilities) - 3} more"
+            roles_table.add_row(
+                role_name.title(),
+                f"{role_config.check_in_interval}m",
+                resp_str
+            )
+        
+        console.print(roles_table)
+        
+        # Success criteria
+        console.print(Panel(
+            "\n".join(f"✓ {criterion}" for criterion in spec.success_criteria),
+            title="🎯 Success Criteria",
+            border_style="green"
+        ))
+        
+        # Git workflow
+        console.print(Panel(
+            f"Branch: [cyan]{spec.git_workflow.branch_name}[/cyan]\n"
+            f"Commit Interval: Every {spec.git_workflow.commit_interval} minutes\n"
+            f"PR Title: {spec.git_workflow.pr_title}",
+            title="🔀 Git Workflow"
+        ))
+        
+        return Confirm.ask("\n[bold]Proceed with automated setup?[/bold]", default=False)
+    
+    def setup_tmux_session(self, spec: ImplementationSpec):
+        """Set up the tmux session with all roles"""
+        session_name = spec.project.name.lower().replace(' ', '-')[:20] + "-impl"
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            
+            # Create tmux session
+            task = progress.add_task("Creating tmux session...", total=4)
+            
+            # Kill existing session if it exists
+            subprocess.run(['tmux', 'kill-session', '-t', session_name], 
+                         capture_output=True)
+            
+            # Create new session with orchestrator window
+            subprocess.run([
+                'tmux', 'new-session', '-d', '-s', session_name,
+                '-n', 'Orchestrator', '-c', str(self.tmux_orchestrator_path)
+            ], check=True)
+            
+            progress.update(task, advance=1, description="Created Orchestrator window...")
+            
+            # Create other role windows
+            roles = [
+                ('Project-Manager', 'project_manager'),
+                ('Developer', 'developer'),
+                ('Tester', 'tester')
+            ]
+            
+            for window_name, role_key in roles:
+                subprocess.run([
+                    'tmux', 'new-window', '-t', session_name,
+                    '-n', window_name, '-c', str(self.project_path)
+                ], check=True)
+                progress.update(task, advance=1, description=f"Created {window_name} window...")
+            
+            # Start Claude in each window and send initial briefings
+            self.brief_all_roles(session_name, spec)
+            
+            console.print(f"\n[green]✓ Tmux session '{session_name}' created successfully![/green]")
+            console.print(f"\nTo attach: [cyan]tmux attach -t {session_name}[/cyan]")
+    
+    def brief_all_roles(self, session_name: str, spec: ImplementationSpec):
+        """Start Claude in each window and provide role-specific briefings"""
+        
+        roles = [
+            ('Orchestrator', 0, 'orchestrator'),
+            ('Project-Manager', 1, 'project_manager'),
+            ('Developer', 2, 'developer'),
+            ('Tester', 3, 'tester')
+        ]
+        
+        for window_name, window_idx, role_key in roles:
+            # Start Claude
+            subprocess.run([
+                'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
+                'claude', 'Enter'
+            ])
+            
+            # Wait for Claude to start
+            time.sleep(5)
+            
+            # Get role config
+            role_config = spec.roles[role_key]
+            
+            # Create briefing
+            briefing = self.create_role_briefing(role_key, spec, role_config)
+            
+            # Send briefing using send-claude-message.sh
+            send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
+            subprocess.run([
+                str(send_script),
+                f'{session_name}:{window_idx}',
+                briefing
+            ])
+            
+            # Run initial commands
+            for cmd in role_config.initial_commands:
+                time.sleep(2)
+                subprocess.run([
+                    str(send_script),
+                    f'{session_name}:{window_idx}',
+                    f"Please run: {cmd}"
+                ])
+            
+            # Schedule check-ins
+            if role_key != 'orchestrator':  # Orchestrator schedules its own
+                schedule_script = self.tmux_orchestrator_path / 'schedule_with_note.sh'
+                subprocess.run([
+                    str(schedule_script),
+                    str(role_config.check_in_interval),
+                    f"{window_name} regular check-in",
+                    f"{session_name}:{window_idx}"
+                ])
+    
+    def create_role_briefing(self, role: str, spec: ImplementationSpec, role_config: RoleConfig) -> str:
+        """Create a role-specific briefing message"""
+        
+        if role == 'orchestrator':
+            return f"""You are the Orchestrator for {spec.project.name}.
+
+Your responsibilities:
+{chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+Project Overview:
+- Type: {spec.project.type}
+- Technologies: {', '.join(spec.project.main_tech)}
+- Total estimated time: {spec.implementation_plan.total_estimated_hours} hours
+
+You have a team of:
+- Project Manager (window 1) - Quality and progress tracking
+- Developer (window 2) - Implementation
+- Tester (window 3) - Testing and verification
+
+Use these commands:
+- Check status: python3 claude_control.py status detailed
+- Send messages: ./send-claude-message.sh session:window "message"
+- Schedule check-ins: ./schedule_with_note.sh minutes "note" target
+
+Schedule your first check-in for {role_config.check_in_interval} minutes."""
+
+        elif role == 'project_manager':
+            return f"""You are the Project Manager for {spec.project.name}.
+
+Your responsibilities:
+{chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+Implementation Phases:
+{chr(10).join(f'{i+1}. {p.name} ({p.duration_hours}h)' for i, p in enumerate(spec.implementation_plan.phases))}
+
+Success Criteria:
+{chr(10).join(f'- {c}' for c in spec.success_criteria)}
+
+Git Workflow:
+- Branch: {spec.git_workflow.branch_name}
+- Commit every {spec.git_workflow.commit_interval} minutes
+- PR Title: {spec.git_workflow.pr_title}
+
+Coordinate with:
+- Developer (window 2) for implementation
+- Tester (window 3) for quality assurance
+- Report to Orchestrator (window 0)
+
+Maintain EXCEPTIONAL quality standards. No compromises."""
+
+        elif role == 'developer':
+            return f"""You are the Developer for {spec.project.name}.
+
+Your responsibilities:
+{chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+Project Details:
+- Path: {spec.project.path}
+- Type: {spec.project.type}
+- Technologies: {', '.join(spec.project.main_tech)}
+
+Implementation Phases:
+{chr(10).join(f'{i+1}. {p.name}: {", ".join(p.tasks[:2])}...' for i, p in enumerate(spec.implementation_plan.phases))}
+
+Git Requirements:
+- Create branch: {spec.git_workflow.branch_name}
+- Commit every {spec.git_workflow.commit_interval} minutes with clear messages
+- Follow existing code patterns and conventions
+
+Start by:
+1. Reading the spec at: {self.spec_path}
+2. Setting up your development environment
+3. Creating the feature branch
+4. Beginning implementation of Phase 1
+
+Report progress to PM (window 1) regularly."""
+
+        else:  # tester
+            return f"""You are the Tester for {spec.project.name}.
+
+Your responsibilities:
+{chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+Testing Focus:
+- Technologies: {', '.join(spec.project.main_tech)}
+- Ensure all success criteria are met:
+{chr(10).join(f'  - {c}' for c in spec.success_criteria)}
+
+Your workflow:
+1. Monitor Developer (window 2) progress
+2. Run tests after each commit
+3. Report failures immediately to PM and Developer
+4. Track test coverage metrics
+5. Verify no regressions occur
+
+Start by:
+1. Understanding the existing test structure
+2. Setting up test environment
+3. Running current test suite as baseline
+
+Work closely with Developer to ensure quality."""
+
+    def run(self):
+        """Main execution flow"""
+        console.print(Panel.fit(
+            "[bold]Auto-Orchestrate[/bold]\n"
+            "Automated Tmux Orchestrator Setup",
+            border_style="cyan"
+        ))
+        
+        # Validate inputs
+        if not self.project_path.exists():
+            console.print(f"[red]Error: Project path does not exist: {self.project_path}[/red]")
+            sys.exit(1)
+            
+        if not self.spec_path.exists():
+            console.print(f"[red]Error: Spec file does not exist: {self.spec_path}[/red]")
+            sys.exit(1)
+        
+        # Analyze spec with Claude
+        console.print("\n[cyan]Step 1:[/cyan] Analyzing specification with Claude...")
+        spec_dict = self.analyze_spec_with_claude()
+        
+        # Parse into Pydantic model
+        try:
+            self.implementation_spec = ImplementationSpec(**spec_dict)
+        except Exception as e:
+            console.print(f"[red]Error parsing implementation spec: {e}[/red]")
+            console.print("[yellow]Raw response:[/yellow]")
+            console.print(JSON(json.dumps(spec_dict, indent=2)))
+            sys.exit(1)
+        
+        # Display plan and get approval
+        console.print("\n[cyan]Step 2:[/cyan] Review implementation plan...")
+        if not self.display_implementation_plan(self.implementation_spec):
+            console.print("[yellow]Setup cancelled by user.[/yellow]")
+            sys.exit(0)
+        
+        # Set up tmux session
+        console.print("\n[cyan]Step 3:[/cyan] Setting up tmux orchestration...")
+        self.setup_tmux_session(self.implementation_spec)
+        
+        # Save implementation spec for reference
+        registry_dir = self.tmux_orchestrator_path / 'registry' / 'projects' / self.implementation_spec.project.name.lower().replace(' ', '-')
+        registry_dir.mkdir(parents=True, exist_ok=True)
+        
+        spec_file = registry_dir / 'implementation_spec.json'
+        spec_file.write_text(json.dumps(spec_dict, indent=2))
+        
+        console.print(f"\n[green]✓ Setup complete![/green]")
+        console.print(f"Implementation spec saved to: {spec_file}")
+
+
+@click.command()
+@click.option('--project', '-p', required=True, type=click.Path(exists=True), 
+              help='Path to the GitHub project')
+@click.option('--spec', '-s', required=True, type=click.Path(exists=True),
+              help='Path to the specification markdown file')
+def main(project: str, spec: str):
+    """Automatically set up a Tmux Orchestrator environment from a specification."""
+    orchestrator = AutoOrchestrator(project, spec)
+    orchestrator.run()
+
+
+if __name__ == '__main__':
+    main()

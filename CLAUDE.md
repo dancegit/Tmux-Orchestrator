@@ -3,6 +3,23 @@
 ## Project Overview
 The Tmux Orchestrator is an AI-powered session management system where Claude acts as the orchestrator for multiple Claude agents across tmux sessions, managing codebases and keeping development moving forward 24/7.
 
+## 🚀 NEW: Auto-Orchestrate Feature
+
+The `auto_orchestrate.py` script provides automated setup from specifications:
+
+```bash
+# Automatically set up a complete orchestration environment
+./auto_orchestrate.py --project /path/to/project --spec /path/to/spec.md
+```
+
+This analyzes your spec with Claude and automatically:
+- Creates structured implementation plan
+- Sets up tmux sessions for Orchestrator, PM, Developer, and Tester
+- Provides role-specific briefings
+- Configures scheduled check-ins
+
+See `docs/AUTO_ORCHESTRATE.md` for detailed documentation.
+
 ## Agent System Architecture
 
 ### Orchestrator Role
