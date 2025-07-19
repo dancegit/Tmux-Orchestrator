@@ -1,0 +1,25 @@
+# Local configuration
+config.local.sh
+
+# Temporary files
+next_check_note.txt
+*.log
+
+# Registry directory (logs and session data)
+registry/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
