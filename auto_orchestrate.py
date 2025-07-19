@@ -76,14 +76,150 @@ class AutoOrchestrator:
         self.tmux_orchestrator_path = Path(__file__).parent
         self.implementation_spec: Optional[ImplementationSpec] = None
         
+    def ensure_setup(self):
+        """Ensure Tmux Orchestrator is properly set up"""
+        console.print("[cyan]Checking Tmux Orchestrator setup...[/cyan]")
+        
+        # Check if config.local.sh exists
+        config_local = self.tmux_orchestrator_path / 'config.local.sh'
+        if not config_local.exists():
+            console.print("[yellow]Running initial setup...[/yellow]")
+            
+            # Run setup.sh
+            setup_script = self.tmux_orchestrator_path / 'setup.sh'
+            if setup_script.exists():
+                # Make it executable
+                os.chmod(setup_script, 0o755)
+                
+                # Run setup non-interactively
+                env = os.environ.copy()
+                env['PROJECTS_DIR'] = str(Path.home() / 'projects')
+                
+                result = subprocess.run(
+                    ['bash', '-c', f'cd "{self.tmux_orchestrator_path}" && echo -e "y\\n" | ./setup.sh'],
+                    capture_output=True,
+                    text=True,
+                    env=env
+                )
+                
+                if result.returncode != 0:
+                    console.print(f"[yellow]Setup had warnings: {result.stderr}[/yellow]")
+            else:
+                # Create config.local.sh manually
+                config_sh = self.tmux_orchestrator_path / 'config.sh'
+                if config_sh.exists():
+                    import shutil
+                    shutil.copy(config_sh, config_local)
+                    console.print("[green]✓ Created config.local.sh[/green]")
+        
+        # Ensure registry directories exist
+        registry_dir = self.tmux_orchestrator_path / 'registry'
+        for subdir in ['logs', 'notes', 'projects']:
+            (registry_dir / subdir).mkdir(parents=True, exist_ok=True)
+        
+        # Make all scripts executable
+        for script in self.tmux_orchestrator_path.glob('*.sh'):
+            os.chmod(script, 0o755)
+        for script in self.tmux_orchestrator_path.glob('*.py'):
+            os.chmod(script, 0o755)
+        
+        console.print("[green]✓ Tmux Orchestrator setup complete[/green]")
+    
+    def check_dependencies(self):
+        """Check that all required dependencies are available"""
+        errors = []
+        warnings = []
+        
+        # Check tmux
+        tmux_result = subprocess.run(['which', 'tmux'], capture_output=True)
+        if tmux_result.returncode != 0:
+            errors.append("tmux is not installed. Install with: sudo apt install tmux (Linux) or brew install tmux (macOS)")
+        
+        # Check Claude CLI
+        claude_result = subprocess.run(['which', 'claude'], capture_output=True)
+        if claude_result.returncode != 0:
+            errors.append("Claude CLI is not installed. Visit https://claude.ai/cli for installation instructions")
+        
+        # Check Python
+        python_result = subprocess.run(['which', 'python3'], capture_output=True)
+        if python_result.returncode != 0:
+            warnings.append("Python 3 is not installed. Some features may not work")
+        
+        # Check UV (optional but recommended)
+        uv_result = subprocess.run(['which', 'uv'], capture_output=True)
+        if uv_result.returncode != 0:
+            warnings.append("UV is not installed. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh")
+        
+        # Check if send-claude-message.sh exists
+        if not (self.tmux_orchestrator_path / 'send-claude-message.sh').exists():
+            errors.append("send-claude-message.sh not found in Tmux Orchestrator directory")
+        
+        # Check if schedule_with_note.sh exists
+        if not (self.tmux_orchestrator_path / 'schedule_with_note.sh').exists():
+            errors.append("schedule_with_note.sh not found in Tmux Orchestrator directory")
+        
+        # Display results
+        if errors:
+            console.print("\n[red]❌ Critical dependencies missing:[/red]")
+            for error in errors:
+                console.print(f"  • {error}")
+            console.print("\n[red]Please install missing dependencies before continuing.[/red]")
+            sys.exit(1)
+        
+        if warnings:
+            console.print("\n[yellow]⚠️  Optional dependencies:[/yellow]")
+            for warning in warnings:
+                console.print(f"  • {warning}")
+        
+        console.print("\n[green]✓ All required dependencies are installed[/green]")
+        
     def analyze_spec_with_claude(self) -> Dict[str, Any]:
         """Use Claude to analyze the spec and generate implementation plan"""
         
         # Read the spec file
         spec_content = self.spec_path.read_text()
         
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Context priming Claude for project understanding...", total=None)
+            
+            # First, context prime Claude with the project
+            context_prime_cmd = f'/context-prime "Analyze the project at {self.project_path} to understand its structure, technologies, and conventions"'
+            
+            # Create a script to run Claude with context priming
+            context_script = f'''#!/bin/bash
+cd "{self.project_path}"
+echo "{context_prime_cmd}" | claude -c /dev/stdin
+'''
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
+                f.write(context_script)
+                context_script_file = f.name
+            
+            os.chmod(context_script_file, 0o755)
+            
+            try:
+                # Run context priming
+                result = subprocess.run(
+                    ['bash', context_script_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                
+                if result.returncode != 0:
+                    console.print(f"[yellow]Warning: Context priming had issues: {result.stderr}[/yellow]")
+                
+            finally:
+                os.unlink(context_script_file)
+            
+            progress.update(task, description="Analyzing specification with Claude...")
+        
         # Create a prompt for Claude
-        prompt = f"""You are an AI project planning assistant. Analyze the following specification and create a detailed implementation plan in JSON format.
+        prompt = f"""You are an AI project planning assistant. You have just analyzed the project at {self.project_path}. Now analyze the following specification and create a detailed implementation plan in JSON format.
 
 PROJECT PATH: {self.project_path}
 SPECIFICATION:
@@ -161,16 +297,21 @@ IMPORTANT:
                 prompt_file = f.name
             
             try:
-                # Use claude CLI to analyze
+                # Use claude CLI to analyze with the project as working directory
                 result = subprocess.run(
                     ['claude', '-c', prompt_file],
                     capture_output=True,
                     text=True,
-                    timeout=60
+                    timeout=120,
+                    cwd=str(self.project_path)
                 )
                 
                 if result.returncode != 0:
                     console.print(f"[red]Error running Claude: {result.stderr}[/red]")
+                    console.print("\n[yellow]Troubleshooting tips:[/yellow]")
+                    console.print("1. Ensure Claude CLI is installed: https://claude.ai/cli")
+                    console.print("2. Check that you're logged in: claude auth status")
+                    console.print("3. Try running manually: claude --help")
                     sys.exit(1)
                 
                 # Extract JSON from Claude's response
@@ -321,6 +462,18 @@ IMPORTANT:
             # Wait for Claude to start
             time.sleep(5)
             
+            # Send context priming command first (except for orchestrator who doesn't need project context)
+            if role_key != 'orchestrator':
+                send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
+                context_prime_msg = f'/context-prime "You are about to work on {spec.project.name} at {spec.project.path}. Understand the project structure, dependencies, and conventions."'
+                subprocess.run([
+                    str(send_script),
+                    f'{session_name}:{window_idx}',
+                    context_prime_msg
+                ])
+                # Wait for context priming to complete
+                time.sleep(8)
+            
             # Get role config
             role_config = spec.roles[role_key]
             
@@ -464,13 +617,21 @@ Work closely with Developer to ensure quality."""
             border_style="cyan"
         ))
         
+        # Ensure Tmux Orchestrator is set up
+        self.ensure_setup()
+        
+        # Check dependencies
+        self.check_dependencies()
+        
         # Validate inputs
         if not self.project_path.exists():
             console.print(f"[red]Error: Project path does not exist: {self.project_path}[/red]")
+            console.print("[yellow]Please provide a valid path to your project directory.[/yellow]")
             sys.exit(1)
             
         if not self.spec_path.exists():
             console.print(f"[red]Error: Spec file does not exist: {self.spec_path}[/red]")
+            console.print("[yellow]Please provide a valid path to your specification markdown file.[/yellow]")
             sys.exit(1)
         
         # Analyze spec with Claude
@@ -484,6 +645,8 @@ Work closely with Developer to ensure quality."""
             console.print(f"[red]Error parsing implementation spec: {e}[/red]")
             console.print("[yellow]Raw response:[/yellow]")
             console.print(JSON(json.dumps(spec_dict, indent=2)))
+            console.print("\n[yellow]This usually means Claude's response wasn't in the expected JSON format.[/yellow]")
+            console.print("Try simplifying your specification or breaking it into smaller parts.")
             sys.exit(1)
         
         # Display plan and get approval
