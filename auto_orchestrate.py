@@ -373,23 +373,53 @@ IMPORTANT:
                 
                 if result.returncode != 0:
                     # Check if it's a version-related error
-                    if "needs an update" in result.stderr and "1.0.22" in result.stderr:
-                        console.print(f"[red]Claude is reporting an outdated version internally[/red]")
-                        console.print(f"[yellow]This might be a Claude Code issue. Your installed version is {claude_version}[/yellow]")
-                        console.print("\n[yellow]Possible solutions:[/yellow]")
-                        console.print("1. Try updating: claude update")
-                        console.print("2. Check if you have multiple Claude installations: which -a claude")
-                        console.print("3. Try running the command manually to test:")
-                        console.print(f"   cd {self.project_path}")
-                        console.print(f"   cat {prompt_file} | claude -p")
+                    if "needs an update" in result.stderr:
+                        console.print(f"[yellow]Claude is reporting a version issue. Trying alternative approach...[/yellow]")
+                        
+                        # Try without the -p flag, using stdin instead
+                        try:
+                            process = subprocess.Popen(
+                                ['claude'],
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                text=True,
+                                cwd=str(self.project_path)
+                            )
+                            
+                            # Send prompt and exit command
+                            stdout, stderr = process.communicate(
+                                input=prompt_content + '\n/exit\n',
+                                timeout=120
+                            )
+                            
+                            if process.returncode == 0:
+                                result = type('obj', (object,), {
+                                    'returncode': 0,
+                                    'stdout': stdout,
+                                    'stderr': stderr
+                                })
+                                console.print("[green]✓ Successfully worked around version issue[/green]")
+                            else:
+                                raise Exception(f"Alternative approach failed: {stderr}")
+                                
+                        except Exception as e:
+                            console.print(f"[red]Both approaches failed. Error: {str(e)}[/red]")
+                            console.print("\n[yellow]Manual troubleshooting:[/yellow]")
+                            console.print("1. Try updating Claude: claude update")
+                            console.print("2. Test Claude manually:")
+                            console.print(f"   cd {self.project_path}")
+                            console.print(f"   claude")
+                            console.print("   # Then paste your prompt and press Ctrl+D")
+                            sys.exit(1)
                     else:
                         console.print(f"[red]Error running Claude: {result.stderr}[/red]")
                         console.print("\n[yellow]Troubleshooting tips:[/yellow]")
                         console.print("1. Ensure Claude Code is working: claude --help")
                         console.print("2. Try running the prompt manually:")
                         console.print(f"   cd {self.project_path}")
-                        console.print(f"   claude -p 'Analyze this project and suggest an architecture'")
-                    sys.exit(1)
+                        console.print(f"   claude -p 'Test prompt'")
+                        sys.exit(1)
                 
                 # Extract JSON from Claude's response
                 response = result.stdout.strip()
