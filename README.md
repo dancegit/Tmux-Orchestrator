@@ -237,8 +237,19 @@ SUCCESS CRITERIA:
 
 ### Git Safety Rules
 
-1. **Before Starting Any Task**
+⚠️ **CRITICAL BRANCH PROTECTION**: Never merge to main unless you started on main!
+
+1. **When Starting a Project - Record the Branch**
    ```bash
+   # First thing when orchestrator starts
+   STARTING_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+   echo $STARTING_BRANCH > .git/STARTING_BRANCH
+   echo "Project started on branch: $STARTING_BRANCH"
+   ```
+
+2. **Before Starting Any Task**
+   ```bash
+   # Feature branches are created FROM current branch, not main
    git checkout -b feature/[task-name]
    git status  # Ensure clean state
    ```
@@ -252,7 +263,9 @@ SUCCESS CRITERIA:
 3. **When Task Completes**
    ```bash
    git tag stable-[feature]-[date]
-   git checkout main
+   # CRITICAL: Only merge to the branch you started from!
+   ORIGINAL_BRANCH=$(cat .git/STARTING_BRANCH 2>/dev/null || echo "main")
+   git checkout $ORIGINAL_BRANCH
    git merge feature/[task-name]
    ```
 

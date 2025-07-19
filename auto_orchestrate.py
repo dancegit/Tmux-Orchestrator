@@ -59,6 +59,7 @@ class Project(BaseModel):
     main_tech: List[str]
 
 class GitWorkflow(BaseModel):
+    parent_branch: str = "main"  # The branch we started from
     branch_name: str
     commit_interval: int
     pr_title: str
@@ -180,6 +181,21 @@ class AutoOrchestrator:
         
         console.print("\n[green]✓ All required dependencies are installed[/green]")
     
+    def get_current_git_branch(self) -> Optional[str]:
+        """Get the current git branch of the project"""
+        try:
+            result = subprocess.run(
+                ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                capture_output=True,
+                text=True,
+                cwd=str(self.project_path)
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            return None
+        except:
+            return None
+    
     def get_claude_version(self) -> Optional[str]:
         """Get the Claude CLI version"""
         try:
@@ -296,6 +312,14 @@ echo '{context_prime_cmd}' | /usr/bin/claude --dangerously-skip-permissions
                 if self.project_path.exists():
                     console.print(f"[yellow]Note: No context-prime command found. To enable, create {context_prime_path.relative_to(Path.home()) if context_prime_path.is_relative_to(Path.home()) else context_prime_path}[/yellow]")
         
+        # Detect current git branch
+        current_branch = self.get_current_git_branch()
+        if current_branch:
+            console.print(f"[cyan]Current git branch: {current_branch}[/cyan]")
+        else:
+            current_branch = "main"  # Default if not in git repo
+            console.print("[yellow]Not in a git repository, defaulting to 'main' branch[/yellow]")
+        
         # Create a prompt for Claude
         if supports_context_prime:
             prompt = f"""You are an AI project planning assistant. You have just analyzed the project at {self.project_path}. Now analyze the following specification and create a detailed implementation plan in JSON format."""
@@ -305,6 +329,7 @@ echo '{context_prime_cmd}' | /usr/bin/claude --dangerously-skip-permissions
         prompt += f"""
 
 PROJECT PATH: {self.project_path}
+CURRENT GIT BRANCH: {current_branch}
 SPECIFICATION:
 {spec_content}
 
@@ -349,6 +374,7 @@ Generate a JSON implementation plan with this EXACT structure:
     }}
   }},
   "git_workflow": {{
+    "parent_branch": "{current_branch}",
     "branch_name": "feature/implementation-branch",
     "commit_interval": 30,
     "pr_title": "Implementation title"
@@ -365,6 +391,8 @@ IMPORTANT:
 - Create realistic time estimates based on complexity
 - Include specific, actionable tasks for each phase
 - Ensure role responsibilities align with the implementation needs
+- IMPORTANT: The parent_branch field MUST be set to "{current_branch}" as this is the branch we're currently on
+- The feature branch will be created FROM this parent branch, not from main
 - Output ONLY valid JSON, no other text"""
 
         with Progress(
@@ -497,9 +525,11 @@ CLAUDE_EOF
         
         # Git workflow
         console.print(Panel(
-            f"Branch: [cyan]{spec.git_workflow.branch_name}[/cyan]\n"
+            f"Parent Branch: [yellow]{spec.git_workflow.parent_branch}[/yellow] (current branch)\n"
+            f"Feature Branch: [cyan]{spec.git_workflow.branch_name}[/cyan]\n"
             f"Commit Interval: Every {spec.git_workflow.commit_interval} minutes\n"
-            f"PR Title: {spec.git_workflow.pr_title}",
+            f"PR Title: {spec.git_workflow.pr_title}\n"
+            f"[bold red]⚠️  Will merge back to {spec.git_workflow.parent_branch}, NOT main![/bold red]" if spec.git_workflow.parent_branch != "main" else "",
             title="🔀 Git Workflow"
         ))
         
@@ -677,7 +707,9 @@ Success Criteria:
 {chr(10).join(f'- {c}' for c in spec.success_criteria)}
 
 Git Workflow:
-- Branch: {spec.git_workflow.branch_name}
+- CRITICAL: Project started on branch '{spec.git_workflow.parent_branch}'
+- Feature branch: {spec.git_workflow.branch_name} (created from {spec.git_workflow.parent_branch})
+- MERGE ONLY TO: {spec.git_workflow.parent_branch} (NOT main unless parent is main!)
 - Commit every {spec.git_workflow.commit_interval} minutes
 - PR Title: {spec.git_workflow.pr_title}
 
@@ -703,9 +735,22 @@ Implementation Phases:
 {chr(10).join(f'{i+1}. {p.name}: {", ".join(p.tasks[:2])}...' for i, p in enumerate(spec.implementation_plan.phases))}
 
 Git Requirements:
-- Create branch: {spec.git_workflow.branch_name}
+- CRITICAL: Current branch is '{spec.git_workflow.parent_branch}' - ALL work must merge back here!
+- Create feature branch: {spec.git_workflow.branch_name} FROM {spec.git_workflow.parent_branch}
+- NEVER merge to main unless {spec.git_workflow.parent_branch} is main
 - Commit every {spec.git_workflow.commit_interval} minutes with clear messages
 - Follow existing code patterns and conventions
+
+Git Commands:
+```bash
+# Record starting branch
+echo "{spec.git_workflow.parent_branch}" > .git/STARTING_BRANCH
+# Create feature branch FROM current branch
+git checkout -b {spec.git_workflow.branch_name}
+# When merging back, use:
+git checkout {spec.git_workflow.parent_branch}
+git merge {spec.git_workflow.branch_name}
+```
 
 Start by:
 1. Reading the spec at: {self.spec_path}
