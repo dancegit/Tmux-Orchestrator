@@ -129,6 +129,10 @@ in window 1 to implement it. Schedule check-ins every 30 minutes."
 Use the new `auto_orchestrate.py` script to automatically analyze a specification and set up a complete orchestration environment:
 
 ```bash
+# Clone and run - no setup needed!
+git clone https://github.com/yourusername/Tmux-Orchestrator.git
+cd Tmux-Orchestrator
+
 # Automatic setup from specification
 ./auto_orchestrate.py \
   --project /path/to/your/project \
@@ -141,16 +145,15 @@ Use the new `auto_orchestrate.py` script to automatically analyze a specificatio
 ```
 
 This will:
-1. Analyze your specification using Claude
-2. Generate a structured implementation plan
-3. Show you the plan for approval
-4. Automatically create and configure tmux sessions for:
-   - Orchestrator (oversight & coordination)
-   - Project Manager (quality & tracking)
-   - Developer (implementation)
-   - Tester (verification)
-5. Brief each role with specific responsibilities
-6. Set up scheduled check-ins
+1. **Auto-setup** the Tmux Orchestrator environment (first time only)
+2. **Context-prime** Claude to understand your project structure
+3. **Analyze** your specification to create an implementation plan
+4. **Show** the plan for your approval
+5. **Create** tmux sessions with 4 specialized AI agents
+6. **Brief** each agent with context-aware responsibilities
+7. **Schedule** automatic check-ins for continuous progress
+
+The script handles all setup automatically - no configuration needed!
 
 ### Option 3: Manual Full Orchestrator Setup
 
@@ -170,11 +173,13 @@ Schedule yourself to check in every hour."
 
 ### 🚀 Auto-Orchestrate: Spec to Implementation
 The new `auto_orchestrate.py` script provides fully automated setup:
-- **Spec Analysis**: Uses Claude to analyze your markdown specifications
-- **Intelligent Planning**: Generates phase-based implementation plans with time estimates
-- **Role Assignment**: Automatically configures Orchestrator, PM, Developer, and Tester roles
-- **One Command Setup**: From spec file to running team in under a minute
-- **Structured Workflow**: Enforces git best practices and regular check-ins
+- **Zero Configuration**: Clone and run - automatic setup on first use
+- **Context-Aware**: Uses `/context-prime` to understand your project before planning
+- **Spec Analysis**: Claude analyzes your markdown specifications intelligently
+- **Phase Planning**: Generates realistic implementation plans with time estimates
+- **4 Specialized Agents**: Orchestrator, PM, Developer, and Tester with defined roles
+- **One Command**: From fresh clone to running AI team in under a minute
+- **Git Workflow**: Enforces best practices with regular commits and PRs
 
 ### 🔄 Self-Scheduling Agents
 Agents can schedule their own check-ins using:

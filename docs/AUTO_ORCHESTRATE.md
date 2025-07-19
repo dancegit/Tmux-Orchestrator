@@ -14,15 +14,22 @@ The `auto_orchestrate.py` script provides fully automated setup of a Tmux Orches
 
 ## Installation
 
-The script uses UV for dependency management. No installation needed - just run it!
+The script uses UV for dependency management and automatically sets up the Tmux Orchestrator environment.
 
 ```bash
-# Make executable (if not already)
-chmod +x auto_orchestrate.py
+# Clone the repository
+git clone https://github.com/yourusername/Tmux-Orchestrator.git
+cd Tmux-Orchestrator
 
-# Run directly - UV handles dependencies
+# Run directly - everything is handled automatically!
 ./auto_orchestrate.py --help
 ```
+
+On first run, the script will:
+1. Run the setup process automatically
+2. Create necessary directories
+3. Check for required dependencies
+4. Make all scripts executable
 
 ## Usage
 
@@ -44,7 +51,14 @@ chmod +x auto_orchestrate.py
 
 ## How It Works
 
-### 1. Specification Analysis
+### 1. Context Priming
+
+Before analyzing the specification, the script:
+- Runs `/context-prime` command to help Claude understand the project structure
+- Changes to the project directory for proper context
+- Allows Claude to analyze dependencies, conventions, and architecture
+
+### 2. Specification Analysis
 
 The script sends your specification to Claude with a structured prompt requesting:
 - Project type and technology stack identification
@@ -101,8 +115,9 @@ Upon approval, the script:
 1. Creates a new tmux session named `{project}-impl`
 2. Sets up 4 windows: Orchestrator, Project-Manager, Developer, Tester
 3. Starts Claude in each window
-4. Sends role-specific briefings
-5. Configures scheduled check-ins
+4. Runs `/context-prime` for each agent (except Orchestrator) to understand the project
+5. Sends role-specific briefings
+6. Configures scheduled check-ins
 
 ## Role Descriptions
 
@@ -196,13 +211,25 @@ python3 claude_control.py status detailed
 
 Edit the generated briefings by modifying the `create_role_briefing` method in the script.
 
+## First-Time Setup
+
+When you first clone the repository and run `auto_orchestrate.py`, it will:
+
+1. **Check for config.local.sh** - If missing, runs setup automatically
+2. **Create directories** - Sets up registry/logs, registry/notes, registry/projects
+3. **Make scripts executable** - Ensures all .sh and .py files can be run
+4. **Check dependencies** - Verifies tmux, Claude CLI, Python, and UV are installed
+5. **Provide installation help** - Shows commands to install any missing dependencies
+
+No manual setup required - just clone and run!
+
 ## Troubleshooting
 
 ### Claude Timeout
 If Claude takes too long to analyze the spec:
 - Break down large specifications into phases
 - Simplify technical requirements
-- Increase timeout in script (default: 60s)
+- The script now uses 120s timeout for context priming
 
 ### Tmux Errors
 If tmux session creation fails:
