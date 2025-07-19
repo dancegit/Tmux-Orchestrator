@@ -248,11 +248,53 @@ class AutoOrchestrator:
             console=console,
         ) as progress:
             
-            # Skip context priming due to version limitations
-            task = progress.add_task("Analyzing specification with Claude...", total=None)
-            supports_context_prime = False
+            # Check if the project has a context-prime command
+            context_prime_path = self.project_path / '.claude' / 'commands' / 'context-prime.md'
+            supports_context_prime = context_prime_path.exists()
             
-            console.print(f"[yellow]Note: Using Claude v{claude_version} - context priming disabled due to version limitations[/yellow]")
+            if supports_context_prime:
+                task = progress.add_task("Context priming Claude for project understanding...", total=None)
+                
+                # Use Claude Code to run the context-prime command
+                context_prime_cmd = '/context-prime "Analyze the project to understand its structure, technologies, and conventions"'
+                
+                try:
+                    # Send the command directly to Claude Code
+                    import uuid
+                    context_script = f"""#!/bin/bash
+cd "{self.project_path}"
+echo '{context_prime_cmd}' | /usr/bin/claude
+"""
+                    
+                    script_file = f"/tmp/claude_context_{uuid.uuid4().hex}.sh"
+                    with open(script_file, 'w') as f:
+                        f.write(context_script)
+                    os.chmod(script_file, 0o755)
+                    
+                    try:
+                        result = subprocess.run(
+                            ['bash', script_file],
+                            capture_output=True,
+                            text=True,
+                            timeout=120
+                        )
+                        
+                        if result.returncode != 0:
+                            console.print(f"[yellow]Context priming had issues: {result.stderr}[/yellow]")
+                            supports_context_prime = False
+                    finally:
+                        if os.path.exists(script_file):
+                            os.unlink(script_file)
+                    
+                except Exception as e:
+                    console.print(f"[yellow]Context priming skipped: {str(e)}[/yellow]")
+                    supports_context_prime = False
+                
+                progress.update(task, description="Analyzing specification with Claude...")
+            else:
+                task = progress.add_task("Analyzing specification with Claude...", total=None)
+                if self.project_path.exists():
+                    console.print(f"[yellow]Note: No context-prime command found. To enable, create {context_prime_path.relative_to(Path.home()) if context_prime_path.is_relative_to(Path.home()) else context_prime_path}[/yellow]")
         
         # Create a prompt for Claude
         if supports_context_prime:
@@ -372,28 +414,13 @@ CLAUDE_EOF
                         os.unlink(script_file)
                 
                 if result.returncode != 0:
-                    # Just ignore version errors and extract any JSON from the output
-                    if "needs an update" in result.stderr:
-                        console.print(f"[yellow]Claude reported a version warning. Checking if we got a valid response anyway...[/yellow]")
-                        # Sometimes Claude still provides output despite the version warning
-                        if result.stdout and result.stdout.strip():
-                            result.returncode = 0  # Override the error
-                        else:
-                            console.print(f"[red]No valid response from Claude[/red]")
-                            console.print("\n[yellow]This appears to be a Claude Code version issue.[/yellow]")
-                            console.print("[yellow]You have v1.0.56 installed but Claude is internally reporting v1.0.22[/yellow]")
-                            console.print("\n[yellow]Workaround: Try running Claude in a clean shell:[/yellow]")
-                            console.print(f"   env -i bash")
-                            console.print(f"   cd {self.project_path}")
-                            console.print(f"   /usr/bin/claude")
-                            console.print(f"   # Paste the prompt from: {prompt_file}")
-                            sys.exit(1)
-                    else:
-                        console.print(f"[red]Error running Claude: {result.stderr}[/red]")
-                        console.print("\n[yellow]Debug info:[/yellow]")
-                        console.print(f"Script file: {script_file}")
-                        console.print(f"Exit code: {result.returncode}")
-                        sys.exit(1)
+                    console.print(f"[red]Error running Claude: {result.stderr}[/red]")
+                    console.print("\n[yellow]Debug info:[/yellow]")
+                    console.print(f"Script file: {script_file}")
+                    console.print(f"Exit code: {result.returncode}")
+                    console.print("\n[yellow]You can try running the script manually to debug:[/yellow]")
+                    console.print(f"   bash {script_file}")
+                    sys.exit(1)
                 
                 # Extract JSON from Claude's response
                 response = result.stdout.strip()
