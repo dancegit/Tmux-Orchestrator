@@ -54,6 +54,41 @@ The Tmux Orchestrator uses a three-tier hierarchy to overcome context window lim
 ![Project Completed](Examples/Project%20Completed.png)
 *Successful project completion with all tasks verified and committed*
 
+## 🔧 Setup & Prerequisites
+
+### Prerequisites
+- tmux installed on your system
+- Claude CLI (`claude` command available)
+- Python 3 (for optional utilities)
+- Basic familiarity with tmux commands
+
+### Initial Setup
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/Tmux-Orchestrator.git
+   cd Tmux-Orchestrator
+   ```
+
+2. **Run the setup script**
+   ```bash
+   ./setup.sh
+   ```
+   
+   This will:
+   - Create a local configuration file
+   - Set up your projects directory path
+   - Create necessary directories
+   - Check dependencies
+   - Make scripts executable
+
+3. **Configure your projects directory** (if needed)
+   
+   Edit `config.local.sh` to set your projects directory:
+   ```bash
+   export PROJECTS_DIR="$HOME/your-projects-folder"
+   ```
+
 ## 🎯 Quick Start
 
 ### Option 1: Basic Setup (Single Project)
