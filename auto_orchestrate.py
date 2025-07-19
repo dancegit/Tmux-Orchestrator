@@ -292,7 +292,7 @@ echo '{context_prime_cmd}' | /usr/bin/claude --dangerously-skip-permissions
                             ['bash', script_file],
                             capture_output=True,
                             text=True,
-                            timeout=120
+                            timeout=240
                         )
                         
                         if result.returncode != 0:
@@ -597,7 +597,7 @@ CLAUDE_EOF
             # Start Claude
             subprocess.run([
                 'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
-                'claude', 'Enter'
+                'claude --dangerously-skip-permissions', 'Enter'
             ])
             
             # Wait for Claude to start
