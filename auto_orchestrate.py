@@ -263,7 +263,7 @@ class AutoOrchestrator:
                     import uuid
                     context_script = f"""#!/bin/bash
 cd "{self.project_path}"
-echo '{context_prime_cmd}' | /usr/bin/claude
+echo '{context_prime_cmd}' | /usr/bin/claude --dangerously-skip-permissions
 """
                     
                     script_file = f"/tmp/claude_context_{uuid.uuid4().hex}.sh"
@@ -390,7 +390,7 @@ IMPORTANT:
                 import uuid
                 prompt_script = f"""#!/bin/bash
 cd "{self.project_path}"
-cat << 'CLAUDE_EOF' | /usr/bin/claude
+cat << 'CLAUDE_EOF' | /usr/bin/claude --dangerously-skip-permissions
 {prompt_content}
 
 Please provide ONLY the JSON response, no other text.

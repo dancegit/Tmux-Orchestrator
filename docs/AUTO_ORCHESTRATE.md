@@ -273,11 +273,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ### Claude Code Compatibility
 
 This script is designed to work with Claude Code (not the deprecated Claude CLI):
-- Uses `claude -p` for non-interactive prompts
+- Uses `claude --dangerously-skip-permissions` for non-interactive automation
 - Supports slash commands if defined in `.claude/commands/`
 - Context priming works if your project has `.claude/commands/context-prime.md`
+- Requires Claude Code 1.0.24+ for best results
 
 To check your version: `claude --version`
+
+**Note**: The script uses the `--dangerously-skip-permissions` flag to allow non-interactive execution. This is required for automation but means Claude will execute without the usual safety prompts.
 
 ## Future Enhancements
 
