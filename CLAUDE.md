@@ -50,6 +50,31 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
 
 ## 🔐 Git Discipline - MANDATORY FOR ALL AGENTS
 
+### 🚨 CRITICAL BRANCH PROTECTION RULES 🚨
+
+**NEVER MERGE TO MAIN UNLESS YOU STARTED ON MAIN**
+
+1. **Branch Hierarchy Rule**: 
+   - ALWAYS detect and record the starting branch when a project begins
+   - Create feature branches FROM the current branch (not from main)
+   - Merge ONLY back to the original parent branch
+   - If started on main, then and only then can you merge to main
+
+2. **Branch Detection Commands**:
+   ```bash
+   # First thing when starting ANY project - record the starting branch
+   STARTING_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+   echo "Project started on branch: $STARTING_BRANCH" > .git/STARTING_BRANCH
+   
+   # When creating feature branches
+   git checkout -b feature/new-feature  # This creates from current branch
+   
+   # When merging back
+   ORIGINAL_BRANCH=$(cat .git/STARTING_BRANCH)
+   git checkout $ORIGINAL_BRANCH
+   git merge feature/new-feature
+   ```
+
 ### Core Git Safety Rules
 
 **CRITICAL**: Every agent MUST follow these git practices to prevent work loss:
@@ -68,13 +93,21 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
 
 3. **Feature Branch Workflow**
    ```bash
+   # ALWAYS check current branch first
+   CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+   echo "Currently on branch: $CURRENT_BRANCH"
+   
    # Before starting any new feature/task
-   git checkout -b feature/[descriptive-name]
+   git checkout -b feature/[descriptive-name]  # Creates from CURRENT branch
    
    # After completing feature
    git add -A
    git commit -m "Complete: [feature description]"
    git tag stable-[feature]-$(date +%Y%m%d-%H%M%S)
+   
+   # Merge back to PARENT branch (not necessarily main!)
+   git checkout $CURRENT_BRANCH  # Go back to where we branched from
+   git merge feature/[descriptive-name]
    ```
 
 4. **Meaningful Commit Messages**
@@ -107,10 +140,13 @@ git stash pop  # Restore stashed changes if needed
 ### Project Manager Git Responsibilities
 
 Project Managers must enforce git discipline:
+- **VERIFY the starting branch** at project initialization
+- **PREVENT unauthorized merges to main** - only if project started on main
 - Remind engineers to commit every 30 minutes
-- Verify feature branches are created for new work
+- Verify feature branches are created from the correct parent branch
 - Ensure meaningful commit messages
 - Check that stable tags are created
+- Track branch hierarchy to prevent accidental main branch pollution
 
 ### Why This Matters
 
