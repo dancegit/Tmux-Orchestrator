@@ -51,12 +51,14 @@ On first run, the script will:
 
 ## How It Works
 
-### 1. Context Priming
+### 1. Context Priming (Optional)
 
-Before analyzing the specification, the script:
-- Runs `/context-prime` command to help Claude understand the project structure
-- Changes to the project directory for proper context
+If your project has a `.claude/commands/context-prime.md` file:
+- The script runs `/context-prime` to help Claude understand the project structure
+- This command is executed in the project directory
 - Allows Claude to analyze dependencies, conventions, and architecture
+
+If no context-prime command exists, the script continues without it.
 
 ### 2. Specification Analysis
 
@@ -263,14 +265,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 - May need manual intervention for complex dependencies
 - Limited to 4 predefined roles (can be extended)
 
-### Claude Version Compatibility
+### Claude Code Compatibility
 
-The script works with older Claude versions but provides enhanced features with v1.0.24+:
-- **v1.0.24+**: Full context priming support for better project understanding
-- **v1.0.22 and older**: Works without context priming, agents analyze projects manually
+This script is designed to work with Claude Code (not the deprecated Claude CLI):
+- Uses `claude -p` for non-interactive prompts
+- Supports slash commands if defined in `.claude/commands/`
+- Context priming works if your project has `.claude/commands/context-prime.md`
 
 To check your version: `claude --version`
-To update: `claude update`
 
 ## Future Enhancements
 

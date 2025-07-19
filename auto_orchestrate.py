@@ -241,51 +241,38 @@ class AutoOrchestrator:
             console=console,
         ) as progress:
             
-            # Try context priming if supported
+            # Check if the project has a context-prime command
+            context_prime_path = self.project_path / '.claude' / 'commands' / 'context-prime.md'
+            supports_context_prime = context_prime_path.exists()
+            
             if supports_context_prime:
                 task = progress.add_task("Context priming Claude for project understanding...", total=None)
                 
-                # First, context prime Claude with the project
-                context_prime_cmd = f'/context-prime "Analyze the project at {self.project_path} to understand its structure, technologies, and conventions"'
-                
-                # Create a script to run Claude with context priming
-                context_script = f'''#!/bin/bash
-cd "{self.project_path}"
-echo "{context_prime_cmd}" | claude -c /dev/stdin
-'''
-                
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
-                    f.write(context_script)
-                    context_script_file = f.name
-                
-                os.chmod(context_script_file, 0o755)
+                # Use Claude Code to run the context-prime command
+                context_prime_cmd = '/context-prime "Analyze the project to understand its structure, technologies, and conventions"'
                 
                 try:
-                    # Run context priming
+                    # Send the command directly to Claude Code
                     result = subprocess.run(
-                        ['bash', context_script_file],
+                        ['claude', '-p', context_prime_cmd],
                         capture_output=True,
                         text=True,
-                        timeout=120
+                        timeout=120,
+                        cwd=str(self.project_path)
                     )
                     
                     if result.returncode != 0:
-                        # Check if it's a version error from Claude itself
-                        if "needs an update" in result.stderr:
-                            console.print(f"[yellow]Context priming not supported by this Claude instance[/yellow]")
-                        else:
-                            console.print(f"[yellow]Context priming skipped due to error[/yellow]")
-                        supports_context_prime = False  # Disable for this run
+                        console.print(f"[yellow]Context priming had issues: {result.stderr}[/yellow]")
+                        supports_context_prime = False
                     
                 except Exception as e:
                     console.print(f"[yellow]Context priming skipped: {str(e)}[/yellow]")
                     supports_context_prime = False
-                finally:
-                    os.unlink(context_script_file)
                 
                 progress.update(task, description="Analyzing specification with Claude...")
             else:
                 task = progress.add_task("Analyzing specification with Claude...", total=None)
+                console.print(f"[yellow]Note: No context-prime command found at {context_prime_path}[/yellow]")
         
         # Create a prompt for Claude
         if supports_context_prime:
@@ -371,9 +358,13 @@ IMPORTANT:
                 prompt_file = f.name
             
             try:
-                # Use claude CLI to analyze with the project as working directory
+                # Use Claude Code with -p flag for non-interactive output
+                # Read the prompt from file
+                with open(prompt_file, 'r') as f:
+                    prompt_content = f.read()
+                
                 result = subprocess.run(
-                    ['claude', '-c', prompt_file],
+                    ['claude', '-p', prompt_content],
                     capture_output=True,
                     text=True,
                     timeout=120,
@@ -390,13 +381,14 @@ IMPORTANT:
                         console.print("2. Check if you have multiple Claude installations: which -a claude")
                         console.print("3. Try running the command manually to test:")
                         console.print(f"   cd {self.project_path}")
-                        console.print(f"   claude -c {prompt_file}")
+                        console.print(f"   cat {prompt_file} | claude -p")
                     else:
                         console.print(f"[red]Error running Claude: {result.stderr}[/red]")
                         console.print("\n[yellow]Troubleshooting tips:[/yellow]")
-                        console.print("1. Ensure Claude CLI is installed: https://claude.ai/cli")
-                        console.print("2. Check that you're logged in: claude auth status")
-                        console.print("3. Try running manually: claude --help")
+                        console.print("1. Ensure Claude Code is working: claude --help")
+                        console.print("2. Try running the prompt manually:")
+                        console.print(f"   cd {self.project_path}")
+                        console.print(f"   claude -p 'Analyze this project and suggest an architecture'")
                     sys.exit(1)
                 
                 # Extract JSON from Claude's response
@@ -550,8 +542,11 @@ IMPORTANT:
             # Wait for Claude to start
             time.sleep(5)
             
-            # Send context priming command first (except for orchestrator who doesn't need project context)
-            if role_key != 'orchestrator' and supports_context_prime:
+            # Send context priming command if the project supports it
+            context_prime_path = spec.project.path.replace('~', str(Path.home()))
+            context_prime_file = Path(context_prime_path) / '.claude' / 'commands' / 'context-prime.md'
+            
+            if role_key != 'orchestrator' and context_prime_file.exists():
                 send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
                 context_prime_msg = f'/context-prime "You are about to work on {spec.project.name} at {spec.project.path}. Understand the project structure, dependencies, and conventions."'
                 try:
