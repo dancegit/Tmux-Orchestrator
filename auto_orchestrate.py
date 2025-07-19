@@ -19,6 +19,7 @@ import json
 import sys
 import os
 import time
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -178,8 +179,16 @@ class AutoOrchestrator:
         try:
             result = subprocess.run(['claude', '--version'], capture_output=True, text=True)
             if result.returncode == 0:
-                # Parse version from output like "claude version 1.0.22"
+                # Parse version from output like "1.0.56 (Claude Code)" or "claude version 1.0.22"
                 version_line = result.stdout.strip()
+                
+                # Try to extract version number using regex
+                import re
+                version_match = re.search(r'(\d+\.\d+\.\d+)', version_line)
+                if version_match:
+                    return version_match.group(1)
+                
+                # Fallback to old parsing method
                 parts = version_line.split()
                 if len(parts) >= 3:
                     return parts[2]
@@ -219,13 +228,12 @@ class AutoOrchestrator:
         # Read the spec file
         spec_content = self.spec_path.read_text()
         
-        # Check if Claude version supports context priming
-        supports_context_prime = self.check_claude_version()
+        # Try context priming - we'll attempt it and fall back if it fails
+        supports_context_prime = True  # Assume it works and let it fail gracefully
         claude_version = self.get_claude_version()
         
-        if not supports_context_prime and claude_version:
-            console.print(f"[yellow]Note: Claude CLI v{claude_version} detected. Context priming requires v1.0.24+[/yellow]")
-            console.print("[yellow]Continuing without context priming. Consider running: claude update[/yellow]\n")
+        if claude_version:
+            console.print(f"[cyan]Claude version detected: {claude_version}[/cyan]")
         
         with Progress(
             SpinnerColumn(),
@@ -262,7 +270,11 @@ echo "{context_prime_cmd}" | claude -c /dev/stdin
                     )
                     
                     if result.returncode != 0:
-                        console.print(f"[yellow]Context priming skipped due to error[/yellow]")
+                        # Check if it's a version error from Claude itself
+                        if "needs an update" in result.stderr:
+                            console.print(f"[yellow]Context priming not supported by this Claude instance[/yellow]")
+                        else:
+                            console.print(f"[yellow]Context priming skipped due to error[/yellow]")
                         supports_context_prime = False  # Disable for this run
                     
                 except Exception as e:
@@ -369,11 +381,22 @@ IMPORTANT:
                 )
                 
                 if result.returncode != 0:
-                    console.print(f"[red]Error running Claude: {result.stderr}[/red]")
-                    console.print("\n[yellow]Troubleshooting tips:[/yellow]")
-                    console.print("1. Ensure Claude CLI is installed: https://claude.ai/cli")
-                    console.print("2. Check that you're logged in: claude auth status")
-                    console.print("3. Try running manually: claude --help")
+                    # Check if it's a version-related error
+                    if "needs an update" in result.stderr and "1.0.22" in result.stderr:
+                        console.print(f"[red]Claude is reporting an outdated version internally[/red]")
+                        console.print(f"[yellow]This might be a Claude Code issue. Your installed version is {claude_version}[/yellow]")
+                        console.print("\n[yellow]Possible solutions:[/yellow]")
+                        console.print("1. Try updating: claude update")
+                        console.print("2. Check if you have multiple Claude installations: which -a claude")
+                        console.print("3. Try running the command manually to test:")
+                        console.print(f"   cd {self.project_path}")
+                        console.print(f"   claude -c {prompt_file}")
+                    else:
+                        console.print(f"[red]Error running Claude: {result.stderr}[/red]")
+                        console.print("\n[yellow]Troubleshooting tips:[/yellow]")
+                        console.print("1. Ensure Claude CLI is installed: https://claude.ai/cli")
+                        console.print("2. Check that you're logged in: claude auth status")
+                        console.print("3. Try running manually: claude --help")
                     sys.exit(1)
                 
                 # Extract JSON from Claude's response
