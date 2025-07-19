@@ -14,16 +14,21 @@ The `auto_orchestrate.py` script provides fully automated setup of a Tmux Orches
 
 ## Installation
 
-The script uses UV for dependency management and automatically sets up the Tmux Orchestrator environment.
+All Python scripts in this project use UV for dependency management with inline script dependencies.
 
 ```bash
+# Install UV first (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # Clone the repository
 git clone https://github.com/yourusername/Tmux-Orchestrator.git
 cd Tmux-Orchestrator
 
-# Run directly - everything is handled automatically!
+# Run directly - UV handles dependencies automatically!
 ./auto_orchestrate.py --help
 ```
+
+**Important**: Make sure you're using Claude Code (not the old Claude CLI). The script uses `/usr/bin/claude` to avoid conflicts with any Python packages named 'claude'.
 
 On first run, the script will:
 1. Run the setup process automatically

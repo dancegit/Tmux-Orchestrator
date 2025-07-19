@@ -46,7 +46,7 @@ fi
 
 # Check if claude_control.py exists, otherwise just show the note
 if [ -f "$SCRIPT_DIR/claude_control.py" ]; then
-    CMD="cat '$NOTE_FILE' && python3 '$SCRIPT_DIR/claude_control.py' status detailed"
+    CMD="cat '$NOTE_FILE' && '$SCRIPT_DIR/claude_control.py' status detailed"
 else
     CMD="cat '$NOTE_FILE'"
 fi
