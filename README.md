@@ -124,7 +124,35 @@ in window 1 to implement it. Schedule check-ins every 30 minutes."
 ./schedule_with_note.sh 30 "Check PM progress on auth system"
 ```
 
-### Option 2: Full Orchestrator Setup
+### Option 2: Automated Setup with Auto-Orchestrate
+
+Use the new `auto_orchestrate.py` script to automatically analyze a specification and set up a complete orchestration environment:
+
+```bash
+# Automatic setup from specification
+./auto_orchestrate.py \
+  --project /path/to/your/project \
+  --spec /path/to/your/spec.md
+
+# Example with SignalMatrix
+./auto_orchestrate.py \
+  --project /home/per/gitrepos/SignalMatrix_tag_checkouts_for_main \
+  --spec /home/per/gitrepos/SignalMatrix_tag_checkouts_for_main/project_management/planning/dashboard_comprehensive_testing_spec.md
+```
+
+This will:
+1. Analyze your specification using Claude
+2. Generate a structured implementation plan
+3. Show you the plan for approval
+4. Automatically create and configure tmux sessions for:
+   - Orchestrator (oversight & coordination)
+   - Project Manager (quality & tracking)
+   - Developer (implementation)
+   - Tester (verification)
+5. Brief each role with specific responsibilities
+6. Set up scheduled check-ins
+
+### Option 3: Manual Full Orchestrator Setup
 
 ```bash
 # Start the orchestrator
@@ -139,6 +167,14 @@ Schedule yourself to check in every hour."
 ```
 
 ## ✨ Key Features
+
+### 🚀 Auto-Orchestrate: Spec to Implementation
+The new `auto_orchestrate.py` script provides fully automated setup:
+- **Spec Analysis**: Uses Claude to analyze your markdown specifications
+- **Intelligent Planning**: Generates phase-based implementation plans with time estimates
+- **Role Assignment**: Automatically configures Orchestrator, PM, Developer, and Tester roles
+- **One Command Setup**: From spec file to running team in under a minute
+- **Structured Workflow**: Enforces git best practices and regular check-ins
 
 ### 🔄 Self-Scheduling Agents
 Agents can schedule their own check-ins using:
@@ -281,9 +317,13 @@ The orchestrator can share insights between projects:
 
 ## 📚 Core Files
 
+- `auto_orchestrate.py` - Automated setup from specifications (NEW!)
 - `send-claude-message.sh` - Simplified agent communication script
 - `schedule_with_note.sh` - Self-scheduling functionality
+- `claude_control.py` - Status monitoring and reporting
 - `tmux_utils.py` - Tmux interaction utilities
+- `config.sh` - Configuration management
+- `setup.sh` - Initial environment setup
 - `CLAUDE.md` - Agent behavior instructions
 - `LEARNINGS.md` - Accumulated knowledge base
 
