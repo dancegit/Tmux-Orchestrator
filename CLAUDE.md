@@ -55,7 +55,21 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
 
 ## 🌳 Git Worktree Architecture (Auto-Orchestrate)
 
-When using `auto_orchestrate.py`, each agent works in their own isolated git worktree to prevent conflicts:
+When using `auto_orchestrate.py`, each agent works in their own isolated git worktree to prevent conflicts. The system uses multiple fallback strategies to ensure worktree creation always succeeds:
+
+### Worktree Creation Strategies
+
+The script automatically handles various git repository states:
+
+1. **Normal Creation**: Standard worktree with current branch
+2. **Force Override**: Uses `--force` if branch is already checked out
+3. **Agent Branches**: Creates `{branch}-{role}` branches for isolation
+4. **Detached HEAD**: Falls back to detached worktree at current commit
+
+This ensures the script works even when:
+- The branch is already checked out elsewhere
+- Multiple orchestrations run simultaneously
+- The repository has complex branch structures
 
 ### Worktree Locations
 ```
