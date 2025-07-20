@@ -351,10 +351,19 @@ cd /path/to/project
 git init  # If not already a repo
 ```
 
-### Worktree Conflicts
-If you see "branch already checked out" errors:
-- The script will automatically create detached worktrees
-- Each agent can then create their own feature branch
+### Worktree Creation Strategies
+The script uses multiple fallback strategies to handle worktree creation:
+
+1. **Normal Creation**: Standard worktree with current branch
+2. **Force Flag**: Overrides safety checks if branch is already checked out
+3. **Agent-Specific Branches**: Creates `{branch}-{role}` branches for each agent
+4. **Detached HEAD**: Falls back to detached worktree at current commit
+
+This ensures the script works regardless of your repository's current state:
+- Works with already checked-out branches
+- Handles multiple simultaneous orchestrations
+- Provides proper isolation for each agent
+- Cleans up agent-specific branches on completion
 
 ### Claude Timeout
 If Claude takes too long to analyze the spec:
