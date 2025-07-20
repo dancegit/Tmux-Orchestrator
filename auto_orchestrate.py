@@ -641,17 +641,18 @@ CLAUDE_EOF
         size = self.manual_size if self.manual_size else spec.project_size.size
         
         if size == "small":
-            # Small projects: 6 agents (Core team with testing and infrastructure)
+            # Small projects: 7 agents (Core team with testing, infrastructure, and monitoring)
             core_roles = [
                 ('Orchestrator', 'orchestrator'),
                 ('Developer', 'developer'),
                 ('Researcher', 'researcher'),
                 ('Tester', 'tester'),
                 ('TestRunner', 'testrunner'),
+                ('LogTracker', 'logtracker'),
                 ('DevOps', 'devops')
             ]
         elif size == "medium":
-            # Medium projects: 7 agents (+ Project Manager)
+            # Medium projects: 8 agents (+ Project Manager)
             core_roles = [
                 ('Orchestrator', 'orchestrator'),
                 ('Project-Manager', 'project_manager'),
@@ -659,10 +660,11 @@ CLAUDE_EOF
                 ('Researcher', 'researcher'),
                 ('Tester', 'tester'),
                 ('TestRunner', 'testrunner'),
+                ('LogTracker', 'logtracker'),
                 ('DevOps', 'devops')
             ]
         else:  # large
-            # Large projects: 8 agents (full team with all core roles)
+            # Large projects: 9 agents (full team with all core roles)
             core_roles = [
                 ('Orchestrator', 'orchestrator'),
                 ('Project-Manager', 'project_manager'),
@@ -670,6 +672,7 @@ CLAUDE_EOF
                 ('Researcher', 'researcher'),
                 ('Tester', 'tester'),
                 ('TestRunner', 'testrunner'),
+                ('LogTracker', 'logtracker'),
                 ('DevOps', 'devops'),
                 ('Code-Reviewer', 'code_reviewer')
             ]
@@ -683,7 +686,8 @@ CLAUDE_EOF
             'devops': ('DevOps', 'devops'),
             'code_reviewer': ('Code-Reviewer', 'code_reviewer'),
             'tester': ('Tester', 'tester'),
-            'testrunner': ('TestRunner', 'testrunner')
+            'testrunner': ('TestRunner', 'testrunner'),
+            'logtracker': ('LogTracker', 'logtracker')
         }
         
         for role in self.additional_roles:
@@ -698,7 +702,7 @@ CLAUDE_EOF
             console.print(f"[yellow]Multi-agent systems use ~15x more tokens than standard usage[/yellow]\n")
             
             # Prioritize roles based on importance
-            priority_order = ['orchestrator', 'developer', 'researcher', 'project_manager', 'tester', 'testrunner', 'devops', 'code_reviewer', 'documentation_writer']
+            priority_order = ['orchestrator', 'developer', 'researcher', 'project_manager', 'tester', 'testrunner', 'logtracker', 'devops', 'code_reviewer', 'documentation_writer']
             
             # Sort roles by priority
             core_roles.sort(key=lambda x: priority_order.index(x[1]) if x[1] in priority_order else 999)
@@ -1555,6 +1559,78 @@ Start by:
 2. Configuring parallel test runners
 3. Creating test execution pipelines
 4. Establishing baseline metrics"""
+
+        elif role == 'logtracker':
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Log Tracker for {spec.project.name}.
+
+Your responsibilities:
+{chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+**CRITICAL FIRST TASK**: Read the project's CLAUDE.md for logging/monitoring instructions
+```bash
+# Check for project-specific monitoring guidance
+cat {self.project_path}/CLAUDE.md | grep -i -E "(log|monitor|error|track|alert)"
+cat {self.project_path}/.claude/CLAUDE.md | grep -i -E "(log|monitor|error|track|alert)"
+```
+
+**Log Monitoring Focus**:
+- Real-time log tracking and analysis
+- Error pattern detection and classification
+- Critical issue alerting
+- Performance anomaly detection
+- Security event monitoring
+- Log aggregation and filtering
+- Historical error trending
+
+**Project-Specific Tools**:
+1. First check CLAUDE.md for recommended tools/scripts
+2. Look for monitoring scripts in project:
+   ```bash
+   find {self.project_path} -name "*.sh" -o -name "*.py" | grep -E "(log|monitor|check)"
+   ls -la {self.project_path}/scripts/ | grep -E "(log|monitor|check)"
+   ```
+
+**Your Workflow**:
+```bash
+# 1. Set up monitoring workspace
+cd {worktree_paths.get(role, 'your-worktree')}
+mkdir -p monitoring/logs monitoring/reports
+
+# 2. Identify all log sources
+# Application logs, server logs, build logs, test logs
+
+# 3. Set up log tailing
+# Use project-recommended tools or standard tools like:
+# tail -f, journalctl, docker logs, kubectl logs
+
+# 4. Create error tracking dashboard
+```
+
+**Error Reporting Protocol**:
+- **CRITICAL**: Immediate alert to Orchestrator and PM
+- **HIGH**: Report within 5 minutes to Developer and DevOps
+- **MEDIUM**: Include in hourly summary
+- **LOW**: Track for daily report
+
+**Integration Points**:
+- DevOps: Access log infrastructure (`{worktree_paths.get('devops', 'devops-worktree')}`)
+- Developer: Provide error context for debugging
+- Tester: Share error patterns for test creation
+- PM: Regular error summaries and trends
+
+**Key Deliverables**:
+1. Real-time error alerts
+2. Hourly error summaries
+3. Daily trend reports
+4. Performance anomaly detection
+5. Security event notifications
+
+Start by:
+1. Reading project CLAUDE.md for monitoring instructions
+2. Identifying all log sources in the project
+3. Setting up log aggregation infrastructure
+4. Creating initial error tracking dashboard
+5. Establishing baseline error rates"""
 
         elif role == 'devops':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the DevOps Engineer for {spec.project.name}.
