@@ -1167,10 +1167,33 @@ This file is automatically read by Claude Code when working in this directory.
                     f"{session_name}:{window_idx}"
                 ])
     
+    def get_available_mcp_tools(self, worktree_path: Path) -> str:
+        """Parse .mcp.json in worktree and return list of available MCP tools"""
+        mcp_json_path = worktree_path / '.mcp.json'
+        if not mcp_json_path.exists():
+            return ""
+        
+        try:
+            with open(mcp_json_path, 'r') as f:
+                mcp_config = json.load(f)
+                if 'mcpServers' in mcp_config and mcp_config['mcpServers']:
+                    tools = list(mcp_config['mcpServers'].keys())
+                    tool_list = '\n'.join(f'  - {tool}' for tool in tools)
+                    return f"\n🔧 **MCP Tools Available** (from your local .mcp.json):\n{tool_list}\n"
+                else:
+                    return ""
+        except Exception as e:
+            return f"\n⚠️ Error reading .mcp.json: {str(e)}\n"
+    
     def create_role_briefing(self, role: str, spec: ImplementationSpec, role_config: RoleConfig, 
                            context_primed: bool = True, roles_deployed: List[Tuple[str, str]] = None,
                            worktree_paths: Dict[str, Path] = None, mcp_categories: Dict[str, List[str]] = None) -> str:
         """Create a role-specific briefing message"""
+        
+        # Get available MCP tools for this agent's worktree
+        mcp_tools_info = ""
+        if worktree_paths and role in worktree_paths:
+            mcp_tools_info = self.get_available_mcp_tools(worktree_paths[role])
         
         # MANDATORY reading instruction for all non-orchestrator roles
         mandatory_reading = ""
@@ -1328,6 +1351,7 @@ Schedule your first check-in for {role_config.check_in_interval} minutes from th
             test_path = worktree_paths.get('tester', '/path/to/tester')
             
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Project Manager for {spec.project.name}.
+{mcp_tools_info}
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1401,6 +1425,7 @@ Maintain EXCEPTIONAL quality standards. No compromises."""
 
         elif role == 'developer':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Developer for {spec.project.name}.
+{mcp_tools_info}
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1471,6 +1496,7 @@ Collaborate with:
 
         elif role == 'tester':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Tester for {spec.project.name}.
+{mcp_tools_info}
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1524,6 +1550,7 @@ Collaborate with:
 
         elif role == 'testrunner':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Test Runner for {spec.project.name}.
+{mcp_tools_info}
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1572,6 +1599,7 @@ Start by:
 
         elif role == 'logtracker':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Log Tracker for {spec.project.name}.
+{mcp_tools_info}
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1644,6 +1672,7 @@ Start by:
 
         elif role == 'devops':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the DevOps Engineer for {spec.project.name}.
+{mcp_tools_info}
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1674,6 +1703,7 @@ Coordinate with:
 
         elif role == 'code_reviewer':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Code Reviewer for {spec.project.name}.
+{mcp_tools_info}
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1710,7 +1740,7 @@ Work with Developer to maintain code excellence."""
 
         elif role == 'researcher':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Technical Researcher for {spec.project.name}.
-
+{mcp_tools_info}
 📋 **Pre-Session Note**: 
 - **IMPORTANT**: Check `{self.project_path}/mcp-inventory.md` (in MAIN project, not your worktree!)
 - This file is created by the Orchestrator and lists all available MCP tools
@@ -1730,20 +1760,18 @@ echo "# Available Tools" > research/available-tools.md
 
 🔍 **CRITICAL MCP TOOL DISCOVERY WORKFLOW**:
 
-1. **Discover Available MCP Tools in Claude Code**:
-   - Type `@` to see available resources from all connected MCP servers
-   - Type `/` to see all available commands including MCP tools
-   - MCP commands appear as: `/mcp__servername__promptname`
-   - Example commands you might find:
-     - `/mcp__websearch__search` - For web searches
-     - `/mcp__firecrawl__scrape` - For web scraping  
-     - `/mcp__puppeteer__screenshot` - For browser automation
-     - `/mcp__context7__query` - For knowledge queries
+1. **Your Available MCP Tools**:
+   - Check the MCP tools list above (parsed from your local .mcp.json)
+   - These tools are automatically available in Claude Code
+   - Common tool names indicate their purpose:
+     - `websearch` - For web searches
+     - `firecrawl` - For web scraping  
+     - `puppeteer` - For browser automation
+     - `context7` - For knowledge queries
    
 2. **Document Available Tools**:
-   After discovering tools via `@` and `/`, create `research/available-tools.md` listing:
-   - Which MCP resources are available via `@`
-   - Which MCP slash commands are available via `/`
+   Create `research/available-tools.md` listing:
+   - Which MCP tools you have available (from the list above)
    - What capabilities each provides
    - Your research strategy based on available tools
 
@@ -1813,6 +1841,7 @@ Report findings to:
 
         elif role == 'documentation_writer':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Documentation Writer for {spec.project.name}.
+{mcp_tools_info}
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
