@@ -384,42 +384,42 @@ Generate a JSON implementation plan with this EXACT structure:
   "roles": {{
     "orchestrator": {{
       "responsibilities": ["Monitor progress", "Coordinate roles", "Handle blockers"],
-      "check_in_interval": 45,  # Increased from 30 to conserve tokens
+      "check_in_interval": 20,  # Reduced for better progression
       "initial_commands": ["cd {self.tmux_orchestrator_path}", "python3 claude_control.py status detailed"]
     }},
     "project_manager": {{
       "responsibilities": ["Ensure quality", "Track completion", "Review coverage"],
-      "check_in_interval": 60,  # Increased from 30 to conserve tokens
+      "check_in_interval": 25,  # Reduced for better coordination
       "initial_commands": ["cd {self.project_path}", "cat {self.spec_path.relative_to(self.project_path) if self.spec_path.is_relative_to(self.project_path) else self.spec_path}"]
     }},
     "developer": {{
       "responsibilities": ["Implement features", "Write tests", "Fix bugs"],
-      "check_in_interval": 90,  # Increased from 60 to conserve tokens
+      "check_in_interval": 30,  # Reduced for faster development cycles
       "initial_commands": ["cd {self.project_path}", "git status"]
     }},
     "tester": {{
       "responsibilities": ["Run tests", "Report failures", "Verify coverage"],
-      "check_in_interval": 60,  # Increased from 45 to conserve tokens
+      "check_in_interval": 30,  # Reduced to match developer pace
       "initial_commands": ["cd {self.project_path}", "echo 'Ready to test'"]
     }},
     "devops": {{
       "responsibilities": ["Infrastructure setup", "Deployment pipelines", "Monitor performance"],
-      "check_in_interval": 90,
+      "check_in_interval": 45,  # Reduced but still longer as infra work is less frequent
       "initial_commands": ["cd {self.project_path}", "echo 'Checking deployment configuration'"]
     }},
     "code_reviewer": {{
       "responsibilities": ["Review code quality", "Security audit", "Best practices enforcement"],
-      "check_in_interval": 120,
+      "check_in_interval": 40,  # Reduced to review code more frequently
       "initial_commands": ["cd {self.project_path}", "git log --oneline -10"]
     }},
     "researcher": {{
       "responsibilities": ["MCP tool discovery and utilization", "Research best practices", "Security vulnerability analysis", "Performance optimization research", "Document actionable findings"],
-      "check_in_interval": 60,  # Increased from 45 to conserve tokens
+      "check_in_interval": 25,  # Reduced for timely research support
       "initial_commands": ["cd {self.project_path}", "mkdir -p research", "echo 'Type @ to discover MCP resources, / to discover MCP commands'", "echo 'Look for /mcp__ prefixed commands for MCP tools'"]
     }},
     "documentation_writer": {{
       "responsibilities": ["Write technical docs", "Update README", "Create API documentation"],
-      "check_in_interval": 120,
+      "check_in_interval": 60,  # Still longer as docs are updated less frequently
       "initial_commands": ["cd {self.project_path}", "ls -la *.md"]
     }}
   }},
