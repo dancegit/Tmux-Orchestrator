@@ -807,6 +807,18 @@ CLAUDE_EOF
                     sys.exit(1)
                     
                 worktree_paths[role_key] = worktree_path
+                
+                # Copy .mcp.json file if it exists in the project
+                project_mcp = self.project_path / '.mcp.json'
+                if project_mcp.exists():
+                    worktree_mcp = worktree_path / '.mcp.json'
+                    try:
+                        import shutil
+                        shutil.copy2(project_mcp, worktree_mcp)
+                        console.print(f"[green]✓ Copied .mcp.json to {role_key}'s worktree[/green]")
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: Could not copy .mcp.json to {role_key}: {e}[/yellow]")
+                
                 progress.update(task, advance=1, description=f"Created worktree for {role_key}")
         
         # Display worktree summary
@@ -1023,7 +1035,8 @@ This file is automatically read by Claude Code when working in this directory.
             briefing = self.create_role_briefing(role_key, spec, role_config, 
                                                 context_primed=supports_context_prime,
                                                 roles_deployed=roles_to_deploy,
-                                                worktree_paths=worktree_paths)
+                                                worktree_paths=worktree_paths,
+                                                mcp_categories=getattr(self, 'mcp_categories', {}))
             
             # Send briefing using send-claude-message.sh
             send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
@@ -1054,7 +1067,7 @@ This file is automatically read by Claude Code when working in this directory.
     
     def create_role_briefing(self, role: str, spec: ImplementationSpec, role_config: RoleConfig, 
                            context_primed: bool = True, roles_deployed: List[Tuple[str, str]] = None,
-                           worktree_paths: Dict[str, Path] = None) -> str:
+                           worktree_paths: Dict[str, Path] = None, mcp_categories: Dict[str, List[str]] = None) -> str:
         """Create a role-specific briefing message"""
         
         # MANDATORY reading instruction for all non-orchestrator roles
@@ -1095,6 +1108,11 @@ NOTE: Context priming was not available. Please take a moment to:
 
 """
         
+        # Get MCP guidance for this role
+        mcp_guidance = ""
+        if mcp_categories:
+            mcp_guidance = "\n\n" + self.get_role_mcp_guidance(role, mcp_categories) + "\n"
+        
         if role == 'orchestrator':
             tool_path = self.tmux_orchestrator_path
             return f"""{mandatory_reading}You are the Orchestrator for {spec.project.name}.
@@ -1125,7 +1143,7 @@ Project Overview:
 
 Project size: {spec.project_size.size}
 Estimated complexity: {spec.project_size.complexity}
-
+{mcp_guidance}
 Your team composition:
 {team_description}
 
@@ -1146,7 +1164,9 @@ python3 claude_control.py status detailed
 cd {worktree_paths.get(role, 'N/A')}
 ```
 
-Schedule your first check-in for {role_config.check_in_interval} minutes from the tool directory."""
+Schedule your first check-in for {role_config.check_in_interval} minutes from the tool directory.
+
+**IMMEDIATE TASK**: Create 'mcp-inventory.md' in your project worktree documenting the available MCP tools for the team."""
 
         elif role == 'project_manager':
             return f"""{mandatory_reading}{context_note}You are the Project Manager for {spec.project.name}.
@@ -1159,7 +1179,7 @@ Implementation Phases:
 
 Success Criteria:
 {chr(10).join(f'- {c}' for c in spec.success_criteria)}
-
+{mcp_guidance}
 Git Workflow:
 - CRITICAL: Project started on branch '{spec.git_workflow.parent_branch}'
 - Feature branch: {spec.git_workflow.branch_name} (created from {spec.git_workflow.parent_branch})
@@ -1189,7 +1209,7 @@ Project Details:
 
 Implementation Phases:
 {chr(10).join(f'{i+1}. {p.name}: {", ".join(p.tasks[:2])}...' for i, p in enumerate(spec.implementation_plan.phases))}
-
+{mcp_guidance}
 Git Worktree Information:
 - You are working in an isolated git worktree
 - Your worktree path: {worktree_paths.get(role, 'N/A')}
@@ -1240,7 +1260,7 @@ Testing Focus:
 - Technologies: {', '.join(spec.project.main_tech)}
 - Ensure all success criteria are met:
 {chr(10).join(f'  - {c}' for c in spec.success_criteria)}
-
+{mcp_guidance}
 Your workflow:
 1. Monitor Developer (window 2) progress
 2. Run tests after each commit
@@ -1269,7 +1289,7 @@ Project Infrastructure:
 - Type: {spec.project.type}
 - Technologies: {', '.join(spec.project.main_tech)}
 - Path: {spec.project.path}
-
+{mcp_guidance}
 Key Tasks:
 1. Analyze current deployment configuration
 2. Set up CI/CD pipelines if needed
@@ -1301,7 +1321,7 @@ Review Focus:
 - Performance implications
 - Adherence to project conventions
 - Test coverage
-
+{mcp_guidance}
 Git Workflow:
 - Review feature branch: {spec.git_workflow.branch_name}
 - Ensure commits follow project standards
@@ -1433,7 +1453,7 @@ Documentation Priorities:
 Project Context:
 - Technologies: {', '.join(spec.project.main_tech)}
 - Type: {spec.project.type}
-
+{mcp_guidance}
 Documentation Standards:
 1. Clear and concise writing
 2. Code examples where helpful
@@ -1470,6 +1490,228 @@ Start by:
 3. Coordinating with the Project Manager
 
 Report to PM (window 1) for specific task assignments."""
+
+    def discover_mcp_servers(self) -> Dict[str, Any]:
+        """Discover MCP servers from ~/.claude.json and project .mcp.json
+        
+        Returns a dict with:
+        - servers: Dict of server name -> config
+        - project_has_mcp: bool indicating if project has .mcp.json
+        """
+        mcp_info = {
+            'servers': {},
+            'project_has_mcp': False
+        }
+        
+        # Check global ~/.claude.json
+        global_claude = Path.home() / '.claude.json'
+        if global_claude.exists():
+            try:
+                with open(global_claude, 'r') as f:
+                    claude_config = json.load(f)
+                    
+                # Extract MCP servers
+                if 'mcpServers' in claude_config:
+                    mcp_info['servers'].update(claude_config['mcpServers'])
+                    console.print(f"[green]✓ Found {len(claude_config['mcpServers'])} MCP servers in global config[/green]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not parse ~/.claude.json: {e}[/yellow]")
+        
+        # Check project-local .mcp.json
+        project_mcp = self.project_path / '.mcp.json'
+        if project_mcp.exists():
+            mcp_info['project_has_mcp'] = True
+            try:
+                with open(project_mcp, 'r') as f:
+                    project_config = json.load(f)
+                    
+                # Extract MCP servers (could be in different format)
+                if 'mcpServers' in project_config:
+                    mcp_info['servers'].update(project_config['mcpServers'])
+                elif isinstance(project_config, dict):
+                    # Assume top-level keys are server configs
+                    mcp_info['servers'].update(project_config)
+                    
+                console.print(f"[green]✓ Found project-specific MCP config[/green]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not parse project .mcp.json: {e}[/yellow]")
+        
+        return mcp_info
+    
+    def categorize_mcp_tools(self, servers: Dict[str, Any]) -> Dict[str, List[str]]:
+        """Categorize MCP servers by their likely purpose based on name and config
+        
+        Returns dict with categories like:
+        - filesystem: Local file operations
+        - web_search: Web search capabilities  
+        - web_scraping: Content extraction
+        - database: Database operations
+        - knowledge: Knowledge bases
+        - automation: Browser/task automation
+        """
+        categories = {
+            'filesystem': [],
+            'web_search': [],
+            'web_scraping': [],
+            'database': [],
+            'knowledge': [],
+            'automation': [],
+            'other': []
+        }
+        
+        # Categorize based on server names and commands
+        for server_name, config in servers.items():
+            lower_name = server_name.lower()
+            
+            # Check command if available
+            command = ''
+            if isinstance(config, dict) and 'command' in config:
+                command = config['command'].lower()
+            
+            # Categorize based on name patterns
+            if any(term in lower_name for term in ['filesystem', 'file', 'fs']):
+                categories['filesystem'].append(server_name)
+            elif any(term in lower_name for term in ['search', 'tavily', 'perplexity', 'google']):
+                categories['web_search'].append(server_name)
+            elif any(term in lower_name for term in ['firecrawl', 'scrape', 'crawl', 'fetch']):
+                categories['web_scraping'].append(server_name)
+            elif any(term in lower_name for term in ['sqlite', 'postgres', 'mysql', 'mongodb', 'database', 'db']):
+                categories['database'].append(server_name)
+            elif any(term in lower_name for term in ['context', 'knowledge', 'kb', 'rag']):
+                categories['knowledge'].append(server_name)
+            elif any(term in lower_name for term in ['puppeteer', 'playwright', 'selenium', 'browser']):
+                categories['automation'].append(server_name)
+            elif 'mcp-server-' in command:
+                # Try to categorize by the mcp-server-X pattern in command
+                if 'fetch' in command or 'http' in command:
+                    categories['web_scraping'].append(server_name)
+                elif 'sqlite' in command:
+                    categories['database'].append(server_name)
+                else:
+                    categories['other'].append(server_name)
+            else:
+                categories['other'].append(server_name)
+        
+        # Remove empty categories
+        return {k: v for k, v in categories.items() if v}
+    
+    def get_role_mcp_guidance(self, role: str, mcp_categories: Dict[str, List[str]]) -> str:
+        """Get role-specific MCP tool recommendations
+        
+        Returns formatted guidance string for the role's briefing
+        """
+        if not mcp_categories:
+            return "No MCP tools detected. Proceed with standard development practices."
+        
+        # Format available tools
+        tools_summary = []
+        for category, servers in mcp_categories.items():
+            tools_summary.append(f"**{category.replace('_', ' ').title()}**: {', '.join(servers)}")
+        
+        tools_list = '\n   - '.join([''] + tools_summary)
+        
+        # Role-specific guidance
+        if role == 'researcher':
+            return f"""🔧 **Available MCP Tools Detected**:{tools_list}
+
+**Research Strategy Based on Available Tools**:
+{self._get_researcher_strategy(mcp_categories)}
+
+Remember: Use `@` to see resources and `/` to see commands in Claude Code."""
+        
+        elif role == 'developer':
+            guidance = f"""🔧 **Available MCP Tools**:{tools_list}
+
+**Development Recommendations**:"""
+            if 'filesystem' in mcp_categories:
+                guidance += "\n- Use filesystem MCP for advanced file operations"
+            if 'database' in mcp_categories:
+                guidance += "\n- Leverage database MCP for schema exploration and testing"
+            if 'knowledge' in mcp_categories:
+                guidance += "\n- Query knowledge base for implementation patterns"
+            return guidance
+        
+        elif role == 'tester':
+            guidance = f"""🔧 **Available MCP Tools**:{tools_list}
+
+**Testing Recommendations**:"""
+            if 'web_scraping' in mcp_categories:
+                guidance += "\n- Use web scraping tools to verify external integrations"
+            if 'automation' in mcp_categories:
+                guidance += "\n- Leverage browser automation for E2E testing"
+            if 'database' in mcp_categories:
+                guidance += "\n- Use database tools for test data management"
+            return guidance
+        
+        elif role == 'orchestrator':
+            return f"""🔧 **MCP Tools Inventory** (share with team):{tools_list}
+
+**IMMEDIATE ACTION**: Create `mcp-inventory.md` in your project worktree with:
+```markdown
+# MCP Tools Inventory
+
+## Available Tools
+{chr(10).join(f'### {cat.replace("_", " ").title()}{chr(10)}- ' + chr(10).join(f'- {s}' for s in servers) for cat, servers in mcp_categories.items())}
+
+## Role Recommendations
+- **Developer**: {', '.join(mcp_categories.get('filesystem', []) + mcp_categories.get('database', [])[:1])}
+- **Researcher**: {', '.join(mcp_categories.get('web_search', []) + mcp_categories.get('web_scraping', [])[:2])}
+- **Tester**: {', '.join(mcp_categories.get('automation', []) + mcp_categories.get('database', [])[:1])}
+
+## Usage Notes
+- Type `@` in Claude Code to see available resources
+- Type `/` to see available commands (look for /mcp__ prefixed commands)
+```
+
+Share this inventory with all team members."""
+        
+        else:
+            return f"""🔧 **Available MCP Tools**:{tools_list}
+
+Leverage these tools as appropriate for your role."""
+    
+    def _get_researcher_strategy(self, categories: Dict[str, List[str]]) -> str:
+        """Get specific research strategy based on available MCP tools"""
+        strategies = []
+        
+        if 'web_search' in categories:
+            strategies.append("""
+**Web Search Strategy** (using {0}):
+- Search for "[technology] best practices 2024"
+- Look for "[technology] security vulnerabilities CVE"
+- Find "[technology] performance optimization"
+- Research "[technology] vs alternatives comparison"
+- Query latest framework updates and breaking changes
+""".format(', '.join(categories['web_search'])))
+        
+        if 'web_scraping' in categories:
+            strategies.append("""
+**Documentation Extraction** (using {0}):
+- Scrape official documentation for latest API changes
+- Extract code examples from tutorials
+- Gather benchmarks and case studies
+- Compile migration guides
+""".format(', '.join(categories['web_scraping'])))
+        
+        if 'knowledge' in categories:
+            strategies.append("""
+**Knowledge Base Queries** (using {0}):
+- Query architectural patterns
+- Research edge cases and gotchas
+- Find historical context
+- Discover advanced techniques
+""".format(', '.join(categories['knowledge'])))
+        
+        if 'database' in categories:
+            strategies.append("""
+**Database Analysis** (using {0}):
+- Analyze schema best practices
+- Research indexing strategies
+- Find optimization patterns
+- Query performance tips
+""".format(', '.join(categories['database'])))
+        
+        return '\n'.join(strategies) if strategies else "Focus on code analysis and standard research methods."
 
     def run(self):
         """Main execution flow"""
@@ -1517,8 +1759,21 @@ Report to PM (window 1) for specific task assignments."""
             console.print("[yellow]Setup cancelled by user.[/yellow]")
             sys.exit(0)
         
+        # Discover MCP servers
+        console.print("\n[cyan]Step 3:[/cyan] Discovering MCP servers...")
+        mcp_info = self.discover_mcp_servers()
+        mcp_categories = self.categorize_mcp_tools(mcp_info['servers']) if mcp_info['servers'] else {}
+        
+        if mcp_categories:
+            console.print("[green]✓ MCP tools available for enhanced capabilities[/green]")
+        else:
+            console.print("[yellow]No MCP servers configured - agents will use standard tools[/yellow]")
+        
+        # Store for later use
+        self.mcp_categories = mcp_categories
+        
         # Set up tmux session
-        console.print("\n[cyan]Step 3:[/cyan] Setting up tmux orchestration...")
+        console.print("\n[cyan]Step 4:[/cyan] Setting up tmux orchestration...")
         
         # Check for existing session and worktrees
         session_name = self.implementation_spec.project.name.lower().replace(' ', '-')[:20] + "-impl"
