@@ -87,7 +87,7 @@ class AutoOrchestrator:
         self.manual_size: Optional[str] = None
         self.additional_roles: List[str] = []
         self.force: bool = False
-        self.plan_type: str = 'max5'  # Default to Max 5x plan
+        self.plan_type: str = 'max20'  # Default to Max 20x plan
         
     def ensure_setup(self):
         """Ensure Tmux Orchestrator is properly set up"""
@@ -2314,7 +2314,7 @@ def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: st
     orchestrator.manual_size = size if size != 'auto' else None
     orchestrator.additional_roles = list(roles) if roles else []
     orchestrator.force = force
-    orchestrator.plan_type = plan if plan != 'auto' else 'max5'  # Default to max5
+    orchestrator.plan_type = plan if plan != 'auto' else 'max20'  # Default to max20
     orchestrator.run()
 
 
