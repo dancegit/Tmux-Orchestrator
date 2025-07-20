@@ -1034,6 +1034,23 @@ When agents run low on context (confusion, repeated work, 2+ hours of work):
 - Monitor for confusion signs
 - Better to compact early than hit exhaustion
 
+### For Orchestrators: Don't Worry About Low Context Agents
+
+**IMPORTANT**: You can continue sending commands to agents even when they report low context (3%, 6%, etc). Here's why:
+
+- **Agents will auto-compact**: They know to create checkpoints and run /compact when needed
+- **Work continues seamlessly**: After compacting, they reload context and continue
+- **No manual intervention needed**: Agents self-manage their context
+- **Keep delegating tasks**: Don't avoid low-context agents - they'll handle it
+
+**Best Practice**: When an agent mentions low context:
+1. Acknowledge it: "Thanks for the heads up about context"
+2. Continue normally: Send tasks as usual
+3. They'll compact when needed and continue working
+4. If they seem confused after compacting, remind them to read their checkpoint
+
+This self-recovery system means context exhaustion is no longer a blocking issue!
+
 ## Anti-Patterns to Avoid
 
 - ❌ **Meeting Hell**: Use async updates only

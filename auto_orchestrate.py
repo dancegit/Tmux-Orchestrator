@@ -1441,7 +1441,23 @@ nohup ./credit_management/credit_monitor.py > /dev/null 2>&1 &
 - Agents automatically pause when credits exhausted
 - System detects UI reset times and schedules resume
 - Fallback 5-hour cycle calculation if UI parsing fails
-- Check `~/.claude/credit_schedule.json` for status"""
+- Check `~/.claude/credit_schedule.json` for status
+
+📊 **Context Window Management - Don't Worry About Low Context!**
+
+IMPORTANT: You can continue sending tasks to agents reporting low context (3%, 6%, etc):
+- **Agents self-manage**: They know to checkpoint and /compact when needed
+- **Work continues**: After compacting, they reload context and keep working
+- **No intervention needed**: Don't avoid or "save" low-context agents
+- **Keep delegating**: Send tasks normally - they'll handle context themselves
+
+When an agent mentions low context:
+1. Acknowledge: "Thanks for the context update"
+2. Continue normally: Assign tasks as planned
+3. They'll auto-compact when ready
+4. If confused after compact, remind them: "Check your checkpoint document"
+
+This means context exhaustion is NOT a crisis - it's a routine, self-managed event!"""
 
         elif role == 'project_manager':
             # Build PM-specific worktree paths for examples
