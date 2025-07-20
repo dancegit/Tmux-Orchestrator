@@ -601,12 +601,176 @@ CLAUDE_EOF
         
         return core_roles
     
+    def setup_worktrees(self, spec: ImplementationSpec, roles_to_deploy: List[Tuple[str, str]]) -> Dict[str, Path]:
+        """Create git worktrees for each agent"""
+        # Verify project is a git repo
+        if not (self.project_path / '.git').exists():
+            console.print("[red]Error: Project must be a git repository to use orchestration[/red]")
+            console.print("[yellow]Please initialize git in your project: cd {self.project_path} && git init[/yellow]")
+            sys.exit(1)
+        
+        # Create worktrees directory
+        project_name = spec.project.name.lower().replace(' ', '-')
+        worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
+        worktrees_base.mkdir(parents=True, exist_ok=True)
+        
+        # Get current branch from project
+        current_branch = self.get_current_git_branch()
+        if not current_branch:
+            console.print("[red]Error: Could not determine current git branch[/red]")
+            sys.exit(1)
+        
+        worktree_paths = {}
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Setting up git worktrees...", total=len(roles_to_deploy))
+            
+            for window_name, role_key in roles_to_deploy:
+                if role_key == 'orchestrator':
+                    # Orchestrator stays in Tmux-Orchestrator directory
+                    worktree_paths[role_key] = self.tmux_orchestrator_path
+                    progress.update(task, advance=1)
+                    continue
+                    
+                # Create worktree for this role
+                worktree_path = worktrees_base / role_key
+                
+                # Remove existing worktree if it exists
+                if worktree_path.exists():
+                    subprocess.run(['rm', '-rf', str(worktree_path)], capture_output=True)
+                    # Also remove from git worktree list
+                    subprocess.run(['git', 'worktree', 'prune'], 
+                                 cwd=str(self.project_path), capture_output=True)
+                
+                # Create new worktree on current branch
+                result = subprocess.run([
+                    'git', 'worktree', 'add', 
+                    str(worktree_path), 
+                    current_branch
+                ], cwd=str(self.project_path), capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    console.print(f"[red]Failed to create worktree for {role_key}: {result.stderr}[/red]")
+                    # Try to provide helpful error message
+                    if "already checked out" in result.stderr:
+                        console.print(f"[yellow]Branch '{current_branch}' is already checked out in another worktree[/yellow]")
+                        console.print("[yellow]Creating worktree with detached HEAD instead[/yellow]")
+                        # Try with detached HEAD
+                        result = subprocess.run([
+                            'git', 'worktree', 'add', 
+                            '--detach',
+                            str(worktree_path)
+                        ], cwd=str(self.project_path), capture_output=True, text=True)
+                        if result.returncode == 0:
+                            # Checkout the branch in detached state
+                            subprocess.run(['git', 'checkout', current_branch], 
+                                         cwd=str(worktree_path), capture_output=True)
+                        else:
+                            console.print(f"[red]Still failed: {result.stderr}[/red]")
+                            sys.exit(1)
+                    else:
+                        sys.exit(1)
+                    
+                worktree_paths[role_key] = worktree_path
+                progress.update(task, advance=1, description=f"Created worktree for {role_key}")
+        
+        # Display worktree summary
+        console.print("\n[green]✓ Git worktrees created:[/green]")
+        for role, path in worktree_paths.items():
+            if role != 'orchestrator':
+                console.print(f"  {role}: {path.relative_to(self.tmux_orchestrator_path)}")
+        
+        return worktree_paths
+    
+    def cleanup_worktrees(self, project_name: str):
+        """Clean up worktrees when done"""
+        worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
+        if worktrees_base.exists():
+            console.print("\n[yellow]Cleaning up worktrees...[/yellow]")
+            # Remove all worktrees
+            for worktree in worktrees_base.iterdir():
+                if worktree.is_dir():
+                    subprocess.run(['rm', '-rf', str(worktree)], capture_output=True)
+            # Prune git worktree list
+            subprocess.run(['git', 'worktree', 'prune'], 
+                         cwd=str(self.project_path), capture_output=True)
+            console.print("[green]✓ Worktrees cleaned up[/green]")
+    
+    def ensure_orchestrator_reference(self, worktree_paths: Dict[str, Path]):
+        """Ensure each worktree's CLAUDE.md references the Tmux-Orchestrator rules"""
+        orchestrator_claude_path = self.tmux_orchestrator_path / "CLAUDE.md"
+        
+        if not orchestrator_claude_path.exists():
+            console.print("[red]Warning: Tmux-Orchestrator/CLAUDE.md not found![/red]")
+            return
+        
+        for role_key, worktree_path in worktree_paths.items():
+            if role_key == 'orchestrator':
+                continue
+                
+            project_claude_md = worktree_path / "CLAUDE.md"
+            
+            orchestrator_section = f"""
+
+# MANDATORY: Tmux Orchestrator Rules
+
+**CRITICAL**: You MUST read and follow ALL instructions in:
+`{orchestrator_claude_path}`
+
+**Your worktree location**: `{worktree_path}`
+**Original project location**: `{self.project_path}`
+
+The orchestrator rules file contains MANDATORY instructions for:
+- 🚨 Git discipline and branch protection (NEVER merge to main unless you started on main)
+- 💬 Communication protocols between agents
+- ✅ Quality standards and verification procedures  
+- 🔄 Self-scheduling requirements
+- 🌳 Git worktree collaboration guidelines
+
+**IMMEDIATE ACTION REQUIRED**: Use the Read tool to read {orchestrator_claude_path} before doing ANY work.
+
+Failure to follow these rules will result in:
+- Lost work due to improper git usage
+- Conflicts between agents
+- Failed project delivery
+"""
+            
+            try:
+                if project_claude_md.exists():
+                    content = project_claude_md.read_text()
+                    # Check if reference already exists
+                    if str(orchestrator_claude_path) not in content:
+                        # Append the reference
+                        with open(project_claude_md, 'a') as f:
+                            f.write(orchestrator_section)
+                        console.print(f"[green]✓ Added orchestrator rules to {role_key}'s CLAUDE.md[/green]")
+                else:
+                    # Create new CLAUDE.md with the reference
+                    project_claude_md.write_text(f"""# Project Instructions
+
+This file is automatically read by Claude Code when working in this directory.
+{orchestrator_section}
+""")
+                    console.print(f"[green]✓ Created CLAUDE.md for {role_key} with orchestrator rules[/green]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not update CLAUDE.md for {role_key}: {e}[/yellow]")
+    
     def setup_tmux_session(self, spec: ImplementationSpec):
-        """Set up the tmux session with roles based on project size"""
+        """Set up the tmux session with roles based on project size using git worktrees"""
         session_name = spec.project.name.lower().replace(' ', '-')[:20] + "-impl"
         
         # Determine which roles to deploy
         roles_to_deploy = self.get_roles_for_project_size(spec)
+        
+        # Set up git worktrees for isolation
+        worktree_paths = self.setup_worktrees(spec, roles_to_deploy)
+        
+        # Store worktree paths for later use
+        self.worktree_paths = worktree_paths
         
         with Progress(
             SpinnerColumn(),
@@ -621,9 +785,9 @@ CLAUDE_EOF
             subprocess.run(['tmux', 'kill-session', '-t', session_name], 
                          capture_output=True)
             
-            # Create new session with first role (orchestrator)
+            # Create new session with first role
             first_window, first_role = roles_to_deploy[0]
-            working_dir = str(self.tmux_orchestrator_path) if first_role == 'orchestrator' else str(self.project_path)
+            working_dir = str(worktree_paths[first_role])
             
             subprocess.run([
                 'tmux', 'new-session', '-d', '-s', session_name,
@@ -632,24 +796,28 @@ CLAUDE_EOF
             
             progress.update(task, advance=1, description=f"Created {first_window} window...")
             
-            # Create other role windows
+            # Create other role windows with their worktree paths
             for window_name, role_key in roles_to_deploy[1:]:
-                working_dir = str(self.tmux_orchestrator_path) if role_key == 'orchestrator' else str(self.project_path)
+                working_dir = str(worktree_paths[role_key])
                 subprocess.run([
                     'tmux', 'new-window', '-t', session_name,
                     '-n', window_name, '-c', working_dir
                 ], check=True)
                 progress.update(task, advance=1, description=f"Created {window_name} window...")
             
+            # Ensure each worktree has orchestrator reference in CLAUDE.md
+            self.ensure_orchestrator_reference(worktree_paths)
+            
             # Start Claude in each window and send initial briefings
-            self.brief_all_roles(session_name, spec, roles_to_deploy)
+            self.brief_all_roles(session_name, spec, roles_to_deploy, worktree_paths)
             
             console.print(f"\n[green]✓ Tmux session '{session_name}' created with {len(roles_to_deploy)} roles![/green]")
             console.print(f"\nProject size: [yellow]{spec.project_size.size}[/yellow]")
             console.print(f"Deployed roles: {', '.join([r[0] for r in roles_to_deploy])}")
             console.print(f"\nTo attach: [cyan]tmux attach -t {session_name}[/cyan]")
+            console.print(f"\n[yellow]Note: Each agent works in their own git worktree to prevent conflicts[/yellow]")
     
-    def brief_all_roles(self, session_name: str, spec: ImplementationSpec, roles_to_deploy: List[Tuple[str, str]]):
+    def brief_all_roles(self, session_name: str, spec: ImplementationSpec, roles_to_deploy: List[Tuple[str, str]], worktree_paths: Dict[str, Path]):
         """Start Claude in each window and provide role-specific briefings"""
         
         # Check if Claude version supports context priming
@@ -692,7 +860,8 @@ CLAUDE_EOF
             # Create briefing
             briefing = self.create_role_briefing(role_key, spec, role_config, 
                                                 context_primed=supports_context_prime,
-                                                roles_deployed=roles_to_deploy)
+                                                roles_deployed=roles_to_deploy,
+                                                worktree_paths=worktree_paths)
             
             # Send briefing using send-claude-message.sh
             send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
@@ -722,8 +891,28 @@ CLAUDE_EOF
                 ])
     
     def create_role_briefing(self, role: str, spec: ImplementationSpec, role_config: RoleConfig, 
-                           context_primed: bool = True, roles_deployed: List[Tuple[str, str]] = None) -> str:
+                           context_primed: bool = True, roles_deployed: List[Tuple[str, str]] = None,
+                           worktree_paths: Dict[str, Path] = None) -> str:
         """Create a role-specific briefing message"""
+        
+        # MANDATORY reading instruction for all non-orchestrator roles
+        mandatory_reading = ""
+        if role != 'orchestrator' and worktree_paths:
+            orchestrator_claude_path = self.tmux_orchestrator_path / "CLAUDE.md"
+            mandatory_reading = f"""🚨 **MANDATORY FIRST STEP** 🚨
+
+Before doing ANYTHING else, you MUST read the orchestrator rules:
+`{orchestrator_claude_path}`
+
+Use the Read tool NOW to read this file. It contains CRITICAL instructions for:
+- Git discipline (NEVER merge to main unless you started there)
+- Communication protocols
+- Quality standards
+- Self-scheduling requirements
+
+Your worktree location: `{worktree_paths.get(role, 'N/A')}`
+
+---\n\n"""
         
         # Get the actual team composition
         if roles_deployed:
@@ -745,7 +934,7 @@ NOTE: Context priming was not available. Please take a moment to:
 """
         
         if role == 'orchestrator':
-            return f"""You are the Orchestrator for {spec.project.name}.
+            return f"""{mandatory_reading}You are the Orchestrator for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -773,7 +962,7 @@ Use these commands:
 Schedule your first check-in for {role_config.check_in_interval} minutes."""
 
         elif role == 'project_manager':
-            return f"""{context_note}You are the Project Manager for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}You are the Project Manager for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -799,7 +988,7 @@ Always report to Orchestrator (window 0)
 Maintain EXCEPTIONAL quality standards. No compromises."""
 
         elif role == 'developer':
-            return f"""{context_note}You are the Developer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}You are the Developer for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -812,6 +1001,12 @@ Project Details:
 Implementation Phases:
 {chr(10).join(f'{i+1}. {p.name}: {", ".join(p.tasks[:2])}...' for i, p in enumerate(spec.implementation_plan.phases))}
 
+Git Worktree Information:
+- You are working in an isolated git worktree
+- Your worktree path: {worktree_paths.get(role, 'N/A')}
+- This prevents conflicts with other agents
+- You can create branches without affecting others
+
 Git Requirements:
 - CRITICAL: Current branch is '{spec.git_workflow.parent_branch}' - ALL work must merge back here!
 - Create feature branch: {spec.git_workflow.branch_name} FROM {spec.git_workflow.parent_branch}
@@ -819,15 +1014,18 @@ Git Requirements:
 - Commit every {spec.git_workflow.commit_interval} minutes with clear messages
 - Follow existing code patterns and conventions
 
-Git Commands:
+Git Commands for Worktrees:
 ```bash
+# You're already in your worktree at {worktree_paths.get(role, 'N/A')}
 # Record starting branch
 echo "{spec.git_workflow.parent_branch}" > .git/STARTING_BRANCH
 # Create feature branch FROM current branch
 git checkout -b {spec.git_workflow.branch_name}
-# When merging back, use:
-git checkout {spec.git_workflow.parent_branch}
-git merge {spec.git_workflow.branch_name}
+# When ready to share with other agents:
+git push -u origin {spec.git_workflow.branch_name}
+# To get updates from another agent's worktree:
+git fetch origin
+git merge origin/their-branch-name
 ```
 
 Start by:
@@ -839,7 +1037,7 @@ Start by:
 Report progress to PM (window 1) regularly."""
 
         elif role == 'tester':
-            return f"""{context_note}You are the Tester for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}You are the Tester for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -864,7 +1062,7 @@ Start by:
 Work closely with Developer to ensure quality."""
 
         elif role == 'devops':
-            return f"""{context_note}You are the DevOps Engineer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}You are the DevOps Engineer for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -893,7 +1091,7 @@ Coordinate with:
 - Tester on staging environments"""
 
         elif role == 'code_reviewer':
-            return f"""{context_note}You are the Code Reviewer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}You are the Code Reviewer for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -929,7 +1127,7 @@ Start by:
 Work with Developer to maintain code excellence."""
 
         elif role == 'researcher':
-            return f"""{context_note}You are the Technical Researcher for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}You are the Technical Researcher for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -959,7 +1157,7 @@ Share findings with:
 - DevOps for infrastructure choices"""
 
         elif role == 'documentation_writer':
-            return f"""{context_note}You are the Documentation Writer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}You are the Documentation Writer for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -995,7 +1193,7 @@ Coordinate with:
 
         else:
             # Fallback for any undefined roles
-            return f"""{context_note}You are a team member for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}You are a team member for {spec.project.name}.
 
 Your role: {role}
 
