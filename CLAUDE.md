@@ -59,12 +59,49 @@ Tmux-Orchestrator/
     └── projects/
         └── {project-name}/
             └── worktrees/
+                ├── orchestrator/        # Orchestrator's project workspace
                 ├── project-manager/     # PM's isolated workspace
                 ├── developer/           # Developer's workspace
                 ├── developer-2/         # Second developer (if needed)
                 ├── tester/             # Tester's workspace
                 ├── devops/             # DevOps workspace
                 └── code_reviewer/       # Code reviewer workspace
+```
+
+### 🎯 Orchestrator's Dual Directory Structure
+
+The Orchestrator is unique - it works from TWO locations:
+
+1. **Project Worktree** (`registry/projects/{name}/worktrees/orchestrator/`)
+   - Primary working directory
+   - Create ALL project files here:
+     - Status reports
+     - Project documentation
+     - Team coordination notes
+     - Architecture decisions
+   - Starts here by default
+
+2. **Tool Directory** (Tmux-Orchestrator root)
+   - Run orchestrator tools:
+     - `./send-claude-message.sh` - communicate with agents
+     - `./schedule_with_note.sh` - schedule check-ins
+     - `python3 claude_control.py` - monitor status
+   - Must `cd` here to run tools
+
+**Example Orchestrator Workflow**:
+```bash
+# Start in project worktree - create project docs
+pwd  # Shows: .../registry/projects/myproject/worktrees/orchestrator
+mkdir -p project_management/architecture
+echo "# Architecture Decisions" > project_management/architecture/decisions.md
+
+# Switch to tool directory to run commands
+cd ~/gitrepos/Tmux-Orchestrator  # Or wherever your Tmux-Orchestrator is
+./send-claude-message.sh myproject-impl:1 "Status update please"
+./schedule_with_note.sh 30 "Review team progress" "myproject-impl:0"
+
+# Back to project worktree for more work
+cd -  # Returns to previous directory
 ```
 
 ### Benefits of Worktrees
