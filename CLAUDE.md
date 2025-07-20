@@ -805,7 +805,7 @@ When agents run low on context (confusion, repeated work, 2+ hours of work):
    EOF
    ```
 
-2. **Run /compact** to clear conversation history
+2. **Type /compact and press Enter** to clear conversation history
 
 3. **Reload Context**:
    - `/context-prime` (if available) OR

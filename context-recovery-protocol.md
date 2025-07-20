@@ -40,7 +40,8 @@ git log --oneline -3  # [recent commits]
 - [file2] - [what was changed]
 ```
 
-### 2. **Run /compact Command**
+### 2. **Type /compact Command**
+Type the following command and press Enter:
 ```
 /compact
 ```

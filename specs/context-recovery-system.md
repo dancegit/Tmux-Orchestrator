@@ -52,11 +52,11 @@ tmux capture-pane -t session:window -p | grep -E "(HANDOFF_|handoff|context rema
 # 1. Detect handoff document
 HANDOFF_FILE=$(find worktree -name "*HANDOFF*.md" -mmin -10 | head -1)
 
-# 2. Send compact command to agent
-./send-claude-message.sh session:window "Please run /compact to clear your context and continue working"
+# 2. Ask agent to type /compact
+./send-claude-message.sh session:window "Please type /compact and press Enter to clear your context and continue working"
 sleep 5
 
-# 3. Agent runs /compact themselves
+# 3. Agent types /compact themselves
 # Monitor for completion
 tmux capture-pane -t session:window -p | tail -20 | grep -q "context cleared"
 
