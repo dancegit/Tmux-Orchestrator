@@ -630,11 +630,13 @@ CLAUDE_EOF
             task = progress.add_task("Setting up git worktrees...", total=len(roles_to_deploy))
             
             for window_name, role_key in roles_to_deploy:
+                # Create worktree for this role (including orchestrator)
+                worktree_path = worktrees_base / role_key
+                
+                # Store the tool directory path for orchestrator
                 if role_key == 'orchestrator':
-                    # Orchestrator stays in Tmux-Orchestrator directory
-                    worktree_paths[role_key] = self.tmux_orchestrator_path
-                    progress.update(task, advance=1)
-                    continue
+                    # Orchestrator needs both paths
+                    self.orchestrator_tool_path = self.tmux_orchestrator_path
                     
                 # Create worktree for this role
                 worktree_path = worktrees_base / role_key
@@ -681,8 +683,7 @@ CLAUDE_EOF
         # Display worktree summary
         console.print("\n[green]✓ Git worktrees created:[/green]")
         for role, path in worktree_paths.items():
-            if role != 'orchestrator':
-                console.print(f"  {role}: {path.relative_to(self.tmux_orchestrator_path)}")
+            console.print(f"  {role}: {path.relative_to(self.tmux_orchestrator_path)}")
         
         return worktree_paths
     
@@ -709,8 +710,6 @@ CLAUDE_EOF
             return
         
         for role_key, worktree_path in worktree_paths.items():
-            if role_key == 'orchestrator':
-                continue
                 
             project_claude_md = worktree_path / "CLAUDE.md"
             
@@ -934,7 +933,23 @@ NOTE: Context priming was not available. Please take a moment to:
 """
         
         if role == 'orchestrator':
+            tool_path = self.tmux_orchestrator_path
             return f"""{mandatory_reading}You are the Orchestrator for {spec.project.name}.
+
+📂 **CRITICAL: You work from TWO locations:**
+1. **Project Worktree**: `{worktree_paths.get(role, 'N/A')}`
+   - Create ALL project files here (reports, documentation, tracking)
+   - This is your primary working directory
+   - Start here: You're already in this directory
+
+2. **Tool Directory**: `{tool_path}`
+   - Run orchestrator tools from here:
+     - `./send-claude-message.sh`
+     - `./schedule_with_note.sh`
+     - `python3 claude_control.py`
+   - Use: `cd {tool_path}` when running tools
+
+🚫 **NEVER create project files in the tool directory!**
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -947,19 +962,27 @@ Project Overview:
 Project size: {spec.project_size.size}
 Estimated complexity: {spec.project_size.complexity}
 
-Your team composition will vary based on project size:
-- Small: PM + Developer
-- Medium: PM + 2 Developers + Tester  
-- Large: PM + Lead Dev + Developer + Tester + DevOps + Code Reviewer
+Your team composition:
+{team_description}
 
-Check actual team members with: tmux list-windows -t session-name
+Workflow Example:
+```bash
+# You start in project worktree - create project files here
+pwd  # Should show: {worktree_paths.get(role, 'N/A')}
+mkdir -p project_management/docs
+echo "# Project Status" > project_management/status.md
 
-Use these commands:
-- Check status: python3 claude_control.py status detailed
-- Send messages: ./send-claude-message.sh session:window "message"
-- Schedule check-ins: ./schedule_with_note.sh minutes "note" target
+# Switch to tool directory for orchestrator commands
+cd {tool_path}
+./send-claude-message.sh project-manager:1 "What's your status?"
+./schedule_with_note.sh 30 "Check team progress" "session:0"
+python3 claude_control.py status detailed
 
-Schedule your first check-in for {role_config.check_in_interval} minutes."""
+# Switch back to project worktree for more project work
+cd {worktree_paths.get(role, 'N/A')}
+```
+
+Schedule your first check-in for {role_config.check_in_interval} minutes from the tool directory."""
 
         elif role == 'project_manager':
             return f"""{mandatory_reading}{context_note}You are the Project Manager for {spec.project.name}.

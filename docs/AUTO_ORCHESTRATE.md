@@ -152,6 +152,7 @@ Tmux-Orchestrator/
     └── projects/
         └── {project-name}/
             └── worktrees/
+                ├── orchestrator/      # Orchestrator's project workspace
                 ├── project-manager/
                 ├── developer/
                 ├── tester/
@@ -166,7 +167,7 @@ Upon approval, the script:
    - **Small**: Orchestrator, PM, Developer
    - **Medium**: + Tester + Second Developer
    - **Large**: + DevOps + Code Reviewer
-3. Each agent works in their own git worktree (except Orchestrator)
+3. Each agent works in their own git worktree (including Orchestrator)
 4. Starts Claude in each window
 5. Ensures each worktree has a CLAUDE.md referencing orchestrator rules
 6. Runs `/context-prime` for each agent (if available)
@@ -178,11 +179,15 @@ Upon approval, the script:
 ### Core Roles (Always Deployed)
 
 #### Orchestrator
-- **Location**: Window 0, Tmux-Orchestrator directory
-- **Worktree**: None (stays in orchestrator directory)
+- **Location**: Window 0, Project worktree
+- **Worktree**: `registry/projects/{name}/worktrees/orchestrator/`
+- **Tool Directory**: Tmux-Orchestrator root (for running tools)
 - **Responsibilities**: High-level oversight, coordination, blocker resolution
 - **Check-ins**: Every 30 minutes
-- **Tools**: claude_control.py for status monitoring
+- **Workflow**: 
+  - Works in project worktree for all project files
+  - Switches to tool directory to run orchestrator commands
+- **Tools**: claude_control.py, send-claude-message.sh, schedule_with_note.sh
 
 #### Project Manager
 - **Location**: Window 1, Own git worktree
