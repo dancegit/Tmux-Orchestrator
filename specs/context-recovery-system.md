@@ -33,9 +33,9 @@ class ContextMonitor:
 
     def recover_agent(self, session: str, window: int, role: str, handoff_file: str):
         """Automatically recover an exhausted agent"""
-        # 1. Kill the exhausted Claude instance
-        # 2. Restart Claude in same window
-        # 3. Load handoff document
+        # 1. Send /compact command to agent
+        # 2. Wait for compact to complete
+        # 3. Load context from handoff document
         # 4. Continue work
 ```
 
@@ -52,24 +52,23 @@ tmux capture-pane -t session:window -p | grep -E "(HANDOFF_|handoff|context rema
 # 1. Detect handoff document
 HANDOFF_FILE=$(find worktree -name "*HANDOFF*.md" -mmin -10 | head -1)
 
-# 2. Kill exhausted agent
-tmux send-keys -t session:window C-c
-sleep 2
-
-# 3. Restart Claude
-tmux send-keys -t session:window "claude --dangerously-skip-permissions" Enter
+# 2. Send compact command to agent
+./send-claude-message.sh session:window "Please run /compact to clear your context and continue working"
 sleep 5
 
-# 4. Load context from handoff
-./send-claude-message.sh session:window "Read and continue from: $HANDOFF_FILE
+# 3. Agent runs /compact themselves
+# Monitor for completion
+tmux capture-pane -t session:window -p | tail -20 | grep -q "context cleared"
 
-You are taking over from an agent who ran out of context. Read the handoff document and continue their work exactly where they left off. The document contains:
-- Current status
-- Recent accomplishments
-- Next steps to execute
-- Important context
-
-Continue the work seamlessly."
+# 4. Prompt agent to reload context
+./send-claude-message.sh session:window "Context cleared! Now please:
+1. Run: /context-prime (if available)
+2. Or read these files in order:
+   - CLAUDE.md
+   - $HANDOFF_FILE (your handoff document)
+   - README.md
+3. Check: git status && git log --oneline -5
+4. Continue from the 'Next Steps' in your handoff document"
 ```
 
 ### 3. Enhanced Handoff Document Format
