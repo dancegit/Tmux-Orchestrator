@@ -48,6 +48,58 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
 6. **Researcher**: Technology evaluation
 7. **Documentation Writer**: Technical documentation
 
+## 🌳 Git Worktree Architecture (Auto-Orchestrate)
+
+When using `auto_orchestrate.py`, each agent works in their own isolated git worktree to prevent conflicts:
+
+### Worktree Locations
+```
+Tmux-Orchestrator/
+└── registry/
+    └── projects/
+        └── {project-name}/
+            └── worktrees/
+                ├── project-manager/     # PM's isolated workspace
+                ├── developer/           # Developer's workspace
+                ├── developer-2/         # Second developer (if needed)
+                ├── tester/             # Tester's workspace
+                ├── devops/             # DevOps workspace
+                └── code_reviewer/       # Code reviewer workspace
+```
+
+### Benefits of Worktrees
+- **No File Conflicts**: Each agent edits files in isolation
+- **Parallel Development**: Multiple agents work simultaneously
+- **Same Repository**: All worktrees share .git directory
+- **Easy Merging**: PM coordinates merges between worktrees
+
+### Worktree Commands for Agents
+
+```bash
+# See all worktrees in the project
+git worktree list
+
+# Your worktree is already set up - just create your feature branch
+git checkout -b feature/your-feature
+
+# Push your branch to share with others
+git push -u origin feature/your-feature
+
+# Get updates from another agent's branch
+git fetch origin
+git merge origin/their-feature-branch
+
+# Or fetch directly from another worktree (PM coordination)
+git fetch ../developer/feature/their-feature
+git merge FETCH_HEAD
+```
+
+### Important Worktree Rules
+1. **Stay in Your Worktree**: Don't cd to other agents' worktrees
+2. **Communicate Through PM**: Coordinate merges via Project Manager
+3. **Push Branches**: Share work by pushing to origin
+4. **Regular Commits**: Same 30-minute rule applies
+
 ## 🔐 Git Discipline - MANDATORY FOR ALL AGENTS
 
 ### 🚨 CRITICAL BRANCH PROTECTION RULES 🚨
@@ -191,7 +243,12 @@ tmux rename-window -t glacier-backend:3 "Uvicorn-API"
 
 ### When User Says "Open/Start/Fire up [Project Name]"
 
-Follow this systematic sequence to start any project:
+**Note**: For automated setup with git worktrees, use:
+```bash
+./auto_orchestrate.py --project /path/to/project --spec /path/to/spec.md
+```
+
+For manual setup, follow this systematic sequence:
 
 #### 1. Find the Project
 ```bash
@@ -429,13 +486,22 @@ Priority: HIGH/MED/LOW
 
 ### When User Says "Work on [new project]"
 
+**Recommended**: Use auto_orchestrate.py for automated setup with git worktrees:
+```bash
+./auto_orchestrate.py --project /any/path/to/project --spec project_spec.md
+```
+
+For manual setup:
+
 #### 1. Project Analysis
 ```bash
-# Find project
+# Find project (if in ~/projects/)
 ls -la ~/projects/ | grep -i "[project-name]"
 
+# Or work with any project path
+cd /path/to/project
+
 # Analyze project type
-cd ~/projects/[project-name]
 test -f package.json && echo "Node.js project"
 test -f requirements.txt && echo "Python project"
 ```
