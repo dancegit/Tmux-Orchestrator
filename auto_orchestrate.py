@@ -191,6 +191,45 @@ class AutoOrchestrator:
         
         console.print("\n[green]✓ All required dependencies are installed[/green]")
     
+    def ensure_tmux_server(self):
+        """Ensure tmux is ready to use"""
+        console.print("[cyan]Checking tmux availability...[/cyan]")
+        
+        # Check if tmux server is running by trying to list sessions
+        result = subprocess.run(['tmux', 'list-sessions'], 
+                              capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            # Server not running - this is fine, it will start when we create a session
+            if "no server running" in result.stderr.lower() or "error connecting" in result.stderr.lower():
+                console.print("[yellow]Tmux server not currently running (will start automatically)[/yellow]")
+            else:
+                # Some other error - this might be a problem
+                console.print(f"[yellow]Tmux returned an error: {result.stderr}[/yellow]")
+                
+            # Test that we can create a session
+            console.print("[cyan]Testing tmux functionality...[/cyan]")
+            test_result = subprocess.run([
+                'tmux', 'new-session', '-d', '-s', 'tmux-test-' + str(int(time.time())), 
+                'exit'
+            ], capture_output=True, text=True)
+            
+            if test_result.returncode == 0:
+                console.print("[green]✓ Tmux is working correctly[/green]")
+            else:
+                console.print(f"[red]Tmux test failed: {test_result.stderr}[/red]")
+                console.print("[red]Please ensure tmux is properly installed and configured[/red]")
+                sys.exit(1)
+        else:
+            console.print("[green]✓ Tmux server is running with existing sessions[/green]")
+            if result.stdout.strip():
+                # Show first few sessions
+                sessions = result.stdout.strip().split('\n')[:3]
+                for session in sessions:
+                    console.print(f"   • {session}")
+                if len(result.stdout.strip().split('\n')) > 3:
+                    console.print(f"   • ... and {len(result.stdout.strip().split('\n')) - 3} more sessions")
+    
     def get_current_git_branch(self) -> Optional[str]:
         """Get the current git branch of the project"""
         try:
@@ -1744,6 +1783,9 @@ Leverage these tools as appropriate for your role."""
         
         # Check dependencies
         self.check_dependencies()
+        
+        # Ensure tmux server is running
+        self.ensure_tmux_server()
         
         # Validate inputs
         if not self.project_path.exists():
