@@ -1089,6 +1089,16 @@ Your worktree location: `{worktree_paths.get(role, 'N/A')}`
 
 ---\n\n"""
         
+        # Team worktree locations for all agents
+        team_locations = ""
+        if worktree_paths and roles_deployed:
+            team_locations = "\n📂 **Team Worktree Locations**:\n"
+            for window_name, role_key in roles_deployed:
+                if role_key in worktree_paths:
+                    team_locations += f"- **{window_name}**: `{worktree_paths[role_key]}`\n"
+            team_locations += f"\n**Main Project Directory** (shared by all): `{self.project_path}`\n"
+            team_locations += "Files in the main project directory are accessible to all agents.\n\n"
+        
         # Get the actual team composition
         if roles_deployed:
             team_windows = [f"- {name} (window {idx})" for idx, (name, role_type) in enumerate(roles_deployed) if role_type != 'orchestrator']
@@ -1115,7 +1125,7 @@ NOTE: Context priming was not available. Please take a moment to:
         
         if role == 'orchestrator':
             tool_path = self.tmux_orchestrator_path
-            return f"""{mandatory_reading}You are the Orchestrator for {spec.project.name}.
+            return f"""{mandatory_reading}{team_locations}You are the Orchestrator for {spec.project.name}.
 
 📂 **CRITICAL: You work from TWO locations:**
 1. **Project Worktree**: `{worktree_paths.get(role, 'N/A')}`
@@ -1169,7 +1179,7 @@ Schedule your first check-in for {role_config.check_in_interval} minutes from th
 **IMMEDIATE TASK**: Create 'mcp-inventory.md' in your project worktree documenting the available MCP tools for the team."""
 
         elif role == 'project_manager':
-            return f"""{mandatory_reading}{context_note}You are the Project Manager for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Project Manager for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1197,7 +1207,7 @@ Always report to Orchestrator (window 0)
 Maintain EXCEPTIONAL quality standards. No compromises."""
 
         elif role == 'developer':
-            return f"""{mandatory_reading}{context_note}You are the Developer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Developer for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1251,7 +1261,7 @@ Collaborate with:
 - Tester for early testing feedback"""
 
         elif role == 'tester':
-            return f"""{mandatory_reading}{context_note}You are the Tester for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Tester for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1280,7 +1290,7 @@ Collaborate with:
 - PM for quality standards"""
 
         elif role == 'devops':
-            return f"""{mandatory_reading}{context_note}You are the DevOps Engineer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the DevOps Engineer for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1310,7 +1320,7 @@ Coordinate with:
 - 🔍 **Researcher** for infrastructure best practices and security hardening"""
 
         elif role == 'code_reviewer':
-            return f"""{mandatory_reading}{context_note}You are the Code Reviewer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Code Reviewer for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1346,13 +1356,15 @@ Start by:
 Work with Developer to maintain code excellence."""
 
         elif role == 'researcher':
-            return f"""{mandatory_reading}{context_note}You are the Technical Researcher for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Technical Researcher for {spec.project.name}.
 
-📋 **Pre-Session Note**: MCP servers should already be configured in Claude Code.
-If the orchestrator needs to verify MCP availability beforehand:
-- Run `claude mcp list` in terminal to see configured servers
-- Check `.claude.json` for mcpServers configuration
-- Look for "✔ Found X MCP servers" when Claude Code starts
+📋 **Pre-Session Note**: 
+- Check `{self.project_path}/mcp-inventory.md` for the MCP tools inventory from Orchestrator
+- MCP servers should already be configured in Claude Code
+- If the orchestrator needs to verify MCP availability beforehand:
+  - Run `claude mcp list` in terminal to see configured servers
+  - Check `.claude.json` for mcpServers configuration
+  - Look for "✔ Found X MCP servers" when Claude Code starts
 
 🔍 **CRITICAL MCP TOOL DISCOVERY WORKFLOW**:
 
@@ -1438,7 +1450,7 @@ Report findings to:
 - DevOps (infrastructure decisions)"""
 
         elif role == 'documentation_writer':
-            return f"""{mandatory_reading}{context_note}You are the Documentation Writer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Documentation Writer for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
@@ -1474,7 +1486,7 @@ Coordinate with:
 
         else:
             # Fallback for any undefined roles
-            return f"""{mandatory_reading}{context_note}You are a team member for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}You are a team member for {spec.project.name}.
 
 Your role: {role}
 
@@ -1646,7 +1658,10 @@ Remember: Use `@` to see resources and `/` to see commands in Claude Code."""
         elif role == 'orchestrator':
             return f"""🔧 **MCP Tools Inventory** (share with team):{tools_list}
 
-**IMMEDIATE ACTION**: Create `mcp-inventory.md` in your project worktree with:
+**IMMEDIATE ACTION**: Create `mcp-inventory.md` in the MAIN PROJECT directory (not your worktree) at:
+`{self.project_path}/mcp-inventory.md`
+
+This ensures all agents can access it. Create with:
 ```markdown
 # MCP Tools Inventory
 
@@ -1663,7 +1678,10 @@ Remember: Use `@` to see resources and `/` to see commands in Claude Code."""
 - Type `/` to see available commands (look for /mcp__ prefixed commands)
 ```
 
-Share this inventory with all team members."""
+Share this inventory with all team members by telling them:
+"I've created the MCP tools inventory at {self.project_path}/mcp-inventory.md - please review it for available tools."
+
+This file is in the main project directory, accessible to all agents."""
         
         else:
             return f"""🔧 **Available MCP Tools**:{tools_list}

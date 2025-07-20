@@ -10,6 +10,9 @@ The `auto_orchestrate.py` script provides fully automated setup of a Tmux Orches
 - **Structured Planning**: Generates phase-based implementation plans
 - **Automatic Role Assignment**: Configures specialized agents for different tasks
 - **Git Worktree Isolation**: Each agent works in their own git worktree to prevent conflicts
+- **MCP Tool Discovery**: Automatically detects and categorizes available MCP servers
+- **Role-Based Tool Guidance**: Provides specific MCP recommendations for each agent role
+- **Cross-Worktree File Sharing**: Enables agents to share resources via main project directory
 - **Plan-Based Team Sizing**: Optimizes team size for your Claude subscription
 - **Token Conservation**: Adjusted intervals and warnings for sustainable usage
 - **One-Command Setup**: From spec to running team in under a minute
@@ -261,6 +264,7 @@ Upon approval, the script:
   - Create actionable recommendations
 - **Check-ins**: Every 45 minutes
 - **Special Features**:
+  - Reads `{project}/mcp-inventory.md` created by Orchestrator
   - Types `@` to discover available MCP resources
   - Types `/` to discover MCP commands (format: `/mcp__servername__promptname`)
   - Leverages web search, firecrawl, puppeteer, etc. based on availability
@@ -481,6 +485,12 @@ To check your version: `claude --version`
 
 ### Git Worktree Architecture
 Each agent works in isolation, preventing the common problem of agents overwriting each other's changes. This enables true parallel development with clean merges coordinated by the PM.
+
+### Cross-Worktree Communication
+- All agents receive team worktree locations in their briefings
+- Shared files (like `mcp-inventory.md`) are created in the main project directory
+- Agents can read files from other agents' worktrees when needed
+- Clear file paths are communicated to ensure agents can find shared resources
 
 ### Mandatory Rule System
 Every agent's worktree gets a CLAUDE.md file that references the Tmux-Orchestrator rules, ensuring consistent behavior across all agents regardless of project location.
