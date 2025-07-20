@@ -40,13 +40,18 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
 ```
 
 ### Agent Types
-1. **Project Manager**: Quality-focused team coordination
-2. **Developer**: Implementation and technical decisions
-3. **QA Engineer**: Testing and verification
-4. **DevOps**: Infrastructure and deployment
-5. **Code Reviewer**: Security and best practices
-6. **Researcher**: Technology evaluation
-7. **Documentation Writer**: Technical documentation
+
+#### Core Roles (Always Deployed)
+1. **Orchestrator**: High-level oversight and coordination
+2. **Project Manager**: Quality-focused team coordination
+3. **Developer**: Implementation and technical decisions
+4. **Researcher**: MCP-powered research and best practices
+
+#### Additional Roles (Based on Project Size)
+5. **QA Engineer/Tester**: Testing and verification (Medium/Large)
+6. **DevOps**: Infrastructure and deployment (Large)
+7. **Code Reviewer**: Security and best practices (Large)
+8. **Documentation Writer**: Technical documentation (Optional)
 
 ## 🌳 Git Worktree Architecture (Auto-Orchestrate)
 
@@ -62,6 +67,7 @@ Tmux-Orchestrator/
                 ├── orchestrator/        # Orchestrator's project workspace
                 ├── project-manager/     # PM's isolated workspace
                 ├── developer/           # Developer's workspace
+                ├── researcher/          # Researcher's workspace (core role)
                 ├── developer-2/         # Second developer (if needed)
                 ├── tester/             # Tester's workspace
                 ├── devops/             # DevOps workspace
@@ -136,6 +142,39 @@ git merge FETCH_HEAD
 2. **Communicate Through PM**: Coordinate merges via Project Manager
 3. **Push Branches**: Share work by pushing to origin
 4. **Regular Commits**: Same 30-minute rule applies
+
+## 🔍 Researcher MCP Integration
+
+The Researcher role uses MCP (Model Context Protocol) tools for comprehensive research:
+
+### MCP Tool Discovery
+```bash
+# First command for any researcher
+/mcp  # Shows available MCP servers and their status
+```
+
+### Common MCP Tools
+- **Web Search** (websearch, tavily): Current information, best practices, security CVEs
+- **Firecrawl**: Documentation scraping, code examples
+- **Context7**: Deep technical knowledge, architecture patterns
+- **Perplexity**: Advanced research queries
+- **And more**: Each project may have different tools configured
+
+### Researcher Workflow
+1. **Discover Tools**: Run `/mcp` to see what's available
+2. **Document Tools**: Create `research/available-tools.md`
+3. **Strategic Research**: Use appropriate tools for each research area
+4. **Actionable Output**: Create structured recommendations, not info dumps
+
+### Research Documents Structure
+```
+research/
+├── available-tools.md      # MCP inventory
+├── security-analysis.md    # CVEs, vulnerabilities
+├── performance-guide.md    # Optimization strategies
+├── best-practices.md       # Industry standards
+└── phase-{n}-research.md   # Phase-specific findings
+```
 
 ## 🔐 Git Discipline - MANDATORY FOR ALL AGENTS
 
@@ -545,9 +584,9 @@ test -f requirements.txt && echo "Python project"
 
 #### 2. Propose Team Structure
 
-**Small Project**: 1 Developer + 1 PM
-**Medium Project**: 2 Developers + 1 PM + 1 QA  
-**Large Project**: Lead + 2 Devs + PM + QA + DevOps
+**Small Project**: Orchestrator + PM + Developer + Researcher
+**Medium Project**: + Second Developer + Tester
+**Large Project**: + DevOps + Code Reviewer
 
 #### 3. Deploy Team
 Create session and deploy all agents with specific briefings for their roles.

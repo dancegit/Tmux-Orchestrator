@@ -362,9 +362,9 @@ Generate a JSON implementation plan with this EXACT structure:
       "initial_commands": ["cd {self.project_path}", "git log --oneline -10"]
     }},
     "researcher": {{
-      "responsibilities": ["Evaluate technologies", "Research solutions", "Document findings"],
-      "check_in_interval": 120,
-      "initial_commands": ["cd {self.project_path}", "echo 'Ready to research'"]
+      "responsibilities": ["MCP tool discovery and utilization", "Research best practices", "Security vulnerability analysis", "Performance optimization research", "Document actionable findings"],
+      "check_in_interval": 45,
+      "initial_commands": ["cd {self.project_path}", "echo 'Discovering available MCP tools...'", "echo 'Run /mcp to see available research tools'"]
     }},
     "documentation_writer": {{
       "responsibilities": ["Write technical docs", "Update README", "Create API documentation"],
@@ -566,15 +566,17 @@ CLAUDE_EOF
         size = self.manual_size if self.manual_size else spec.project_size.size
         
         if size == "small":
-            # Small projects: PM + 1 Developer
+            # Small projects: PM + Developer + Researcher
             core_roles = base_roles + [
-                ('Developer', 'developer')
+                ('Developer', 'developer'),
+                ('Researcher', 'researcher')
             ]
         elif size == "medium":
-            # Medium projects: PM + 2 Developers + QA
+            # Medium projects: PM + 2 Developers + Researcher + QA
             core_roles = base_roles + [
                 ('Developer', 'developer'),
                 ('Developer-2', 'developer'),  # Second developer
+                ('Researcher', 'researcher'),
                 ('Tester', 'tester')
             ]
         else:  # large
@@ -582,6 +584,7 @@ CLAUDE_EOF
             core_roles = base_roles + [
                 ('Lead-Developer', 'developer'),
                 ('Developer-2', 'developer'),
+                ('Researcher', 'researcher'),
                 ('Tester', 'tester'),
                 ('DevOps', 'devops'),
                 ('Code-Reviewer', 'code_reviewer')
@@ -648,34 +651,92 @@ CLAUDE_EOF
                     subprocess.run(['git', 'worktree', 'prune'], 
                                  cwd=str(self.project_path), capture_output=True)
                 
-                # Create new worktree on current branch
+                # Create new worktree with multiple fallback strategies
+                worktree_created = False
+                
+                # Strategy 1: Try normal worktree creation
                 result = subprocess.run([
                     'git', 'worktree', 'add', 
                     str(worktree_path), 
                     current_branch
                 ], cwd=str(self.project_path), capture_output=True, text=True)
                 
-                if result.returncode != 0:
-                    console.print(f"[red]Failed to create worktree for {role_key}: {result.stderr}[/red]")
-                    # Try to provide helpful error message
+                if result.returncode == 0:
+                    worktree_created = True
+                else:
+                    console.print(f"[yellow]Normal worktree creation failed for {role_key}[/yellow]")
+                    
+                    # Strategy 2: Try with --force flag
                     if "already checked out" in result.stderr:
-                        console.print(f"[yellow]Branch '{current_branch}' is already checked out in another worktree[/yellow]")
-                        console.print("[yellow]Creating worktree with detached HEAD instead[/yellow]")
-                        # Try with detached HEAD
+                        console.print(f"[yellow]Branch '{current_branch}' already checked out, trying --force[/yellow]")
                         result = subprocess.run([
                             'git', 'worktree', 'add', 
-                            '--detach',
-                            str(worktree_path)
+                            '--force',
+                            str(worktree_path), 
+                            current_branch
                         ], cwd=str(self.project_path), capture_output=True, text=True)
+                        
                         if result.returncode == 0:
-                            # Checkout the branch in detached state
-                            subprocess.run(['git', 'checkout', current_branch], 
-                                         cwd=str(worktree_path), capture_output=True)
+                            worktree_created = True
+                    
+                    # Strategy 3: Create agent-specific branch
+                    if not worktree_created:
+                        agent_branch = f"{current_branch}-{role_key}"
+                        console.print(f"[yellow]Creating agent-specific branch: {agent_branch}[/yellow]")
+                        
+                        # Check if branch already exists
+                        check_result = subprocess.run([
+                            'git', 'rev-parse', '--verify', agent_branch
+                        ], cwd=str(self.project_path), capture_output=True, text=True)
+                        
+                        if check_result.returncode == 0:
+                            # Branch exists, just use it
+                            result = subprocess.run([
+                                'git', 'worktree', 'add', 
+                                str(worktree_path),
+                                agent_branch
+                            ], cwd=str(self.project_path), capture_output=True, text=True)
                         else:
-                            console.print(f"[red]Still failed: {result.stderr}[/red]")
-                            sys.exit(1)
-                    else:
-                        sys.exit(1)
+                            # Create new branch in worktree
+                            result = subprocess.run([
+                                'git', 'worktree', 'add', 
+                                '-b', agent_branch,
+                                str(worktree_path),
+                                current_branch
+                            ], cwd=str(self.project_path), capture_output=True, text=True)
+                        
+                        if result.returncode == 0:
+                            worktree_created = True
+                    
+                    # Strategy 4: Skip orphan (not supported in older git versions)
+                    # Orphan branches in worktrees require git 2.23+
+                    # We'll skip directly to detached HEAD strategy
+                    
+                    # Strategy 5: Detached HEAD with specific commit
+                    if not worktree_created:
+                        console.print(f"[yellow]Creating detached worktree at HEAD[/yellow]")
+                        
+                        # Get current commit hash
+                        commit_result = subprocess.run([
+                            'git', 'rev-parse', 'HEAD'
+                        ], cwd=str(self.project_path), capture_output=True, text=True)
+                        
+                        if commit_result.returncode == 0:
+                            commit_hash = commit_result.stdout.strip()
+                            result = subprocess.run([
+                                'git', 'worktree', 'add', 
+                                '--detach',
+                                str(worktree_path),
+                                commit_hash
+                            ], cwd=str(self.project_path), capture_output=True, text=True)
+                            
+                            if result.returncode == 0:
+                                worktree_created = True
+                
+                if not worktree_created:
+                    console.print(f"[red]Failed to create worktree for {role_key} after all strategies[/red]")
+                    console.print(f"[red]Error: {result.stderr}[/red]")
+                    sys.exit(1)
                     
                 worktree_paths[role_key] = worktree_path
                 progress.update(task, advance=1, description=f"Created worktree for {role_key}")
@@ -687,8 +748,25 @@ CLAUDE_EOF
         
         return worktree_paths
     
+    def get_worktree_branch_info(self, worktree_path: Path) -> str:
+        """Get information about the worktree's branch status"""
+        result = subprocess.run([
+            'git', 'branch', '--show-current'
+        ], cwd=str(worktree_path), capture_output=True, text=True)
+        
+        if result.returncode == 0 and result.stdout.strip():
+            return f"Working on branch: {result.stdout.strip()}"
+        else:
+            # Check if detached
+            result = subprocess.run([
+                'git', 'rev-parse', 'HEAD'
+            ], cwd=str(worktree_path), capture_output=True, text=True)
+            if result.returncode == 0:
+                return f"Working in detached HEAD at: {result.stdout.strip()[:8]}"
+        return "Unknown branch status"
+    
     def cleanup_worktrees(self, project_name: str):
-        """Clean up worktrees when done"""
+        """Clean up worktrees and any agent-specific branches"""
         worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
         if worktrees_base.exists():
             console.print("\n[yellow]Cleaning up worktrees...[/yellow]")
@@ -699,7 +777,24 @@ CLAUDE_EOF
             # Prune git worktree list
             subprocess.run(['git', 'worktree', 'prune'], 
                          cwd=str(self.project_path), capture_output=True)
-            console.print("[green]✓ Worktrees cleaned up[/green]")
+            
+            # Clean up any agent-specific branches
+            result = subprocess.run([
+                'git', 'branch', '--list', '*-orchestrator', '*-project_manager', 
+                '*-developer*', '*-tester', '*-devops', '*-code_reviewer', 
+                '*-researcher', '*-documentation_writer', 'orphan-*'
+            ], cwd=str(self.project_path), capture_output=True, text=True)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                branches_to_delete = result.stdout.strip().split('\n')
+                for branch in branches_to_delete:
+                    branch = branch.strip().lstrip('* ')
+                    if branch:
+                        subprocess.run([
+                            'git', 'branch', '-D', branch
+                        ], cwd=str(self.project_path), capture_output=True)
+            
+            console.print("[green]✓ Worktrees and agent branches cleaned up[/green]")
     
     def ensure_orchestrator_reference(self, worktree_paths: Dict[str, Path]):
         """Ensure each worktree's CLAUDE.md references the Tmux-Orchestrator rules"""
@@ -941,6 +1036,7 @@ NOTE: Context priming was not available. Please take a moment to:
    - Create ALL project files here (reports, documentation, tracking)
    - This is your primary working directory
    - Start here: You're already in this directory
+   - {self.get_worktree_branch_info(worktree_paths.get(role, Path('.'))) if worktree_paths else 'Branch status unknown'}
 
 2. **Tool Directory**: `{tool_path}`
    - Run orchestrator tools from here:
@@ -1006,6 +1102,8 @@ Git Workflow:
 Your Team (based on project size: {spec.project_size.size}):
 {team_description}
 
+🔍 **Researcher Available**: Check with the Researcher for best practices, security analysis, and performance recommendations before making critical decisions.
+
 Always report to Orchestrator (window 0)
 
 Maintain EXCEPTIONAL quality standards. No compromises."""
@@ -1027,6 +1125,7 @@ Implementation Phases:
 Git Worktree Information:
 - You are working in an isolated git worktree
 - Your worktree path: {worktree_paths.get(role, 'N/A')}
+- {self.get_worktree_branch_info(worktree_paths.get(role, Path('.'))) if worktree_paths else 'Branch status unknown'}
 - This prevents conflicts with other agents
 - You can create branches without affecting others
 
@@ -1053,11 +1152,15 @@ git merge origin/their-branch-name
 
 Start by:
 1. Reading the spec at: {self.spec_path}
-2. Setting up your development environment
-3. Creating the feature branch
-4. Beginning implementation of Phase 1
+2. 🔍 **Check with Researcher** for best practices and security considerations
+3. Setting up your development environment
+4. Creating the feature branch
+5. Beginning implementation of Phase 1
 
-Report progress to PM (window 1) regularly."""
+Collaborate with:
+- PM (window 1) for progress updates
+- Researcher for technical guidance and best practices
+- Tester for early testing feedback"""
 
         elif role == 'tester':
             return f"""{mandatory_reading}{context_note}You are the Tester for {spec.project.name}.
@@ -1079,10 +1182,14 @@ Your workflow:
 
 Start by:
 1. Understanding the existing test structure
-2. Setting up test environment
-3. Running current test suite as baseline
+2. 🔍 **Consult Researcher** for security testing strategies and performance benchmarks
+3. Setting up test environment
+4. Running current test suite as baseline
 
-Work closely with Developer to ensure quality."""
+Collaborate with:
+- Developer for implementation details
+- Researcher for security vulnerabilities and testing best practices
+- PM for quality standards"""
 
         elif role == 'devops':
             return f"""{mandatory_reading}{context_note}You are the DevOps Engineer for {spec.project.name}.
@@ -1111,7 +1218,8 @@ Start by:
 Coordinate with:
 - Developer on build requirements
 - PM on deployment timelines
-- Tester on staging environments"""
+- Tester on staging environments
+- 🔍 **Researcher** for infrastructure best practices and security hardening"""
 
         elif role == 'code_reviewer':
             return f"""{mandatory_reading}{context_note}You are the Code Reviewer for {spec.project.name}.
@@ -1152,32 +1260,81 @@ Work with Developer to maintain code excellence."""
         elif role == 'researcher':
             return f"""{mandatory_reading}{context_note}You are the Technical Researcher for {spec.project.name}.
 
+🔍 **CRITICAL MCP TOOL DISCOVERY WORKFLOW**:
+
+1. **Initialize Research Environment**:
+   ```
+   /context-prime  # If available, to understand the project
+   /mcp           # ESSENTIAL: Discover available MCP tools
+   ```
+   
+2. **Document Available Tools**:
+   After running `/mcp`, create `research/available-tools.md` listing:
+   - Which MCP servers are connected
+   - What capabilities each provides
+   - Your research strategy based on available tools
+
+3. **Tool-Specific Research Strategies**:
+   
+   🌐 **If web search tools available** (websearch, tavily, etc.):
+   - Best practices for {', '.join(spec.project.main_tech)}
+   - Security vulnerabilities (CVEs) for all dependencies
+   - Performance benchmarks and optimization techniques
+   - Latest API documentation and updates
+   - Similar project implementations and case studies
+   
+   🔥 **If firecrawl/scraping tools available**:
+   - Comprehensive documentation extraction
+   - Code examples from official sources
+   - Implementation patterns and tutorials
+   - Stack Overflow solutions for common issues
+   
+   🧠 **If context/knowledge tools available** (context7, etc.):
+   - Deep technical architecture patterns
+   - Advanced optimization techniques
+   - Edge cases and gotchas
+   - Historical context and evolution
+
+4. **Proactive Research Areas**:
+   - 🔒 **Security**: All CVEs, OWASP risks, auth best practices
+   - ⚡ **Performance**: Benchmarks, bottlenecks, optimization
+   - 📚 **Best Practices**: Industry standards, style guides, patterns
+   - 📦 **Libraries**: Alternatives, comparisons, compatibility
+   - 🏗️ **Architecture**: Scalability, maintainability, testing
+
+5. **Research Outputs** (in your worktree):
+   ```
+   research/
+   ├── available-tools.md         # MCP tools inventory
+   ├── security-analysis.md       # CVEs, vulnerabilities
+   ├── performance-guide.md       # Optimization strategies
+   ├── best-practices.md          # Coding standards
+   ├── library-comparison.md      # Tech stack analysis
+   └── phase-{n}-research.md      # Phase-specific findings
+   ```
+
+6. **Team Communication Protocol**:
+   - Create actionable recommendations, not info dumps
+   - Tag findings: [CRITICAL], [RECOMMENDED], [OPTIONAL]
+   - Proactively share with relevant team members
+   - Update research based on implementation feedback
+
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
 
-Research Areas:
-- Current technologies: {', '.join(spec.project.main_tech)}
-- Implementation challenges in the spec
-- Best practices for the project type
-- Performance optimization opportunities
-- Security considerations
+Project Technologies: {', '.join(spec.project.main_tech)}
+Project Type: {spec.project.type}
 
-Research Workflow:
-1. Analyze technical requirements from spec
-2. Research best solutions for challenges
-3. Document findings with examples
-4. Provide recommendations to team
-5. Stay updated on relevant technologies
+**IMMEDIATE ACTIONS**:
+1. Run `/mcp` to discover tools
+2. Create research strategy based on available tools
+3. Begin Phase 1 research aligned with implementation
 
-Start by:
-1. Reading the full specification
-2. Identifying technical unknowns
-3. Researching solutions for Phase 1 tasks
-
-Share findings with:
-- Developer for implementation guidance
-- PM for technical decisions
-- DevOps for infrastructure choices"""
+Report findings to:
+- Developer (implementation guidance)
+- PM (risk assessment)
+- Tester (security/performance testing)
+- DevOps (infrastructure decisions)"""
 
         elif role == 'documentation_writer':
             return f"""{mandatory_reading}{context_note}You are the Documentation Writer for {spec.project.name}.
@@ -1309,12 +1466,12 @@ def main(project: str, spec: str, size: str, roles: tuple):
     The script will analyze your specification and set up a complete tmux
     orchestration environment with AI agents based on project size:
     
-    - Small projects: Orchestrator + PM + Developer
-    - Medium projects: + Tester (QA)
+    - Small projects: Orchestrator + PM + Developer + Researcher
+    - Medium projects: + Second Developer + Tester
     - Large projects: + DevOps + Code Reviewer
     
     You can manually specify project size with --size or add specific roles
-    with --roles (e.g., --roles researcher --roles documentation_writer)
+    with --roles (e.g., --roles documentation_writer)
     """
     orchestrator = AutoOrchestrator(project, spec)
     orchestrator.manual_size = size if size != 'auto' else None
