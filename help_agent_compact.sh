@@ -34,14 +34,16 @@ Then reply 'HANDOFF CREATED' when done."
     sleep 20
 fi
 
-# Step 2: Ask agent to run /compact
+# Step 2: Ask agent to type /compact
 echo ""
-echo "Step 2: Asking agent to run /compact..."
-./send-claude-message.sh "$TARGET" "Now please run the following command to clear your context:
+echo "Step 2: Asking agent to type /compact..."
+./send-claude-message.sh "$TARGET" "Now please type the following command and press Enter to clear your context:
 
 /compact
 
-This will clear your conversation history while keeping your session active. Reply 'COMPACT DONE' when complete."
+(Just type those 8 characters and hit Enter - this will clear your conversation history while keeping your session active)
+
+Reply 'COMPACT DONE' when complete."
 
 echo "Waiting for compact to complete (10 seconds)..."
 sleep 10

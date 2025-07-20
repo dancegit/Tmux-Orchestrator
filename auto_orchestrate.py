@@ -2610,6 +2610,7 @@ Working in multi-agent systems uses ~15x more tokens than normal. You MUST activ
    ```
 
 2. **Clear Context**:
+   Type the following and press Enter:
    ```
    /compact
    ```
