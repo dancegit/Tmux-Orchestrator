@@ -872,6 +872,9 @@ CLAUDE_EOF
                 # This handles both cases: when .mcp.json was copied and when it doesn't exist
                 self.setup_mcp_for_worktree(worktree_path)
                 
+                # Enable MCP servers in Claude configuration for this worktree
+                self.enable_mcp_servers_in_claude_config(worktree_path)
+                
                 progress.update(task, advance=1, description=f"Created worktree for {role_key}")
         
         # Display worktree summary
@@ -2005,6 +2008,90 @@ Leverage these tools as appropriate for your role."""
                 console.print(f"[green]  Total MCP servers in worktree: {len(merged_config['mcpServers'])}[/green]")
             except Exception as e:
                 console.print(f"[red]Error writing merged .mcp.json: {e}[/red]")
+
+    def enable_mcp_servers_in_claude_config(self, worktree_path: Path):
+        """Enable MCP servers in Claude configuration for auto-approval"""
+        
+        # Read the worktree's .mcp.json to get server names
+        worktree_mcp_path = worktree_path / '.mcp.json'
+        server_names = []
+        
+        if worktree_mcp_path.exists():
+            try:
+                with open(worktree_mcp_path, 'r') as f:
+                    mcp_config = json.load(f)
+                    server_names = list(mcp_config.get('mcpServers', {}).keys())
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not read worktree .mcp.json: {e}[/yellow]")
+                return
+        
+        if not server_names:
+            return
+        
+        # Read current ~/.claude.json
+        claude_json_path = Path.home() / '.claude.json'
+        claude_config = {}
+        
+        if claude_json_path.exists():
+            try:
+                with open(claude_json_path, 'r') as f:
+                    claude_config = json.load(f)
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not read ~/.claude.json: {e}[/yellow]")
+                return
+        
+        # Ensure projects section exists
+        if 'projects' not in claude_config:
+            claude_config['projects'] = {}
+        
+        # Add or update the worktree project entry
+        worktree_key = str(worktree_path)
+        
+        if worktree_key not in claude_config['projects']:
+            claude_config['projects'][worktree_key] = {
+                "allowedTools": [],
+                "history": [],
+                "mcpContextUris": [],
+                "mcpServers": {},
+                "enabledMcpjsonServers": [],
+                "disabledMcpjsonServers": [],
+                "hasTrustDialogAccepted": True,
+                "projectOnboardingSeenCount": 0,
+                "hasClaudeMdExternalIncludesApproved": False,
+                "hasClaudeMdExternalIncludesWarningShown": False
+            }
+        
+        # Update enabledMcpjsonServers with all server names
+        project_config = claude_config['projects'][worktree_key]
+        project_config['enabledMcpjsonServers'] = server_names
+        project_config['hasTrustDialogAccepted'] = True
+        
+        # Backup original file
+        backup_path = claude_json_path.with_suffix('.json.bak')
+        try:
+            if claude_json_path.exists():
+                import shutil
+                shutil.copy2(claude_json_path, backup_path)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not create backup: {e}[/yellow]")
+        
+        # Write updated configuration
+        try:
+            with open(claude_json_path, 'w') as f:
+                json.dump(claude_config, f, indent=2)
+            
+            console.print(f"[green]✓ Auto-enabled {len(server_names)} MCP servers for worktree[/green]")
+            console.print(f"[green]  Servers: {', '.join(server_names)}[/green]")
+        except Exception as e:
+            console.print(f"[red]Error updating ~/.claude.json: {e}[/red]")
+            # Try to restore backup
+            if backup_path.exists():
+                try:
+                    import shutil
+                    shutil.copy2(backup_path, claude_json_path)
+                    console.print("[yellow]Restored backup file[/yellow]")
+                except:
+                    pass
 
     def run(self):
         """Main execution flow"""
