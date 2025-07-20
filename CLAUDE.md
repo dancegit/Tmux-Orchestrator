@@ -760,7 +760,7 @@ Shows credit status for all agents and estimated reset times.
 ./credit_management/install_monitor.sh
 
 # Or run manually
-python3 credit_management/credit_monitor.py
+./credit_management/credit_monitor.py
 ```
 
 #### How It Works

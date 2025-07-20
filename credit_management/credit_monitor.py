@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
 """
 Claude Code Credit Monitor
 Monitors agent windows for credit exhaustion and manages pause/resume cycles
@@ -8,6 +13,7 @@ import json
 import subprocess
 import re
 import time
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple
@@ -15,11 +21,13 @@ import logging
 import sys
 
 # Setup logging
+log_dir = Path.home() / '.claude'
+log_dir.mkdir(exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(Path.home() / '.claude' / 'credit_monitor.log'),
+        logging.FileHandler(log_dir / 'credit_monitor.log'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -279,42 +287,93 @@ class CreditMonitor:
         # Add 2 minute buffer to ensure credits are available
         resume_dt += timedelta(minutes=2)
         
+        # Get the orchestrator path
+        orchestrator_path = Path(__file__).parent.parent.resolve()
+        
         # Create resume script
         resume_script = self.data_dir / f'resume_{agent.replace(":", "_")}.sh'
         with open(resume_script, 'w') as f:
             f.write(f"""#!/bin/bash
 # Auto-generated resume script for {agent}
-TMUX_ORCHESTRATOR_PATH="$(dirname "$(dirname "$(readlink -f "$0")")")"
-"$TMUX_ORCHESTRATOR_PATH/send-claude-message.sh" "{agent}" "Credits should be refreshed. Please continue your work where you left off."
+ORCHESTRATOR_PATH="{orchestrator_path}"
+"$ORCHESTRATOR_PATH/send-claude-message.sh" "{agent}" "Credits should be refreshed. Please continue your work where you left off."
 
 # Verify credits are actually available
 sleep 5
-python3 "$TMUX_ORCHESTRATOR_PATH/credit_management/verify_credits.py" "{agent}"
+"$ORCHESTRATOR_PATH/credit_management/verify_credits.py" "{agent}"
 """)
         
         resume_script.chmod(0o755)
         
-        # Schedule with 'at' command
+        # Schedule with 'at' command if available, otherwise use simple background sleep
         at_time = resume_dt.strftime('%H:%M %Y-%m-%d')
-        try:
-            subprocess.run(
-                ['at', at_time],
-                input=f'{resume_script}\n',
-                text=True,
-                capture_output=True
-            )
-            logger.info(f"Scheduled resume for {agent} at {at_time}")
-        except Exception as e:
-            logger.error(f"Failed to schedule resume: {e}")
+        
+        # Check if 'at' command is available
+        at_check = subprocess.run(['which', 'at'], capture_output=True)
+        
+        if at_check.returncode == 0:
+            try:
+                subprocess.run(
+                    ['at', at_time],
+                    input=f'{resume_script}\n',
+                    text=True,
+                    capture_output=True
+                )
+                logger.info(f"Scheduled resume for {agent} at {at_time} using 'at' command")
+            except Exception as e:
+                logger.error(f"Failed to schedule with 'at': {e}")
+        else:
+            # Fallback to background sleep
+            seconds_until = int((resume_dt - datetime.now()).total_seconds())
+            if seconds_until > 0:
+                subprocess.Popen(
+                    ['bash', '-c', f'sleep {seconds_until} && {resume_script}'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                logger.info(f"Scheduled resume for {agent} in {seconds_until} seconds using background sleep")
 
 def main():
-    """Main monitoring loop"""
+    """Main monitoring loop or single check based on arguments"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Claude Code Credit Monitor')
+    parser.add_argument('--once', action='store_true', 
+                       help='Run once and exit instead of continuous monitoring')
+    parser.add_argument('--interval', type=int, default=5,
+                       help='Check interval in minutes (default: 5)')
+    args = parser.parse_args()
+    
     monitor = CreditMonitor()
     
-    # Check interval (minutes)
-    check_interval = int(os.environ.get('CLAUDE_CREDIT_CHECK_INTERVAL', 5))
+    if args.once:
+        # Single check mode
+        statuses = monitor.monitor_all_agents()
+        
+        # Print summary
+        exhausted = sum(1 for s in statuses.values() if s['status'] == 'exhausted')
+        warning = sum(1 for s in statuses.values() if s['status'] == 'warning')
+        active = sum(1 for s in statuses.values() if s['status'] == 'active')
+        
+        print(f"\nCredit Status Summary:")
+        print(f"  Active: {active}")
+        print(f"  Warning: {warning}")
+        print(f"  Exhausted: {exhausted}")
+        
+        if monitor.schedule.get('next_reset_time'):
+            next_reset = datetime.fromisoformat(monitor.schedule['next_reset_time'])
+            if next_reset > datetime.now():
+                delta = next_reset - datetime.now()
+                hours = int(delta.total_seconds() // 3600)
+                minutes = int((delta.total_seconds() % 3600) // 60)
+                print(f"\nNext reset in approximately {hours}h {minutes}m")
+        
+        return
     
+    # Continuous monitoring mode
+    check_interval = args.interval
     logger.info(f"Starting credit monitor with {check_interval} minute interval")
+    logger.info("Press Ctrl+C to stop monitoring")
     
     while True:
         try:
@@ -328,13 +387,15 @@ def main():
             logger.info(f"Status: {active} active, {warning} warning, {exhausted} exhausted")
             
             # Sleep until next check
+            logger.info(f"Next check in {check_interval} minutes...")
             time.sleep(check_interval * 60)
             
         except KeyboardInterrupt:
-            logger.info("Monitoring stopped by user")
+            logger.info("\nMonitoring stopped by user")
             break
         except Exception as e:
             logger.error(f"Monitor error: {e}")
+            logger.info("Retrying in 60 seconds...")
             time.sleep(60)  # Wait a minute before retrying
 
 if __name__ == '__main__':

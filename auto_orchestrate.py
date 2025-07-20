@@ -1434,7 +1434,7 @@ cd {tool_path}
 ./credit_management/check_agent_health.sh
 
 # Start continuous monitoring (run in background)
-nohup python3 credit_management/credit_monitor.py > /dev/null 2>&1 &
+nohup ./credit_management/credit_monitor.py > /dev/null 2>&1 &
 ```
 
 **Credit Exhaustion Handling**:
