@@ -641,31 +641,34 @@ CLAUDE_EOF
         size = self.manual_size if self.manual_size else spec.project_size.size
         
         if size == "small":
-            # Small projects: 3 agents (Orchestrator + Developer + Researcher)
-            # No PM to keep team minimal
+            # Small projects: 5 agents (Core team with testing)
             core_roles = [
                 ('Orchestrator', 'orchestrator'),
                 ('Developer', 'developer'),
-                ('Researcher', 'researcher')
+                ('Researcher', 'researcher'),
+                ('Tester', 'tester'),
+                ('TestRunner', 'testrunner')
             ]
         elif size == "medium":
-            # Medium projects: 4 agents (+ Project Manager)
-            # PM added for coordination without overwhelming token usage
-            core_roles = [
-                ('Orchestrator', 'orchestrator'),
-                ('Project-Manager', 'project_manager'),
-                ('Developer', 'developer'),
-                ('Researcher', 'researcher')
-            ]
-        else:  # large
-            # Large projects: 5 agents (+ Tester or DevOps)
-            # Staying at 5 agents max for Max 5x plan sustainability
+            # Medium projects: 6 agents (+ Project Manager)
             core_roles = [
                 ('Orchestrator', 'orchestrator'),
                 ('Project-Manager', 'project_manager'),
                 ('Developer', 'developer'),
                 ('Researcher', 'researcher'),
-                ('Tester', 'tester')  # Can be swapped for DevOps via --roles
+                ('Tester', 'tester'),
+                ('TestRunner', 'testrunner')
+            ]
+        else:  # large
+            # Large projects: 7-8 agents (+ DevOps)
+            core_roles = [
+                ('Orchestrator', 'orchestrator'),
+                ('Project-Manager', 'project_manager'),
+                ('Developer', 'developer'),
+                ('Researcher', 'researcher'),
+                ('Tester', 'tester'),
+                ('TestRunner', 'testrunner'),
+                ('DevOps', 'devops')
             ]
         
         # Add any additional requested roles
@@ -676,7 +679,8 @@ CLAUDE_EOF
             'docs': ('Documentation', 'documentation_writer'),
             'devops': ('DevOps', 'devops'),
             'code_reviewer': ('Code-Reviewer', 'code_reviewer'),
-            'tester': ('Tester', 'tester')
+            'tester': ('Tester', 'tester'),
+            'testrunner': ('TestRunner', 'testrunner')
         }
         
         for role in self.additional_roles:
@@ -691,7 +695,7 @@ CLAUDE_EOF
             console.print(f"[yellow]Multi-agent systems use ~15x more tokens than standard usage[/yellow]\n")
             
             # Prioritize roles based on importance
-            priority_order = ['orchestrator', 'developer', 'researcher', 'project_manager', 'tester', 'devops', 'code_reviewer', 'documentation_writer']
+            priority_order = ['orchestrator', 'developer', 'researcher', 'project_manager', 'tester', 'testrunner', 'devops', 'code_reviewer', 'documentation_writer']
             
             # Sort roles by priority
             core_roles.sort(key=lambda x: priority_order.index(x[1]) if x[1] in priority_order else 999)
@@ -1500,6 +1504,54 @@ Collaborate with:
 - Developer (access code at: `{worktree_paths.get('developer', 'dev-worktree')}`)
 - Researcher for security vulnerabilities and testing best practices
 - PM for quality standards"""
+
+        elif role == 'testrunner':
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Test Runner for {spec.project.name}.
+
+Your responsibilities:
+{chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+**Test Execution Focus**:
+- Continuous test execution and monitoring
+- Parallel test suite management
+- Performance and load testing
+- Test infrastructure optimization
+- Regression test automation
+- Test result analysis and reporting
+
+**Your Workflow**:
+```bash
+# 1. Set up test infrastructure
+cd {worktree_paths.get(role, 'your-worktree')}
+# Configure test runners (pytest, jest, etc.)
+
+# 2. Execute test suites from Tester
+git fetch origin
+git merge origin/tests-{spec.git_workflow.branch_name}
+
+# 3. Run tests with various configurations
+# Unit tests, integration tests, E2E tests
+# Performance tests, load tests
+```
+
+**Test Execution Strategies**:
+1. Parallel test execution for speed
+2. Isolated test environments
+3. Continuous integration hooks
+4. Test result aggregation
+5. Failure analysis and reporting
+
+**Collaboration**:
+- Tester (get new test suites from: `{worktree_paths.get('tester', 'tester-worktree')}`)
+- Developer (verify fixes at: `{worktree_paths.get('developer', 'dev-worktree')}`)
+- DevOps for CI/CD integration
+- PM for test coverage reports
+
+Start by:
+1. Setting up test execution framework
+2. Configuring parallel test runners
+3. Creating test execution pipelines
+4. Establishing baseline metrics"""
 
         elif role == 'devops':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the DevOps Engineer for {spec.project.name}.
