@@ -4,6 +4,13 @@
 
 This document explains the enhanced cross-worktree collaboration features added to the Tmux Orchestrator's auto-orchestrate system. These improvements make it easier for agents to work together across isolated git worktrees.
 
+### Agent Deployment by Project Size
+
+- **Small Projects** (7 agents): Orchestrator, Developer, Researcher, Tester, TestRunner, LogTracker, DevOps
+- **Medium Projects** (8 agents): All Small agents + Project Manager
+- **Large Projects** (9 agents): All Medium agents + Code Reviewer
+- **Optional** (any size): Documentation Writer (add with `--roles documentation_writer`)
+
 ## Key Enhancements
 
 ### 1. Team Worktree Locations in All Briefings
@@ -13,12 +20,17 @@ Every agent now receives a comprehensive list of all team members' worktree loca
 ```
 📂 Team Worktree Locations & Cross-Worktree Collaboration:
 
-Your Team's Worktrees:
+Your Team's Worktrees (based on project size):
 - Orchestrator (orchestrator): /path/to/worktrees/orchestrator/
 - Project-Manager (project_manager): /path/to/worktrees/project_manager/
 - Developer (developer): /path/to/worktrees/developer/
 - Tester (tester): /path/to/worktrees/tester/
 - Researcher (researcher): /path/to/worktrees/researcher/
+- TestRunner (testrunner): /path/to/worktrees/testrunner/
+- LogTracker (logtracker): /path/to/worktrees/logtracker/
+- DevOps (devops): /path/to/worktrees/devops/
+- Code Reviewer (code_reviewer): /path/to/worktrees/code_reviewer/
+- Documentation Writer (documentation_writer): /path/to/worktrees/documentation_writer/
 
 Main Project Directory (shared resources): /path/to/main/project/
   - Use for shared files (mcp-inventory.md, project docs, etc.)
@@ -36,11 +48,23 @@ Main Project: /home/user/myproject/
 ├── docs/ (shared documentation)
 └── [project files]
 
-Team Worktrees:
+Team Worktrees (Small Project - 7 agents):
 ├── Orchestrator: /path/to/worktrees/orchestrator/
-├── Project-Manager: /path/to/worktrees/project_manager/
 ├── Developer: /path/to/worktrees/developer/
-└── Tester: /path/to/worktrees/tester/
+├── Researcher: /path/to/worktrees/researcher/
+├── Tester: /path/to/worktrees/tester/
+├── TestRunner: /path/to/worktrees/testrunner/
+├── LogTracker: /path/to/worktrees/logtracker/
+└── DevOps: /path/to/worktrees/devops/
+
+Additional for Medium Projects (8 agents):
+└── Project-Manager: /path/to/worktrees/project_manager/
+
+Additional for Large Projects (9 agents):
+└── Code Reviewer: /path/to/worktrees/code_reviewer/
+
+Optional (any size):
+└── Documentation Writer: /path/to/worktrees/documentation_writer/
 ```
 
 ### 3. Cross-Worktree Collaboration Instructions
@@ -148,6 +172,113 @@ cat /path/to/main/project/mcp-inventory.md
 cd /path/to/worktrees/researcher/
 mkdir -p research
 echo "# Available Tools" > research/available-tools.md
+```
+
+### TestRunner
+
+Coordinating test execution across worktrees:
+
+```bash
+# 1. Get test suites from Tester's worktree
+ls -la /path/to/worktrees/tester/tests/
+
+# 2. Pull latest code from Developer
+git fetch origin
+git merge origin/feature-branch
+
+# 3. Execute tests and save results
+cd /path/to/worktrees/testrunner/
+mkdir -p test-results
+python -m pytest /path/to/worktrees/tester/tests/ > test-results/$(date +%Y%m%d_%H%M).log
+
+# 4. Share results branch
+git add test-results/
+git commit -m "test-results: $(date) - X passed, Y failed"
+git push -u origin testrunner-results
+```
+
+### LogTracker
+
+Monitoring logs across all worktrees:
+
+```bash
+# 1. Check logs from different agents' worktrees
+find /path/to/worktrees/developer/ -name "*.log" -type f
+find /path/to/worktrees/testrunner/test-results/ -name "*.log" -type f
+
+# 2. Aggregate errors from all sources
+cd /path/to/worktrees/logtracker/
+mkdir -p logs/aggregated
+grep -r "ERROR" /path/to/worktrees/*/logs/ > logs/aggregated/errors_$(date +%Y%m%d).log
+
+# 3. Create monitoring dashboards in your worktree
+mkdir -p monitoring/dashboards
+```
+
+### DevOps
+
+Deployment coordination across worktrees:
+
+```bash
+# 1. Get deployment requirements from Developer
+cat /path/to/worktrees/developer/requirements.txt
+cat /path/to/worktrees/developer/package.json
+
+# 2. Review test results from TestRunner
+cat /path/to/worktrees/testrunner/test-results/latest.log
+
+# 3. Create deployment configs in your worktree
+cd /path/to/worktrees/devops/
+mkdir -p deployment
+echo "FROM python:3.11" > deployment/Dockerfile
+
+# 4. Coordinate with PM before deployment
+# Check PM's approval in their worktree
+ls -la /path/to/worktrees/project_manager/project_management/reviews/
+```
+
+### Code Reviewer
+
+Reviewing code across all development worktrees:
+
+```bash
+# 1. Review Developer's code
+cd /path/to/worktrees/developer/
+git log --oneline -20  # Recent commits
+git diff HEAD~5  # Recent changes
+
+# 2. Check test coverage from Tester
+cd /path/to/worktrees/tester/
+grep -r "def test_" tests/ | wc -l  # Count tests
+
+# 3. Security scan results in your worktree
+cd /path/to/worktrees/code_reviewer/
+mkdir -p security-scans
+# Run security tools and save reports
+
+# 4. Create review reports
+mkdir -p reviews
+echo "# Code Review - $(date)" > reviews/review_$(date +%Y%m%d).md
+```
+
+### Documentation Writer
+
+Documenting work from all worktrees:
+
+```bash
+# 1. Extract API endpoints from Developer's code
+grep -r "@app\." /path/to/worktrees/developer/src/ > api_endpoints.txt
+
+# 2. Get test examples from Tester
+cat /path/to/worktrees/tester/tests/test_*.py | grep "def test_"
+
+# 3. Include deployment instructions from DevOps
+cat /path/to/worktrees/devops/deployment/README.md
+
+# 4. Create comprehensive docs in your worktree
+cd /path/to/worktrees/documentation_writer/
+mkdir -p docs/api
+echo "# API Reference" > docs/api/README.md
 ```
 
 ## Important Notes
