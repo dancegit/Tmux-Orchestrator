@@ -750,6 +750,14 @@ CLAUDE_EOF
             console.print("[yellow]Please initialize git in your project: cd {self.project_path} && git init[/yellow]")
             sys.exit(1)
         
+        # First, prune any stale worktree entries globally
+        console.print("[cyan]Pruning stale worktree entries...[/cyan]")
+        subprocess.run(
+            ['git', 'worktree', 'prune'], 
+            cwd=str(self.project_path),
+            capture_output=True
+        )
+        
         # Create worktrees directory
         project_name = spec.project.name.lower().replace(' ', '-')
         worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
@@ -782,12 +790,36 @@ CLAUDE_EOF
                 # Create worktree for this role
                 worktree_path = worktrees_base / role_key
                 
-                # Remove existing worktree if it exists
+                # Handle existing or stale worktree entries
                 if worktree_path.exists():
+                    # Directory exists, remove it properly
                     subprocess.run(['rm', '-rf', str(worktree_path)], capture_output=True)
-                    # Also remove from git worktree list
-                    subprocess.run(['git', 'worktree', 'prune'], 
-                                 cwd=str(self.project_path), capture_output=True)
+                
+                # Check if this worktree is registered in git
+                list_result = subprocess.run(
+                    ['git', 'worktree', 'list'], 
+                    cwd=str(self.project_path), 
+                    capture_output=True, 
+                    text=True
+                )
+                
+                if str(worktree_path) in list_result.stdout:
+                    # Worktree is registered, try to remove it properly
+                    remove_result = subprocess.run(
+                        ['git', 'worktree', 'remove', str(worktree_path), '--force'],
+                        cwd=str(self.project_path),
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    if remove_result.returncode != 0:
+                        # If remove fails, it might be because directory is missing
+                        # Force prune to clean up stale entries
+                        subprocess.run(
+                            ['git', 'worktree', 'prune'], 
+                            cwd=str(self.project_path), 
+                            capture_output=True
+                        )
                 
                 # Create new worktree with multiple fallback strategies
                 worktree_created = False
@@ -803,6 +835,19 @@ CLAUDE_EOF
                     worktree_created = True
                 else:
                     console.print(f"[yellow]Normal worktree creation failed for {role_key}[/yellow]")
+                    
+                    # Check for specific "already registered" error
+                    if "already registered" in result.stderr and "use 'add -f' to override" in result.stderr:
+                        console.print(f"[yellow]Worktree already registered but missing, using -f flag[/yellow]")
+                        result = subprocess.run([
+                            'git', 'worktree', 'add', 
+                            '-f',  # Force flag to override registration
+                            str(worktree_path), 
+                            current_branch
+                        ], cwd=str(self.project_path), capture_output=True, text=True)
+                        
+                        if result.returncode == 0:
+                            worktree_created = True
                     
                     # Strategy 2: Try with --force flag
                     if "already checked out" in result.stderr:
@@ -870,6 +915,18 @@ CLAUDE_EOF
                             
                             if result.returncode == 0:
                                 worktree_created = True
+                            elif "already registered" in result.stderr:
+                                # Try with -f flag
+                                console.print(f"[yellow]Detached worktree already registered, using -f flag[/yellow]")
+                                result = subprocess.run([
+                                    'git', 'worktree', 'add', 
+                                    '--detach', '-f',
+                                    str(worktree_path),
+                                    commit_hash
+                                ], cwd=str(self.project_path), capture_output=True, text=True)
+                                
+                                if result.returncode == 0:
+                                    worktree_created = True
                 
                 if not worktree_created:
                     console.print(f"[red]Failed to create worktree for {role_key} after all strategies[/red]")
