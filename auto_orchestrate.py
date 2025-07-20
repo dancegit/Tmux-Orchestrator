@@ -641,26 +641,17 @@ CLAUDE_EOF
         size = self.manual_size if self.manual_size else spec.project_size.size
         
         if size == "small":
-            # Small projects: 5 agents (Core team with testing)
+            # Small projects: 6 agents (Core team with testing and infrastructure)
             core_roles = [
                 ('Orchestrator', 'orchestrator'),
                 ('Developer', 'developer'),
                 ('Researcher', 'researcher'),
                 ('Tester', 'tester'),
-                ('TestRunner', 'testrunner')
+                ('TestRunner', 'testrunner'),
+                ('DevOps', 'devops')
             ]
         elif size == "medium":
-            # Medium projects: 6 agents (+ Project Manager)
-            core_roles = [
-                ('Orchestrator', 'orchestrator'),
-                ('Project-Manager', 'project_manager'),
-                ('Developer', 'developer'),
-                ('Researcher', 'researcher'),
-                ('Tester', 'tester'),
-                ('TestRunner', 'testrunner')
-            ]
-        else:  # large
-            # Large projects: 7-8 agents (+ DevOps)
+            # Medium projects: 7 agents (+ Project Manager)
             core_roles = [
                 ('Orchestrator', 'orchestrator'),
                 ('Project-Manager', 'project_manager'),
@@ -669,6 +660,18 @@ CLAUDE_EOF
                 ('Tester', 'tester'),
                 ('TestRunner', 'testrunner'),
                 ('DevOps', 'devops')
+            ]
+        else:  # large
+            # Large projects: 8 agents (full team with all core roles)
+            core_roles = [
+                ('Orchestrator', 'orchestrator'),
+                ('Project-Manager', 'project_manager'),
+                ('Developer', 'developer'),
+                ('Researcher', 'researcher'),
+                ('Tester', 'tester'),
+                ('TestRunner', 'testrunner'),
+                ('DevOps', 'devops'),
+                ('Code-Reviewer', 'code_reviewer')
             ]
         
         # Add any additional requested roles
