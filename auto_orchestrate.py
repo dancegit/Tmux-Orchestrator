@@ -1077,7 +1077,12 @@ This file is automatically read by Claude Code when working in this directory.
         roles = [(name, idx, role) for idx, (name, role) in enumerate(roles_to_deploy)]
         
         for window_name, window_idx, role_key in roles:
-            # Start Claude
+            # Pre-initialize Claude if worktree has .mcp.json
+            worktree_path = worktree_paths.get(role_key)
+            if worktree_path:
+                self.pre_initialize_claude_in_worktree(session_name, window_idx, role_key, worktree_path)
+            
+            # Start Claude with dangerous skip permissions
             subprocess.run([
                 'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
                 'claude --dangerously-skip-permissions', 'Enter'
@@ -2092,6 +2097,55 @@ Leverage these tools as appropriate for your role."""
                     console.print("[yellow]Restored backup file[/yellow]")
                 except:
                     pass
+
+    def pre_initialize_claude_in_worktree(self, session_name: str, window_idx: int, role_key: str, worktree_path: Path):
+        """Pre-initialize Claude to auto-approve MCP servers"""
+        
+        # Check if worktree has .mcp.json
+        mcp_json_path = worktree_path / '.mcp.json'
+        if not mcp_json_path.exists():
+            return False
+        
+        console.print(f"[cyan]Pre-initializing Claude for {role_key} to approve MCP servers...[/cyan]")
+        
+        # Start Claude normally (without --dangerously-skip-permissions)
+        subprocess.run([
+            'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
+            'claude', 'Enter'
+        ])
+        
+        # Wait for MCP server prompt to appear
+        time.sleep(2)
+        
+        # Press Enter to accept default selections (all servers selected by default)
+        subprocess.run([
+            'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
+            'Enter'
+        ])
+        
+        # Wait for Claude to fully start
+        time.sleep(2)
+        
+        # Press Escape to ensure we're not in any input mode
+        subprocess.run([
+            'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
+            'Escape'
+        ])
+        
+        # Small delay
+        time.sleep(0.5)
+        
+        # Exit Claude
+        subprocess.run([
+            'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
+            '/exit', 'Enter'
+        ])
+        
+        # Wait for Claude to fully exit
+        time.sleep(1)
+        
+        console.print(f"[green]✓ Pre-initialization complete for {role_key}[/green]")
+        return True
 
     def run(self):
         """Main execution flow"""
