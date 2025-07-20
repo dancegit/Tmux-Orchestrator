@@ -3,6 +3,26 @@
 ## Overview
 When agents run low on context, they can self-recover using Claude Code's built-in commands without requiring orchestrator intervention.
 
+## Key Principle: Low Context is NOT a Crisis!
+
+**For Orchestrators**: Continue sending tasks to low-context agents (3%, 6%, etc) normally. They will:
+1. Create checkpoint documents automatically
+2. Run /compact when ready
+3. Reload context and continue working
+4. Complete your assigned tasks seamlessly
+
+**Don't**:
+- ❌ Avoid low-context agents
+- ❌ "Save" them for later
+- ❌ Stop delegating work
+- ❌ Treat it as an emergency
+
+**Do**:
+- ✅ Acknowledge their context status
+- ✅ Continue assigning tasks normally
+- ✅ Trust their self-management
+- ✅ Remind them of checkpoint docs if confused
+
 ## Self-Recovery Process for Low-Context Agents
 
 ### 1. **Create Handoff Document First**
