@@ -1235,7 +1235,12 @@ This file is automatically read by Claude Code when working in this directory.
             
             # Schedule check-ins
             if role_key != 'orchestrator':  # Orchestrator schedules its own
-                schedule_script = self.tmux_orchestrator_path / 'schedule_with_note.sh'
+                # Use credit-aware scheduling if available
+                credit_schedule_script = self.tmux_orchestrator_path / 'credit_management' / 'schedule_credit_aware.sh'
+                regular_schedule_script = self.tmux_orchestrator_path / 'schedule_with_note.sh'
+                
+                schedule_script = credit_schedule_script if credit_schedule_script.exists() else regular_schedule_script
+                
                 subprocess.run([
                     str(schedule_script),
                     str(role_config.check_in_interval),
@@ -1419,7 +1424,24 @@ Schedule your first check-in for {role_config.check_in_interval} minutes from th
 2. Inform all agents where to find team resources:
    - MCP inventory: `{self.project_path}/mcp-inventory.md`
    - Shared docs: `{self.project_path}/docs/`
-   - Team worktrees: See locations above"""
+   - Team worktrees: See locations above
+
+## 💳 Credit Management
+Monitor team credit status to ensure continuous operation:
+```bash
+cd {tool_path}
+# Quick health check
+./credit_management/check_agent_health.sh
+
+# Start continuous monitoring (run in background)
+nohup python3 credit_management/credit_monitor.py > /dev/null 2>&1 &
+```
+
+**Credit Exhaustion Handling**:
+- Agents automatically pause when credits exhausted
+- System detects UI reset times and schedules resume
+- Fallback 5-hour cycle calculation if UI parsing fails
+- Check `~/.claude/credit_schedule.json` for status"""
 
         elif role == 'project_manager':
             # Build PM-specific worktree paths for examples

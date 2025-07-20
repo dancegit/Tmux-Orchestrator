@@ -183,9 +183,10 @@ The new `auto_orchestrate.py` script provides fully automated setup:
 - **Context-Aware**: Uses `/context-prime` to understand your project before planning
 - **Spec Analysis**: Claude analyzes your markdown specifications intelligently
 - **Phase Planning**: Generates realistic implementation plans with time estimates
-- **4 Specialized Agents**: Orchestrator, PM, Developer, and Tester with defined roles
+- **Multiple Specialized Agents**: Orchestrator, PM, Developer, Tester, and more based on project needs
 - **One Command**: From fresh clone to running AI team in under a minute
 - **Git Workflow**: Enforces best practices with regular commits and PRs
+- **Credit Management**: Automatic handling of Claude Code usage limits with pause/resume
 
 ### 🔄 Self-Scheduling Agents
 Agents can schedule their own check-ins using:

@@ -1,0 +1,19 @@
+[Unit]
+Description=Claude Code Credit Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=%u
+WorkingDirectory=/home/per/gitrepos/Tmux-Orchestrator
+ExecStart=/usr/bin/python3 /home/per/gitrepos/Tmux-Orchestrator/credit_management/credit_monitor.py
+Restart=always
+RestartSec=60
+Environment="CLAUDE_CREDIT_CHECK_INTERVAL=5"
+
+# Logging
+StandardOutput=append:/home/per/.claude/credit_monitor.log
+StandardError=append:/home/per/.claude/credit_monitor.log
+
+[Install]
+WantedBy=default.target
