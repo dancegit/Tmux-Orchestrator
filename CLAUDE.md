@@ -162,9 +162,15 @@ git merge FETCH_HEAD
 The Researcher role uses MCP (Model Context Protocol) tools for comprehensive research:
 
 ### MCP Tool Discovery
-```bash
-# First command for any researcher
-/mcp  # Shows available MCP servers and their status
+```
+# Discovering MCP tools in Claude Code:
+Type @    # Shows available MCP resources from all connected servers
+Type /    # Shows all commands including MCP tools (format: /mcp__servername__promptname)
+
+# Examples of MCP commands you might find:
+/mcp__websearch__search      # Web search functionality
+/mcp__firecrawl__scrape     # Web scraping capabilities
+/mcp__puppeteer__screenshot  # Browser automation
 ```
 
 ### Common MCP Tools

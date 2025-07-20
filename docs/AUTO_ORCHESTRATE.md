@@ -233,8 +233,10 @@ Upon approval, the script:
   - Create actionable recommendations
 - **Check-ins**: Every 45 minutes
 - **Special Features**:
-  - Uses `/mcp` command to discover available research tools
-  - Leverages web search, firecrawl, context7, etc. based on availability
+  - Types `@` to discover available MCP resources
+  - Types `/` to discover MCP commands (format: `/mcp__servername__promptname`)
+  - Leverages web search, firecrawl, puppeteer, etc. based on availability
+  - Documents available tools in `research/available-tools.md`
   - Creates structured research documents in worktree
 
 ### Optional Roles (Via --roles flag)
