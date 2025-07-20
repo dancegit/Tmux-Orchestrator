@@ -868,6 +868,10 @@ CLAUDE_EOF
                     except Exception as e:
                         console.print(f"[yellow]Warning: Could not copy .mcp.json to {role_key}: {e}[/yellow]")
                 
+                # Always merge parent project's MCP configuration into worktree's .mcp.json
+                # This handles both cases: when .mcp.json was copied and when it doesn't exist
+                self.setup_mcp_for_worktree(worktree_path)
+                
                 progress.update(task, advance=1, description=f"Created worktree for {role_key}")
         
         # Display worktree summary
@@ -1779,6 +1783,68 @@ Leverage these tools as appropriate for your role."""
 """.format(', '.join(categories['database'])))
         
         return '\n'.join(strategies) if strategies else "Focus on code analysis and standard research methods."
+    
+    def setup_mcp_for_worktree(self, worktree_path: Path):
+        """Merge parent project's MCP config into worktree's .mcp.json"""
+        
+        # Read parent project's MCP config from ~/.claude.json
+        claude_json_path = Path.home() / '.claude.json'
+        parent_mcp_servers = {}
+        
+        if claude_json_path.exists():
+            try:
+                with open(claude_json_path, 'r') as f:
+                    claude_config = json.load(f)
+                    project_key = str(self.project_path)
+                    if project_key in claude_config.get('projects', {}):
+                        parent_mcp_servers = claude_config['projects'][project_key].get('mcpServers', {})
+                        if parent_mcp_servers:
+                            console.print(f"[cyan]Found {len(parent_mcp_servers)} MCP servers in parent project config[/cyan]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not read parent MCP config: {e}[/yellow]")
+        
+        # Read existing .mcp.json from worktree
+        worktree_mcp_path = worktree_path / '.mcp.json'
+        existing_config = {}
+        
+        if worktree_mcp_path.exists():
+            try:
+                with open(worktree_mcp_path, 'r') as f:
+                    existing_config = json.load(f)
+                    if 'mcpServers' in existing_config:
+                        console.print(f"[cyan]Found {len(existing_config.get('mcpServers', {}))} MCP servers in existing .mcp.json[/cyan]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not read existing .mcp.json: {e}[/yellow]")
+        
+        # If no parent MCP servers and no existing config, nothing to do
+        if not parent_mcp_servers and not existing_config:
+            return
+        
+        # Merge configurations
+        merged_config = existing_config.copy() if existing_config else {"mcpServers": {}}
+        
+        # Ensure mcpServers key exists
+        if "mcpServers" not in merged_config:
+            merged_config["mcpServers"] = {}
+        
+        # Add parent's servers that don't conflict
+        added_count = 0
+        for server_name, server_config in parent_mcp_servers.items():
+            if server_name not in merged_config["mcpServers"]:
+                merged_config["mcpServers"][server_name] = server_config
+                added_count += 1
+        
+        # Write the merged configuration
+        if merged_config["mcpServers"] or existing_config:
+            try:
+                with open(worktree_mcp_path, 'w') as f:
+                    json.dump(merged_config, f, indent=2)
+                
+                if added_count > 0:
+                    console.print(f"[green]✓ Added {added_count} MCP servers from parent project[/green]")
+                console.print(f"[green]  Total MCP servers in worktree: {len(merged_config['mcpServers'])}[/green]")
+            except Exception as e:
+                console.print(f"[red]Error writing merged .mcp.json: {e}[/red]")
 
     def run(self):
         """Main execution flow"""
