@@ -22,7 +22,7 @@ import time
 import re
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import tempfile
 
@@ -64,12 +64,18 @@ class GitWorkflow(BaseModel):
     commit_interval: int
     pr_title: str
 
+class ProjectSize(BaseModel):
+    size: str = Field(default="medium", description="small|medium|large")
+    estimated_loc: int = Field(default=1000)
+    complexity: str = Field(default="medium")
+
 class ImplementationSpec(BaseModel):
     project: Project
     implementation_plan: ImplementationPlan
     roles: Dict[str, RoleConfig]
     git_workflow: GitWorkflow
     success_criteria: List[str]
+    project_size: ProjectSize = Field(default_factory=ProjectSize)
 
 
 class AutoOrchestrator:
@@ -78,6 +84,8 @@ class AutoOrchestrator:
         self.spec_path = Path(spec_path).resolve()
         self.tmux_orchestrator_path = Path(__file__).parent
         self.implementation_spec: Optional[ImplementationSpec] = None
+        self.manual_size: Optional[str] = None
+        self.additional_roles: List[str] = []
         
     def ensure_setup(self):
         """Ensure Tmux Orchestrator is properly set up"""
@@ -317,6 +325,11 @@ Generate a JSON implementation plan with this EXACT structure:
     ],
     "total_estimated_hours": 12.0
   }},
+  "project_size": {{
+    "size": "small|medium|large",
+    "estimated_loc": 1000,
+    "complexity": "low|medium|high"
+  }},
   "roles": {{
     "orchestrator": {{
       "responsibilities": ["Monitor progress", "Coordinate roles", "Handle blockers"],
@@ -337,6 +350,26 @@ Generate a JSON implementation plan with this EXACT structure:
       "responsibilities": ["Run tests", "Report failures", "Verify coverage"],
       "check_in_interval": 45,
       "initial_commands": ["cd {self.project_path}", "echo 'Ready to test'"]
+    }},
+    "devops": {{
+      "responsibilities": ["Infrastructure setup", "Deployment pipelines", "Monitor performance"],
+      "check_in_interval": 90,
+      "initial_commands": ["cd {self.project_path}", "echo 'Checking deployment configuration'"]
+    }},
+    "code_reviewer": {{
+      "responsibilities": ["Review code quality", "Security audit", "Best practices enforcement"],
+      "check_in_interval": 120,
+      "initial_commands": ["cd {self.project_path}", "git log --oneline -10"]
+    }},
+    "researcher": {{
+      "responsibilities": ["Evaluate technologies", "Research solutions", "Document findings"],
+      "check_in_interval": 120,
+      "initial_commands": ["cd {self.project_path}", "echo 'Ready to research'"]
+    }},
+    "documentation_writer": {{
+      "responsibilities": ["Write technical docs", "Update README", "Create API documentation"],
+      "check_in_interval": 120,
+      "initial_commands": ["cd {self.project_path}", "ls -la *.md"]
     }}
   }},
   "git_workflow": {{
@@ -356,6 +389,11 @@ IMPORTANT:
 - Analyze the spec carefully to understand what needs to be implemented
 - Create realistic time estimates based on complexity
 - Include specific, actionable tasks for each phase
+- Determine project size based on scope and complexity:
+  - Small: < 500 LOC, simple features, 1-2 days work
+  - Medium: 500-5000 LOC, moderate complexity, 3-7 days work  
+  - Large: > 5000 LOC, complex features, > 1 week work
+- Include ALL roles in the JSON, but the orchestrator will decide which ones to actually deploy based on project size
 - Ensure role responsibilities align with the implementation needs
 - IMPORTANT: The parent_branch field MUST be set to "{current_branch}" as this is the branch we're currently on
 - The feature branch will be created FROM this parent branch, not from main
@@ -464,6 +502,17 @@ CLAUDE_EOF
         console.print(phases_table)
         console.print(f"\n[bold]Total Estimated Time:[/bold] {spec.implementation_plan.total_estimated_hours} hours\n")
         
+        # Project size info
+        size_info = f"Project Size: [yellow]{spec.project_size.size}[/yellow]"
+        if self.manual_size and self.manual_size != spec.project_size.size:
+            size_info += f" (overridden from auto-detected: {spec.project_size.size})"
+        console.print(size_info)
+        
+        if self.additional_roles:
+            console.print(f"Additional Roles Requested: [cyan]{', '.join(self.additional_roles)}[/cyan]")
+        
+        console.print()
+        
         # Roles and responsibilities
         roles_table = Table(title="Role Assignments")
         roles_table.add_column("Role", style="cyan")
@@ -499,11 +548,65 @@ CLAUDE_EOF
             title="🔀 Git Workflow"
         ))
         
+        # Show which roles will actually be deployed
+        roles_to_deploy = self.get_roles_for_project_size(spec)
+        console.print(f"\n[bold]Roles to be deployed:[/bold] {', '.join([r[0] for r in roles_to_deploy])}")
+        
         return Confirm.ask("\n[bold]Proceed with automated setup?[/bold]", default=False)
     
+    def get_roles_for_project_size(self, spec: ImplementationSpec) -> List[Tuple[str, str]]:
+        """Determine which roles to deploy based on project size"""
+        # Always include orchestrator and project manager
+        base_roles = [
+            ('Orchestrator', 'orchestrator'),
+            ('Project-Manager', 'project_manager')
+        ]
+        
+        # Use manual size override if provided
+        size = self.manual_size if self.manual_size else spec.project_size.size
+        
+        if size == "small":
+            # Small projects: PM + 1 Developer
+            core_roles = base_roles + [
+                ('Developer', 'developer')
+            ]
+        elif size == "medium":
+            # Medium projects: PM + 2 Developers + QA
+            core_roles = base_roles + [
+                ('Developer', 'developer'),
+                ('Developer-2', 'developer'),  # Second developer
+                ('Tester', 'tester')
+            ]
+        else:  # large
+            # Large projects: Full team including specialized roles
+            core_roles = base_roles + [
+                ('Lead-Developer', 'developer'),
+                ('Developer-2', 'developer'),
+                ('Tester', 'tester'),
+                ('DevOps', 'devops'),
+                ('Code-Reviewer', 'code_reviewer')
+            ]
+        
+        # Add any additional requested roles
+        role_mapping = {
+            'researcher': ('Researcher', 'researcher'),
+            'documentation_writer': ('Documentation', 'documentation_writer'),
+            'documentation': ('Documentation', 'documentation_writer'),
+            'docs': ('Documentation', 'documentation_writer')
+        }
+        
+        for role in self.additional_roles:
+            if role.lower() in role_mapping:
+                core_roles.append(role_mapping[role.lower()])
+        
+        return core_roles
+    
     def setup_tmux_session(self, spec: ImplementationSpec):
-        """Set up the tmux session with all roles"""
+        """Set up the tmux session with roles based on project size"""
         session_name = spec.project.name.lower().replace(' ', '-')[:20] + "-impl"
+        
+        # Determine which roles to deploy
+        roles_to_deploy = self.get_roles_for_project_size(spec)
         
         with Progress(
             SpinnerColumn(),
@@ -512,52 +615,48 @@ CLAUDE_EOF
         ) as progress:
             
             # Create tmux session
-            task = progress.add_task("Creating tmux session...", total=4)
+            task = progress.add_task("Creating tmux session...", total=len(roles_to_deploy))
             
             # Kill existing session if it exists
             subprocess.run(['tmux', 'kill-session', '-t', session_name], 
                          capture_output=True)
             
-            # Create new session with orchestrator window
+            # Create new session with first role (orchestrator)
+            first_window, first_role = roles_to_deploy[0]
+            working_dir = str(self.tmux_orchestrator_path) if first_role == 'orchestrator' else str(self.project_path)
+            
             subprocess.run([
                 'tmux', 'new-session', '-d', '-s', session_name,
-                '-n', 'Orchestrator', '-c', str(self.tmux_orchestrator_path)
+                '-n', first_window, '-c', working_dir
             ], check=True)
             
-            progress.update(task, advance=1, description="Created Orchestrator window...")
+            progress.update(task, advance=1, description=f"Created {first_window} window...")
             
             # Create other role windows
-            roles = [
-                ('Project-Manager', 'project_manager'),
-                ('Developer', 'developer'),
-                ('Tester', 'tester')
-            ]
-            
-            for window_name, role_key in roles:
+            for window_name, role_key in roles_to_deploy[1:]:
+                working_dir = str(self.tmux_orchestrator_path) if role_key == 'orchestrator' else str(self.project_path)
                 subprocess.run([
                     'tmux', 'new-window', '-t', session_name,
-                    '-n', window_name, '-c', str(self.project_path)
+                    '-n', window_name, '-c', working_dir
                 ], check=True)
                 progress.update(task, advance=1, description=f"Created {window_name} window...")
             
             # Start Claude in each window and send initial briefings
-            self.brief_all_roles(session_name, spec)
+            self.brief_all_roles(session_name, spec, roles_to_deploy)
             
-            console.print(f"\n[green]✓ Tmux session '{session_name}' created successfully![/green]")
+            console.print(f"\n[green]✓ Tmux session '{session_name}' created with {len(roles_to_deploy)} roles![/green]")
+            console.print(f"\nProject size: [yellow]{spec.project_size.size}[/yellow]")
+            console.print(f"Deployed roles: {', '.join([r[0] for r in roles_to_deploy])}")
             console.print(f"\nTo attach: [cyan]tmux attach -t {session_name}[/cyan]")
     
-    def brief_all_roles(self, session_name: str, spec: ImplementationSpec):
+    def brief_all_roles(self, session_name: str, spec: ImplementationSpec, roles_to_deploy: List[Tuple[str, str]]):
         """Start Claude in each window and provide role-specific briefings"""
         
         # Check if Claude version supports context priming
         supports_context_prime = self.check_claude_version()
         
-        roles = [
-            ('Orchestrator', 0, 'orchestrator'),
-            ('Project-Manager', 1, 'project_manager'),
-            ('Developer', 2, 'developer'),
-            ('Tester', 3, 'tester')
-        ]
+        # Convert roles_to_deploy to include window indices
+        roles = [(name, idx, role) for idx, (name, role) in enumerate(roles_to_deploy)]
         
         for window_name, window_idx, role_key in roles:
             # Start Claude
@@ -592,7 +691,8 @@ CLAUDE_EOF
             
             # Create briefing
             briefing = self.create_role_briefing(role_key, spec, role_config, 
-                                                context_primed=supports_context_prime)
+                                                context_primed=supports_context_prime,
+                                                roles_deployed=roles_to_deploy)
             
             # Send briefing using send-claude-message.sh
             send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
@@ -622,8 +722,15 @@ CLAUDE_EOF
                 ])
     
     def create_role_briefing(self, role: str, spec: ImplementationSpec, role_config: RoleConfig, 
-                           context_primed: bool = True) -> str:
+                           context_primed: bool = True, roles_deployed: List[Tuple[str, str]] = None) -> str:
         """Create a role-specific briefing message"""
+        
+        # Get the actual team composition
+        if roles_deployed:
+            team_windows = [f"- {name} (window {idx})" for idx, (name, role_type) in enumerate(roles_deployed) if role_type != 'orchestrator']
+            team_description = "\n".join(team_windows)
+        else:
+            team_description = "- Check 'tmux list-windows' to see your team"
         
         # Add note about context priming if not available
         context_note = ""
@@ -648,10 +755,15 @@ Project Overview:
 - Technologies: {', '.join(spec.project.main_tech)}
 - Total estimated time: {spec.implementation_plan.total_estimated_hours} hours
 
-You have a team of:
-- Project Manager (window 1) - Quality and progress tracking
-- Developer (window 2) - Implementation
-- Tester (window 3) - Testing and verification
+Project size: {spec.project_size.size}
+Estimated complexity: {spec.project_size.complexity}
+
+Your team composition will vary based on project size:
+- Small: PM + Developer
+- Medium: PM + 2 Developers + Tester  
+- Large: PM + Lead Dev + Developer + Tester + DevOps + Code Reviewer
+
+Check actual team members with: tmux list-windows -t session-name
 
 Use these commands:
 - Check status: python3 claude_control.py status detailed
@@ -679,10 +791,10 @@ Git Workflow:
 - Commit every {spec.git_workflow.commit_interval} minutes
 - PR Title: {spec.git_workflow.pr_title}
 
-Coordinate with:
-- Developer (window 2) for implementation
-- Tester (window 3) for quality assurance
-- Report to Orchestrator (window 0)
+Your Team (based on project size: {spec.project_size.size}):
+{team_description}
+
+Always report to Orchestrator (window 0)
 
 Maintain EXCEPTIONAL quality standards. No compromises."""
 
@@ -726,7 +838,7 @@ Start by:
 
 Report progress to PM (window 1) regularly."""
 
-        else:  # tester
+        elif role == 'tester':
             return f"""{context_note}You are the Tester for {spec.project.name}.
 
 Your responsibilities:
@@ -750,6 +862,155 @@ Start by:
 3. Running current test suite as baseline
 
 Work closely with Developer to ensure quality."""
+
+        elif role == 'devops':
+            return f"""{context_note}You are the DevOps Engineer for {spec.project.name}.
+
+Your responsibilities:
+{chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+Project Infrastructure:
+- Type: {spec.project.type}
+- Technologies: {', '.join(spec.project.main_tech)}
+- Path: {spec.project.path}
+
+Key Tasks:
+1. Analyze current deployment configuration
+2. Set up CI/CD pipelines if needed
+3. Optimize build and deployment processes
+4. Monitor performance and resource usage
+5. Ensure security best practices
+
+Start by:
+1. Check for existing deployment configs (Dockerfile, docker-compose.yml, etc.)
+2. Review any CI/CD configuration (.github/workflows, .gitlab-ci.yml, etc.)
+3. Identify infrastructure requirements
+4. Document deployment procedures
+
+Coordinate with:
+- Developer on build requirements
+- PM on deployment timelines
+- Tester on staging environments"""
+
+        elif role == 'code_reviewer':
+            return f"""{context_note}You are the Code Reviewer for {spec.project.name}.
+
+Your responsibilities:
+{chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+Review Focus:
+- Code quality and maintainability
+- Security vulnerabilities
+- Performance implications
+- Adherence to project conventions
+- Test coverage
+
+Git Workflow:
+- Review feature branch: {spec.git_workflow.branch_name}
+- Ensure commits follow project standards
+- Check for sensitive data in commits
+
+Review Process:
+1. Monitor commits from Developer
+2. Review code changes for:
+   - Logic errors
+   - Security issues
+   - Performance problems
+   - Code smells
+   - Missing tests
+3. Provide constructive feedback
+4. Approve only high-quality code
+
+Start by:
+1. Understanding project coding standards
+2. Reviewing recent commit history
+3. Setting up security scanning tools if available
+
+Work with Developer to maintain code excellence."""
+
+        elif role == 'researcher':
+            return f"""{context_note}You are the Technical Researcher for {spec.project.name}.
+
+Your responsibilities:
+{chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+Research Areas:
+- Current technologies: {', '.join(spec.project.main_tech)}
+- Implementation challenges in the spec
+- Best practices for the project type
+- Performance optimization opportunities
+- Security considerations
+
+Research Workflow:
+1. Analyze technical requirements from spec
+2. Research best solutions for challenges
+3. Document findings with examples
+4. Provide recommendations to team
+5. Stay updated on relevant technologies
+
+Start by:
+1. Reading the full specification
+2. Identifying technical unknowns
+3. Researching solutions for Phase 1 tasks
+
+Share findings with:
+- Developer for implementation guidance
+- PM for technical decisions
+- DevOps for infrastructure choices"""
+
+        elif role == 'documentation_writer':
+            return f"""{context_note}You are the Documentation Writer for {spec.project.name}.
+
+Your responsibilities:
+{chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+Documentation Priorities:
+- API documentation
+- Setup and installation guides
+- Architecture documentation
+- User guides
+- Code comments and docstrings
+
+Project Context:
+- Technologies: {', '.join(spec.project.main_tech)}
+- Type: {spec.project.type}
+
+Documentation Standards:
+1. Clear and concise writing
+2. Code examples where helpful
+3. Diagrams for complex concepts
+4. Keep docs in sync with code
+5. Version documentation with releases
+
+Start by:
+1. Reviewing existing documentation
+2. Identifying documentation gaps
+3. Creating a documentation plan
+4. Beginning with setup/installation docs
+
+Coordinate with:
+- Developer on implementation details
+- PM on documentation priorities
+- Tester on testing procedures"""
+
+        else:
+            # Fallback for any undefined roles
+            return f"""{context_note}You are a team member for {spec.project.name}.
+
+Your role: {role}
+
+General responsibilities:
+- Support the team's goals
+- Communicate progress regularly
+- Maintain high quality standards
+- Follow project conventions
+
+Start by:
+1. Understanding the project and your role
+2. Reviewing the specification
+3. Coordinating with the Project Manager
+
+Report to PM (window 1) for specific task assignments."""
 
     def run(self):
         """Main execution flow"""
@@ -817,9 +1078,26 @@ Work closely with Developer to ensure quality."""
               help='Path to the GitHub project')
 @click.option('--spec', '-s', required=True, type=click.Path(exists=True),
               help='Path to the specification markdown file')
-def main(project: str, spec: str):
-    """Automatically set up a Tmux Orchestrator environment from a specification."""
+@click.option('--size', type=click.Choice(['auto', 'small', 'medium', 'large']), 
+              default='auto', help='Project size (auto-detect by default)')
+@click.option('--roles', multiple=True, 
+              help='Additional roles to include (e.g., --roles researcher --roles documentation_writer)')
+def main(project: str, spec: str, size: str, roles: tuple):
+    """Automatically set up a Tmux Orchestrator environment from a specification.
+    
+    The script will analyze your specification and set up a complete tmux
+    orchestration environment with AI agents based on project size:
+    
+    - Small projects: Orchestrator + PM + Developer
+    - Medium projects: + Tester (QA)
+    - Large projects: + DevOps + Code Reviewer
+    
+    You can manually specify project size with --size or add specific roles
+    with --roles (e.g., --roles researcher --roles documentation_writer)
+    """
     orchestrator = AutoOrchestrator(project, spec)
+    orchestrator.manual_size = size if size != 'auto' else None
+    orchestrator.additional_roles = list(roles) if roles else []
     orchestrator.run()
 
 
