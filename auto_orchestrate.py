@@ -881,6 +881,26 @@ CLAUDE_EOF
         
         return worktree_paths
     
+    def create_worktree_map(self, worktree_paths: Dict[str, Path], roles_deployed: List[Tuple[str, str]]) -> str:
+        """Create a visual map of worktree locations for better clarity"""
+        if not worktree_paths or not roles_deployed:
+            return ""
+            
+        map_str = "\n📍 **Quick Reference - Team Locations Map**:\n```\n"
+        map_str += f"Main Project: {self.project_path}/\n"
+        map_str += "├── mcp-inventory.md (shared by all)\n"
+        map_str += "├── docs/ (shared documentation)\n"
+        map_str += "└── [project files]\n\n"
+        
+        map_str += "Team Worktrees:\n"
+        for window_name, role_key in roles_deployed:
+            if role_key in worktree_paths:
+                path = worktree_paths[role_key]
+                map_str += f"├── {window_name}: {path}/\n"
+        
+        map_str += "```\n"
+        return map_str
+    
     def get_worktree_branch_info(self, worktree_path: Path) -> str:
         """Get information about the worktree's branch status"""
         result = subprocess.run([
@@ -1145,12 +1165,47 @@ Your worktree location: `{worktree_paths.get(role, 'N/A')}`
         # Team worktree locations for all agents
         team_locations = ""
         if worktree_paths and roles_deployed:
-            team_locations = "\n📂 **Team Worktree Locations**:\n"
+            team_locations = "\n📂 **Team Worktree Locations & Cross-Worktree Collaboration**:\n\n"
+            team_locations += "**Your Team's Worktrees**:\n"
             for window_name, role_key in roles_deployed:
                 if role_key in worktree_paths:
-                    team_locations += f"- **{window_name}**: `{worktree_paths[role_key]}`\n"
-            team_locations += f"\n**Main Project Directory** (shared by all): `{self.project_path}`\n"
-            team_locations += "Files in the main project directory are accessible to all agents.\n\n"
+                    team_locations += f"- **{window_name}** ({role_key}): `{worktree_paths[role_key]}`\n"
+            team_locations += f"\n**Main Project Directory** (shared resources): `{self.project_path}`\n"
+            team_locations += "  - Use for shared files (mcp-inventory.md, project docs, etc.)\n"
+            team_locations += "  - All agents can read/write here\n"
+            
+            # Add cross-worktree collaboration guide
+            team_locations += "\n🔄 **Cross-Worktree Collaboration Guide**:\n\n"
+            team_locations += "**To review another agent's code**:\n"
+            team_locations += "```bash\n"
+            team_locations += "# Read files from another agent's worktree\n"
+            team_locations += "# Example: PM reviewing Developer's code\n"
+            if 'developer' in worktree_paths:
+                team_locations += f"cat {worktree_paths['developer']}/src/main.py\n"
+            team_locations += "\n"
+            team_locations += "# List files in another agent's worktree\n"
+            if 'tester' in worktree_paths:
+                team_locations += f"ls -la {worktree_paths['tester']}/tests/\n"
+            team_locations += "```\n\n"
+            
+            team_locations += "**To get another agent's changes**:\n"
+            team_locations += "```bash\n"
+            team_locations += "# Fetch and merge changes from another agent's branch\n"
+            team_locations += "git fetch origin\n"
+            team_locations += "git branch -r  # See all remote branches\n"
+            team_locations += "git merge origin/feature-developer  # Merge developer's branch\n"
+            team_locations += "```\n\n"
+            
+            team_locations += "**To share your changes**:\n"
+            team_locations += "```bash\n"
+            team_locations += "# Push your branch so others can access it\n"
+            team_locations += "git add -A && git commit -m \"Your changes\"\n"
+            team_locations += "git push -u origin your-branch-name\n"
+            team_locations += "```\n"
+            
+            # Add visual map
+            team_locations += self.create_worktree_map(worktree_paths, roles_deployed)
+            team_locations += "\n"
         
         # Get the actual team composition
         if roles_deployed:
@@ -1229,13 +1284,66 @@ cd {worktree_paths.get(role, 'N/A')}
 
 Schedule your first check-in for {role_config.check_in_interval} minutes from the tool directory.
 
-**IMMEDIATE TASK**: Create 'mcp-inventory.md' in your project worktree documenting the available MCP tools for the team."""
+**IMMEDIATE TASKS**:
+1. Create `{self.project_path}/mcp-inventory.md` in the MAIN project directory (not your worktree!)
+   - This ensures ALL agents can access it
+   - Document available MCP tools for the team
+2. Inform all agents where to find team resources:
+   - MCP inventory: `{self.project_path}/mcp-inventory.md`
+   - Shared docs: `{self.project_path}/docs/`
+   - Team worktrees: See locations above"""
 
         elif role == 'project_manager':
+            # Build PM-specific worktree paths for examples
+            dev_path = worktree_paths.get('developer', '/path/to/developer')
+            test_path = worktree_paths.get('tester', '/path/to/tester')
+            
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Project Manager for {spec.project.name}.
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+🔍 **CODE REVIEW WORKFLOWS**:
+
+**Daily Code Review Process**:
+```bash
+# 1. Review Developer's changes
+cd {dev_path}
+git status  # Check their current work
+git log --oneline -10  # Review recent commits
+git diff HEAD~1  # Review latest changes
+
+# 2. Review test coverage
+cd {test_path}
+ls -la tests/  # Check test structure
+grep -r "test_" tests/  # Find all test functions
+
+# 3. Cross-reference implementation with tests
+# Use Read tool for detailed review:
+# Read {dev_path}/src/feature.py
+# Read {test_path}/tests/test_feature.py
+```
+
+**Quality Verification Checklist**:
+- [ ] Code follows project conventions (check against existing code)
+- [ ] All new functions have tests
+- [ ] Error handling is comprehensive
+- [ ] Documentation is updated
+- [ ] No hardcoded values or secrets
+- [ ] Performance implications considered
+
+**Coordinating Merges Between Worktrees**:
+```bash
+# When Developer is ready to share:
+# Tell Developer: "Please push your branch: git push -u origin feature-dev"
+
+# Then in your worktree:
+git fetch origin
+git checkout -b review-feature
+git merge origin/feature-dev
+# Review merged code
+# If approved, coordinate merge to parent branch
+```
 
 Implementation Phases:
 {chr(10).join(f'{i+1}. {p.name} ({p.duration_hours}h)' for i, p in enumerate(spec.implementation_plan.phases))}
@@ -1255,7 +1363,10 @@ Your Team (based on project size: {spec.project_size.size}):
 
 🔍 **Researcher Available**: Check with the Researcher for best practices, security analysis, and performance recommendations before making critical decisions.
 
-Always report to Orchestrator (window 0)
+**Communication Protocol**:
+- Check each team member's worktree every 30 minutes
+- Use specific file paths when discussing code
+- Always report blockers to Orchestrator immediately
 
 Maintain EXCEPTIONAL quality standards. No compromises."""
 
@@ -1301,6 +1412,20 @@ git fetch origin
 git merge origin/their-branch-name
 ```
 
+**Making Your Code Reviewable**:
+```bash
+# 1. Commit frequently with clear messages
+git add -A
+git commit -m "feat: implement user authentication endpoint"
+
+# 2. Push your branch for PM review
+git push -u origin {spec.git_workflow.branch_name}
+
+# 3. Notify PM when ready for review
+# "Ready for review: authentication module in src/auth/"
+# "Tests added in tests/test_auth.py"
+```
+
 Start by:
 1. Reading the spec at: {self.spec_path}
 2. 🔍 **Check with Researcher** for best practices and security considerations
@@ -1309,9 +1434,11 @@ Start by:
 5. Beginning implementation of Phase 1
 
 Collaborate with:
-- PM (window 1) for progress updates
+- PM for code reviews (push branches regularly)
 - Researcher for technical guidance and best practices
-- Tester for early testing feedback"""
+- Tester for early testing feedback
+
+**Remember**: Your code is in `{worktree_paths.get(role, 'your-worktree')}` - PM will review it there!"""
 
         elif role == 'tester':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Tester for {spec.project.name}.
@@ -1324,12 +1451,36 @@ Testing Focus:
 - Ensure all success criteria are met:
 {chr(10).join(f'  - {c}' for c in spec.success_criteria)}
 {mcp_guidance}
+**Testing Across Worktrees**:
+```bash
+# 1. Get Developer's latest code
+git fetch origin
+git merge origin/{spec.git_workflow.branch_name}
+
+# 2. Or directly test files from Developer's worktree
+python -m pytest {worktree_paths.get('developer', '/dev/worktree')}/tests/
+
+# 3. Create tests based on Developer's implementation
+# Read their code: cat {worktree_paths.get('developer', '/dev/worktree')}/src/module.py
+# Write corresponding tests in your worktree
+```
+
 Your workflow:
-1. Monitor Developer (window 2) progress
-2. Run tests after each commit
+1. Monitor Developer's worktree for new code
+2. Run tests after each Developer commit
 3. Report failures immediately to PM and Developer
 4. Track test coverage metrics
 5. Verify no regressions occur
+
+**Test Results Sharing**:
+```bash
+# Push your test branch for team visibility
+git add tests/
+git commit -m "test: add integration tests for auth module"
+git push -u origin tests-{spec.git_workflow.branch_name}
+
+# Notify team: "New tests added: 95% coverage on auth module"
+```
 
 Start by:
 1. Understanding the existing test structure
@@ -1338,7 +1489,7 @@ Start by:
 4. Running current test suite as baseline
 
 Collaborate with:
-- Developer for implementation details
+- Developer (access code at: `{worktree_paths.get('developer', 'dev-worktree')}`)
 - Researcher for security vulnerabilities and testing best practices
 - PM for quality standards"""
 
@@ -1412,12 +1563,21 @@ Work with Developer to maintain code excellence."""
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Technical Researcher for {spec.project.name}.
 
 📋 **Pre-Session Note**: 
-- Check `{self.project_path}/mcp-inventory.md` for the MCP tools inventory from Orchestrator
-- MCP servers should already be configured in Claude Code
-- If the orchestrator needs to verify MCP availability beforehand:
-  - Run `claude mcp list` in terminal to see configured servers
-  - Check `.claude.json` for mcpServers configuration
-  - Look for "✔ Found X MCP servers" when Claude Code starts
+- **IMPORTANT**: Check `{self.project_path}/mcp-inventory.md` (in MAIN project, not your worktree!)
+- This file is created by the Orchestrator and lists all available MCP tools
+- Your worktree: `{worktree_paths.get(role, 'N/A')}`
+- Main project with shared resources: `{self.project_path}`
+
+**Accessing Shared Resources**:
+```bash
+# Read the MCP inventory from main project
+cat {self.project_path}/mcp-inventory.md
+
+# Your research outputs go in YOUR worktree
+cd {worktree_paths.get(role, 'your-worktree')}
+mkdir -p research
+echo "# Available Tools" > research/available-tools.md
+```
 
 🔍 **CRITICAL MCP TOOL DISCOVERY WORKFLOW**:
 
