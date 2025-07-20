@@ -155,6 +155,7 @@ Tmux-Orchestrator/
                 ├── orchestrator/      # Orchestrator's project workspace
                 ├── project-manager/
                 ├── developer/
+                ├── researcher/        # Researcher's workspace (core role)
                 ├── tester/
                 └── devops/
 ```
@@ -164,8 +165,8 @@ Tmux-Orchestrator/
 Upon approval, the script:
 1. Creates a new tmux session named `{project}-impl`
 2. Sets up windows based on project size:
-   - **Small**: Orchestrator, PM, Developer
-   - **Medium**: + Tester + Second Developer
+   - **Small**: Orchestrator, PM, Developer, Researcher
+   - **Medium**: + Second Developer + Tester
    - **Large**: + DevOps + Code Reviewer
 3. Each agent works in their own git worktree (including Orchestrator)
 4. Starts Claude in each window
@@ -196,10 +197,8 @@ Upon approval, the script:
 - **Check-ins**: Every 30 minutes
 - **Focus**: Maintaining exceptional standards, coordinating merges between worktrees
 
-### Development Roles (Based on Project Size)
-
 #### Developer
-- **Location**: Window 2+, Own git worktree
+- **Location**: Own git worktree
 - **Worktree**: `registry/projects/{name}/worktrees/developer/`
 - **Responsibilities**: Implementation, testing, documentation
 - **Check-ins**: Every 60 minutes
@@ -224,11 +223,21 @@ Upon approval, the script:
 - **Responsibilities**: Code quality, security audit, best practices
 - **Check-ins**: Every 120 minutes
 
-### Optional Roles (Via --roles flag)
+#### Researcher (Core Role)
+- **Location**: Own git worktree
+- **Worktree**: `registry/projects/{name}/worktrees/researcher/`
+- **Responsibilities**: 
+  - MCP tool discovery and utilization
+  - Research best practices and security vulnerabilities
+  - Performance optimization research
+  - Create actionable recommendations
+- **Check-ins**: Every 45 minutes
+- **Special Features**:
+  - Uses `/mcp` command to discover available research tools
+  - Leverages web search, firecrawl, context7, etc. based on availability
+  - Creates structured research documents in worktree
 
-#### Researcher
-- **Responsibilities**: Technology evaluation, solution research, documentation
-- **Check-ins**: Every 120 minutes
+### Optional Roles (Via --roles flag)
 
 #### Documentation Writer
 - **Responsibilities**: Technical docs, README updates, API documentation
