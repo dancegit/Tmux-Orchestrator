@@ -204,7 +204,7 @@ Upon approval, the script:
 5. Ensures each worktree has a CLAUDE.md referencing orchestrator rules
 6. Runs `/context-prime` for each agent (if available)
 7. Sends role-specific briefings with mandatory rule reading
-8. Configures scheduled check-ins (45-90 min intervals to conserve tokens)
+8. Configures scheduled check-ins (20-60 min intervals for better progression)
 
 ## Role Descriptions
 
@@ -215,7 +215,7 @@ Upon approval, the script:
 - **Worktree**: `registry/projects/{name}/worktrees/orchestrator/`
 - **Tool Directory**: Tmux-Orchestrator root (for running tools)
 - **Responsibilities**: High-level oversight, coordination, blocker resolution
-- **Check-ins**: Every 30 minutes
+- **Check-ins**: Every 20 minutes
 - **Workflow**: 
   - Works in project worktree for all project files
   - Switches to tool directory to run orchestrator commands
@@ -225,34 +225,34 @@ Upon approval, the script:
 - **Location**: Window 1, Own git worktree
 - **Worktree**: `registry/projects/{name}/worktrees/project_manager/`
 - **Responsibilities**: Quality assurance, progress tracking, team coordination
-- **Check-ins**: Every 30 minutes
+- **Check-ins**: Every 25 minutes
 - **Focus**: Maintaining exceptional standards, coordinating merges between worktrees
 
 #### Developer
 - **Location**: Own git worktree
 - **Worktree**: `registry/projects/{name}/worktrees/developer/`
 - **Responsibilities**: Implementation, testing, documentation
-- **Check-ins**: Every 60 minutes
+- **Check-ins**: Every 30 minutes
 - **Git**: Creates feature branch, commits every 30 minutes
 
 #### Tester (Medium/Large Projects)
 - **Location**: Own git worktree
 - **Worktree**: `registry/projects/{name}/worktrees/tester/`
 - **Responsibilities**: Test execution, coverage tracking, regression prevention
-- **Check-ins**: Every 45 minutes
+- **Check-ins**: Every 30 minutes
 - **Integration**: Works closely with Developer
 
 #### DevOps (Large Projects)
 - **Location**: Own git worktree
 - **Worktree**: `registry/projects/{name}/worktrees/devops/`
 - **Responsibilities**: Infrastructure setup, deployment pipelines, monitoring
-- **Check-ins**: Every 90 minutes
+- **Check-ins**: Every 45 minutes
 
 #### Code Reviewer (Large Projects)
 - **Location**: Own git worktree
 - **Worktree**: `registry/projects/{name}/worktrees/code_reviewer/`
 - **Responsibilities**: Code quality, security audit, best practices
-- **Check-ins**: Every 120 minutes
+- **Check-ins**: Every 40 minutes
 
 #### Researcher (Core Role)
 - **Location**: Own git worktree
@@ -262,7 +262,7 @@ Upon approval, the script:
   - Research best practices and security vulnerabilities
   - Performance optimization research
   - Create actionable recommendations
-- **Check-ins**: Every 45 minutes
+- **Check-ins**: Every 25 minutes
 - **Special Features**:
   - Reads `{project}/mcp-inventory.md` created by Orchestrator
   - Types `@` to discover available MCP resources
@@ -275,7 +275,7 @@ Upon approval, the script:
 
 #### Documentation Writer
 - **Responsibilities**: Technical docs, README updates, API documentation
-- **Check-ins**: Every 120 minutes
+- **Check-ins**: Every 60 minutes
 
 ## Writing Effective Specifications
 
@@ -431,13 +431,17 @@ Multi-agent systems use approximately **15x more tokens** than standard Claude u
 - **Max 5x Plan**: Optimal with 3-4 agents (5 max)
 - **Max 20x Plan**: Can comfortably run 5-6 agents
 
-### Token Conservation Strategies
+### Check-in Intervals for Better Progression
 
-1. **Increased Check-in Intervals**:
-   - Orchestrator: 45 min (was 30)
-   - Project Manager: 60 min (was 30)
-   - Developer: 90 min (was 60)
-   - Researcher: 60 min (was 45)
+1. **Optimized Check-in Times**:
+   - Orchestrator: 20 min (frequent oversight)
+   - Project Manager: 25 min (active coordination)
+   - Developer: 30 min (regular progress)
+   - Tester: 30 min (synced with developer)
+   - Researcher: 25 min (timely support)
+   - Code Reviewer: 40 min (regular reviews)
+   - DevOps: 45 min (infrastructure pace)
+   - Documentation: 60 min (documentation cycles)
 
 2. **Team Size Limits**:
    - Automatic enforcement based on plan
