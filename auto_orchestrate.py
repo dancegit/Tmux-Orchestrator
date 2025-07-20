@@ -1100,8 +1100,27 @@ This file is automatically read by Claude Code when working in this directory.
         for window_name, window_idx, role_key in roles:
             # Pre-initialize Claude if worktree has .mcp.json
             worktree_path = worktree_paths.get(role_key)
-            if worktree_path:
+            if worktree_path and (worktree_path / '.mcp.json').exists():
+                # Pre-initialize Claude to approve MCP servers
                 self.pre_initialize_claude_in_worktree(session_name, window_idx, role_key, worktree_path)
+                
+                # Kill the window (since it only has one pane)
+                subprocess.run([
+                    'tmux', 'kill-window', '-t', f'{session_name}:{window_idx}'
+                ], capture_output=True)
+                
+                # Create a new window at the same index
+                # Using -a flag to insert at specific index
+                subprocess.run([
+                    'tmux', 'new-window', '-t', f'{session_name}:{window_idx}',
+                    '-n', window_name, '-c', str(worktree_path),
+                    '-d'  # Don't switch to it
+                ], capture_output=True)
+                
+                console.print(f"[green]✓ Recreated window for {role_key} after MCP approval[/green]")
+                
+                # Small delay to ensure window is ready
+                time.sleep(1)
             
             # Start Claude with dangerous skip permissions
             subprocess.run([
@@ -2311,10 +2330,10 @@ Leverage these tools as appropriate for your role."""
             '/exit', 'Enter'
         ])
         
-        # Wait for Claude to fully exit
+        # Wait for Claude to process the exit command
         time.sleep(1)
         
-        console.print(f"[green]✓ Pre-initialization complete for {role_key}[/green]")
+        # Don't print completion since we'll kill the pane
         return True
 
     def run(self):
