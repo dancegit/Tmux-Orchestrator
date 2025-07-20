@@ -86,6 +86,7 @@ class AutoOrchestrator:
         self.implementation_spec: Optional[ImplementationSpec] = None
         self.manual_size: Optional[str] = None
         self.additional_roles: List[str] = []
+        self.force: bool = False
         
     def ensure_setup(self):
         """Ensure Tmux Orchestrator is properly set up"""
@@ -603,6 +604,25 @@ CLAUDE_EOF
                 core_roles.append(role_mapping[role.lower()])
         
         return core_roles
+    
+    def check_existing_worktrees(self, project_name: str, roles_to_deploy: List[Tuple[str, str]]) -> List[str]:
+        """Check if worktrees already exist for this project"""
+        worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
+        existing_worktrees = []
+        
+        if worktrees_base.exists():
+            for window_name, role_key in roles_to_deploy:
+                worktree_path = worktrees_base / role_key
+                if worktree_path.exists() and any(worktree_path.iterdir()):
+                    existing_worktrees.append(role_key)
+        
+        return existing_worktrees
+    
+    def check_existing_session(self, session_name: str) -> bool:
+        """Check if tmux session already exists"""
+        result = subprocess.run(['tmux', 'has-session', '-t', session_name], 
+                              capture_output=True)
+        return result.returncode == 0
     
     def setup_worktrees(self, spec: ImplementationSpec, roles_to_deploy: List[Tuple[str, str]]) -> Dict[str, Path]:
         """Create git worktrees for each agent"""
@@ -1451,6 +1471,62 @@ Report to PM (window 1) for specific task assignments."""
         
         # Set up tmux session
         console.print("\n[cyan]Step 3:[/cyan] Setting up tmux orchestration...")
+        
+        # Check for existing session and worktrees
+        session_name = self.implementation_spec.project.name.lower().replace(' ', '-')[:20] + "-impl"
+        project_name = self.implementation_spec.project.name.lower().replace(' ', '-')
+        roles_to_deploy = self.get_roles_for_project_size(self.implementation_spec)
+        
+        existing_session = self.check_existing_session(session_name)
+        existing_worktrees = self.check_existing_worktrees(project_name, roles_to_deploy)
+        
+        if existing_session or existing_worktrees:
+            if self.force:
+                # Force mode - automatically overwrite
+                console.print("\n[yellow]⚠️  Force mode: Overwriting existing orchestration[/yellow]")
+                if existing_session:
+                    console.print(f"[yellow]Killing existing session '{session_name}'...[/yellow]")
+                    subprocess.run(['tmux', 'kill-session', '-t', session_name], capture_output=True)
+            else:
+                # Interactive mode - prompt user
+                console.print("\n[yellow]⚠️  Existing orchestration detected![/yellow]")
+                
+                if existing_session:
+                    console.print(f"[yellow]• Tmux session '{session_name}' already exists[/yellow]")
+                    
+                if existing_worktrees:
+                    console.print(f"[yellow]• Found existing worktrees for: {', '.join(existing_worktrees)}[/yellow]")
+                
+                console.print("\n[bold]What would you like to do?[/bold]")
+                console.print("1. [red]Overwrite[/red] - Remove existing session/worktrees and start fresh")
+                console.print("2. [green]Resume[/green] - Attach to existing session (keep worktrees)")
+                console.print("3. [yellow]Cancel[/yellow] - Exit without changes")
+                
+                while True:
+                    choice = click.prompt("\nYour choice", type=click.Choice(['1', '2', '3']), default='3')
+                    
+                    if choice == '1':
+                        # Overwrite
+                        if existing_session:
+                            console.print(f"[yellow]Killing existing session '{session_name}'...[/yellow]")
+                            subprocess.run(['tmux', 'kill-session', '-t', session_name], capture_output=True)
+                        break
+                        
+                    elif choice == '2':
+                        # Resume
+                        if existing_session:
+                            console.print(f"\n[green]✓ Resuming existing session![/green]")
+                            console.print(f"To attach: [cyan]tmux attach -t {session_name}[/cyan]")
+                            sys.exit(0)
+                        else:
+                            console.print("[red]No existing session to resume. Creating new session...[/red]")
+                            break
+                            
+                    elif choice == '3':
+                        # Cancel
+                        console.print("[yellow]Operation cancelled.[/yellow]")
+                        sys.exit(0)
+        
         self.setup_tmux_session(self.implementation_spec)
         
         # Save implementation spec for reference
@@ -1473,7 +1549,9 @@ Report to PM (window 1) for specific task assignments."""
               default='auto', help='Project size (auto-detect by default)')
 @click.option('--roles', multiple=True, 
               help='Additional roles to include (e.g., --roles researcher --roles documentation_writer)')
-def main(project: str, spec: str, size: str, roles: tuple):
+@click.option('--force', '-f', is_flag=True,
+              help='Force overwrite existing session/worktrees without prompting')
+def main(project: str, spec: str, size: str, roles: tuple, force: bool):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
@@ -1489,6 +1567,7 @@ def main(project: str, spec: str, size: str, roles: tuple):
     orchestrator = AutoOrchestrator(project, spec)
     orchestrator.manual_size = size if size != 'auto' else None
     orchestrator.additional_roles = list(roles) if roles else []
+    orchestrator.force = force
     orchestrator.run()
 
 

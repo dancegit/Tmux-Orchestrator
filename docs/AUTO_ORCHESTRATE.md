@@ -63,6 +63,12 @@ On first run, the script will:
   --spec spec.md \
   --roles researcher \
   --roles documentation_writer
+
+# Force overwrite existing session/worktrees
+./auto_orchestrate.py \
+  --project /path/to/project \
+  --spec spec.md \
+  --force
 ```
 
 ### Example
@@ -71,6 +77,21 @@ On first run, the script will:
 ./auto_orchestrate.py \
   --project /home/user/myapp \
   --spec /home/user/myapp/docs/new_feature_spec.md
+
+## Safety Features
+
+### Existing Session Detection
+
+The script automatically detects:
+- Existing tmux sessions with the same name
+- Existing git worktrees from previous runs
+
+When detected, you'll be prompted with options:
+1. **Overwrite** - Remove existing session/worktrees and start fresh
+2. **Resume** - Attach to existing session (preserves worktrees)
+3. **Cancel** - Exit without making changes
+
+Use the `--force` flag to automatically overwrite without prompting.
 
 ## How It Works
 
