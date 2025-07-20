@@ -87,6 +87,7 @@ class AutoOrchestrator:
         self.manual_size: Optional[str] = None
         self.additional_roles: List[str] = []
         self.force: bool = False
+        self.plan_type: str = 'max5'  # Default to Max 5x plan
         
     def ensure_setup(self):
         """Ensure Tmux Orchestrator is properly set up"""
@@ -334,22 +335,22 @@ Generate a JSON implementation plan with this EXACT structure:
   "roles": {{
     "orchestrator": {{
       "responsibilities": ["Monitor progress", "Coordinate roles", "Handle blockers"],
-      "check_in_interval": 30,
+      "check_in_interval": 45,  # Increased from 30 to conserve tokens
       "initial_commands": ["cd {self.tmux_orchestrator_path}", "python3 claude_control.py status detailed"]
     }},
     "project_manager": {{
       "responsibilities": ["Ensure quality", "Track completion", "Review coverage"],
-      "check_in_interval": 30,
+      "check_in_interval": 60,  # Increased from 30 to conserve tokens
       "initial_commands": ["cd {self.project_path}", "cat {self.spec_path.relative_to(self.project_path) if self.spec_path.is_relative_to(self.project_path) else self.spec_path}"]
     }},
     "developer": {{
       "responsibilities": ["Implement features", "Write tests", "Fix bugs"],
-      "check_in_interval": 60,
+      "check_in_interval": 90,  # Increased from 60 to conserve tokens
       "initial_commands": ["cd {self.project_path}", "git status"]
     }},
     "tester": {{
       "responsibilities": ["Run tests", "Report failures", "Verify coverage"],
-      "check_in_interval": 45,
+      "check_in_interval": 60,  # Increased from 45 to conserve tokens
       "initial_commands": ["cd {self.project_path}", "echo 'Ready to test'"]
     }},
     "devops": {{
@@ -364,7 +365,7 @@ Generate a JSON implementation plan with this EXACT structure:
     }},
     "researcher": {{
       "responsibilities": ["MCP tool discovery and utilization", "Research best practices", "Security vulnerability analysis", "Performance optimization research", "Document actionable findings"],
-      "check_in_interval": 45,
+      "check_in_interval": 60,  # Increased from 45 to conserve tokens
       "initial_commands": ["cd {self.project_path}", "mkdir -p research", "echo 'Type @ to discover MCP resources, / to discover MCP commands'", "echo 'Look for /mcp__ prefixed commands for MCP tools'"]
     }},
     "documentation_writer": {{
@@ -553,42 +554,69 @@ CLAUDE_EOF
         roles_to_deploy = self.get_roles_for_project_size(spec)
         console.print(f"\n[bold]Roles to be deployed:[/bold] {', '.join([r[0] for r in roles_to_deploy])}")
         
+        # Token usage warning
+        team_size = len(roles_to_deploy)
+        if team_size >= 4:
+            console.print(f"\n[yellow]⚠️  Token Usage Warning[/yellow]")
+            console.print(f"[yellow]Running {team_size} agents concurrently will use ~{team_size * 15}x normal token consumption[/yellow]")
+            console.print(f"[yellow]On {self.plan_type} plan, this provides approximately {225 // (team_size * 15)} messages per 5-hour session[/yellow]")
+            
+            if team_size >= 5 and self.plan_type == 'max5':
+                console.print(f"[red]Consider using fewer agents or upgrading to max20 plan for extended sessions[/red]")
+        
         return Confirm.ask("\n[bold]Proceed with automated setup?[/bold]", default=False)
     
-    def get_roles_for_project_size(self, spec: ImplementationSpec) -> List[Tuple[str, str]]:
-        """Determine which roles to deploy based on project size"""
-        # Always include orchestrator and project manager
-        base_roles = [
-            ('Orchestrator', 'orchestrator'),
-            ('Project-Manager', 'project_manager')
-        ]
+    def get_plan_constraints(self) -> int:
+        """Get maximum recommended team size based on subscription plan
         
+        Returns maximum number of concurrent agents for sustainable token usage
+        """
+        plan_limits = {
+            'pro': 3,      # Pro plan: Max 3 agents (limited tokens)
+            'max5': 5,     # Max 5x plan: Max 5 agents (balanced)
+            'max20': 8,    # Max 20x plan: Max 8 agents (more headroom)
+            'console': 10  # Console/Enterprise: Higher limits
+        }
+        
+        return plan_limits.get(self.plan_type, 5)
+    
+    def get_roles_for_project_size(self, spec: ImplementationSpec) -> List[Tuple[str, str]]:
+        """Determine which roles to deploy based on project size
+        
+        OPTIMIZED FOR CLAUDE CODE MAX 5X PLAN:
+        - Reduced team sizes to conserve tokens (multi-agent uses ~15x normal)
+        - Max 5 concurrent agents recommended for sustainable usage
+        - Prioritizes essential roles for each project size
+        """
         # Use manual size override if provided
         size = self.manual_size if self.manual_size else spec.project_size.size
         
         if size == "small":
-            # Small projects: PM + Developer + Researcher
-            core_roles = base_roles + [
+            # Small projects: 3 agents (Orchestrator + Developer + Researcher)
+            # No PM to keep team minimal
+            core_roles = [
+                ('Orchestrator', 'orchestrator'),
                 ('Developer', 'developer'),
                 ('Researcher', 'researcher')
             ]
         elif size == "medium":
-            # Medium projects: PM + 2 Developers + Researcher + QA
-            core_roles = base_roles + [
+            # Medium projects: 4 agents (+ Project Manager)
+            # PM added for coordination without overwhelming token usage
+            core_roles = [
+                ('Orchestrator', 'orchestrator'),
+                ('Project-Manager', 'project_manager'),
                 ('Developer', 'developer'),
-                ('Developer-2', 'developer'),  # Second developer
-                ('Researcher', 'researcher'),
-                ('Tester', 'tester')
+                ('Researcher', 'researcher')
             ]
         else:  # large
-            # Large projects: Full team including specialized roles
-            core_roles = base_roles + [
-                ('Lead-Developer', 'developer'),
-                ('Developer-2', 'developer'),
+            # Large projects: 5 agents (+ Tester or DevOps)
+            # Staying at 5 agents max for Max 5x plan sustainability
+            core_roles = [
+                ('Orchestrator', 'orchestrator'),
+                ('Project-Manager', 'project_manager'),
+                ('Developer', 'developer'),
                 ('Researcher', 'researcher'),
-                ('Tester', 'tester'),
-                ('DevOps', 'devops'),
-                ('Code-Reviewer', 'code_reviewer')
+                ('Tester', 'tester')  # Can be swapped for DevOps via --roles
             ]
         
         # Add any additional requested roles
@@ -596,12 +624,32 @@ CLAUDE_EOF
             'researcher': ('Researcher', 'researcher'),
             'documentation_writer': ('Documentation', 'documentation_writer'),
             'documentation': ('Documentation', 'documentation_writer'),
-            'docs': ('Documentation', 'documentation_writer')
+            'docs': ('Documentation', 'documentation_writer'),
+            'devops': ('DevOps', 'devops'),
+            'code_reviewer': ('Code-Reviewer', 'code_reviewer'),
+            'tester': ('Tester', 'tester')
         }
         
         for role in self.additional_roles:
             if role.lower() in role_mapping:
                 core_roles.append(role_mapping[role.lower()])
+        
+        # Enforce plan constraints
+        max_agents = self.get_plan_constraints()
+        if len(core_roles) > max_agents:
+            console.print(f"\n[yellow]⚠️  Warning: {len(core_roles)} agents requested but {self.plan_type} plan recommends max {max_agents}[/yellow]")
+            console.print(f"[yellow]Team will be limited to {max_agents} agents to prevent token exhaustion[/yellow]")
+            console.print(f"[yellow]Multi-agent systems use ~15x more tokens than standard usage[/yellow]\n")
+            
+            # Prioritize roles based on importance
+            priority_order = ['orchestrator', 'developer', 'researcher', 'project_manager', 'tester', 'devops', 'code_reviewer', 'documentation_writer']
+            
+            # Sort roles by priority
+            core_roles.sort(key=lambda x: priority_order.index(x[1]) if x[1] in priority_order else 999)
+            
+            # Trim to max agents
+            core_roles = core_roles[:max_agents]
+            console.print(f"[yellow]Selected roles: {', '.join([r[0] for r in core_roles])}[/yellow]")
         
         return core_roles
     
@@ -1551,15 +1599,21 @@ Report to PM (window 1) for specific task assignments."""
               help='Additional roles to include (e.g., --roles researcher --roles documentation_writer)')
 @click.option('--force', '-f', is_flag=True,
               help='Force overwrite existing session/worktrees without prompting')
-def main(project: str, spec: str, size: str, roles: tuple, force: bool):
+@click.option('--plan', type=click.Choice(['auto', 'pro', 'max5', 'max20', 'console']), 
+              default='auto', help='Claude subscription plan (affects team size limits)')
+def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: str):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
     orchestration environment with AI agents based on project size:
     
-    - Small projects: Orchestrator + PM + Developer + Researcher
-    - Medium projects: + Second Developer + Tester
-    - Large projects: + DevOps + Code Reviewer
+    OPTIMIZED FOR CLAUDE CODE MAX 5X PLAN:
+    - Small projects: 3 agents (Orchestrator + Developer + Researcher)
+    - Medium projects: 4 agents (+ Project Manager)
+    - Large projects: 5 agents (+ Tester or DevOps)
+    
+    Multi-agent systems use ~15x more tokens than standard usage.
+    Use --plan to specify your subscription for appropriate team sizing.
     
     You can manually specify project size with --size or add specific roles
     with --roles (e.g., --roles documentation_writer)
@@ -1568,6 +1622,7 @@ def main(project: str, spec: str, size: str, roles: tuple, force: bool):
     orchestrator.manual_size = size if size != 'auto' else None
     orchestrator.additional_roles = list(roles) if roles else []
     orchestrator.force = force
+    orchestrator.plan_type = plan if plan != 'auto' else 'max5'  # Default to max5
     orchestrator.run()
 
 

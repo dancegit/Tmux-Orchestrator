@@ -10,7 +10,8 @@ The `auto_orchestrate.py` script provides fully automated setup of a Tmux Orches
 - **Structured Planning**: Generates phase-based implementation plans
 - **Automatic Role Assignment**: Configures specialized agents for different tasks
 - **Git Worktree Isolation**: Each agent works in their own git worktree to prevent conflicts
-- **Dynamic Team Composition**: Adjusts team size based on project complexity
+- **Plan-Based Team Sizing**: Optimizes team size for your Claude subscription
+- **Token Conservation**: Adjusted intervals and warnings for sustainable usage
 - **One-Command Setup**: From spec to running team in under a minute
 - **Progress Tracking**: Saves implementation plans for reference
 
@@ -69,6 +70,12 @@ On first run, the script will:
   --project /path/to/project \
   --spec spec.md \
   --force
+
+# Specify subscription plan (affects team size)
+./auto_orchestrate.py \
+  --project /path/to/project \
+  --spec spec.md \
+  --plan max5  # Options: pro, max5, max20, console
 ```
 
 ### Example
@@ -185,16 +192,16 @@ Tmux-Orchestrator/
 
 Upon approval, the script:
 1. Creates a new tmux session named `{project}-impl`
-2. Sets up windows based on project size:
-   - **Small**: Orchestrator, PM, Developer, Researcher
-   - **Medium**: + Second Developer + Tester
-   - **Large**: + DevOps + Code Reviewer
+2. Sets up windows based on project size (OPTIMIZED FOR MAX 5X PLAN):
+   - **Small**: 3 agents (Orchestrator, Developer, Researcher)
+   - **Medium**: 4 agents (+ Project Manager)
+   - **Large**: 5 agents (+ Tester or DevOps)
 3. Each agent works in their own git worktree (including Orchestrator)
 4. Starts Claude in each window
 5. Ensures each worktree has a CLAUDE.md referencing orchestrator rules
 6. Runs `/context-prime` for each agent (if available)
 7. Sends role-specific briefings with mandatory rule reading
-8. Configures scheduled check-ins
+8. Configures scheduled check-ins (45-90 min intervals to conserve tokens)
 
 ## Role Descriptions
 
@@ -409,6 +416,34 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Then run the script
 ./auto_orchestrate.py --help
 ```
+
+## Token Usage and Plan Optimization
+
+### Understanding Multi-Agent Token Consumption
+
+Multi-agent systems use approximately **15x more tokens** than standard Claude usage. This means:
+
+- **Pro Plan**: Best with 2-3 agents max
+- **Max 5x Plan**: Optimal with 3-4 agents (5 max)
+- **Max 20x Plan**: Can comfortably run 5-6 agents
+
+### Token Conservation Strategies
+
+1. **Increased Check-in Intervals**:
+   - Orchestrator: 45 min (was 30)
+   - Project Manager: 60 min (was 30)
+   - Developer: 90 min (was 60)
+   - Researcher: 60 min (was 45)
+
+2. **Team Size Limits**:
+   - Automatic enforcement based on plan
+   - Warning when exceeding recommended sizes
+   - Prioritized role selection when limited
+
+3. **Usage Monitoring**:
+   - Token usage warnings for 4+ agents
+   - Estimated messages per session displayed
+   - Recommendations for plan upgrades when needed
 
 ## Best Practices
 
