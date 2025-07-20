@@ -1470,7 +1470,7 @@ Work with Developer to maintain code excellence."""
    ├── performance-guide.md       # Optimization strategies
    ├── best-practices.md          # Coding standards
    ├── library-comparison.md      # Tech stack analysis
-   └── phase-{n}-research.md      # Phase-specific findings
+   └── phase-{{n}}-research.md      # Phase-specific findings
    ```
 
 6. **Team Communication Protocol**:
