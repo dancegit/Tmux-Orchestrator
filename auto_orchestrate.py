@@ -402,6 +402,16 @@ Generate a JSON implementation plan with this EXACT structure:
       "check_in_interval": 30,  # Reduced to match developer pace
       "initial_commands": ["cd {self.project_path}", "echo 'Ready to test'"]
     }},
+    "testrunner": {{
+      "responsibilities": ["Execute test suites", "Parallel test management", "Performance testing", "Test infrastructure", "Results analysis"],
+      "check_in_interval": 30,  # Same as tester for coordination
+      "initial_commands": ["cd {self.project_path}", "echo 'Setting up test execution framework'"]
+    }},
+    "logtracker": {{
+      "responsibilities": ["Monitor logs real-time", "Track errors", "Alert critical issues", "Use project monitoring tools", "Generate error reports"],
+      "check_in_interval": 15,  # Frequent checks for real-time monitoring
+      "initial_commands": ["cd {self.project_path}", "mkdir -p monitoring/logs monitoring/reports", "echo 'Reading CLAUDE.md for monitoring instructions'"]
+    }},
     "devops": {{
       "responsibilities": ["Infrastructure setup", "Deployment pipelines", "Monitor performance"],
       "check_in_interval": 45,  # Reduced but still longer as infra work is less frequent
