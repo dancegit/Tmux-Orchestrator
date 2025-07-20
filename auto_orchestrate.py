@@ -1519,7 +1519,11 @@ Your Team (based on project size: {spec.project_size.size}):
 - Use specific file paths when discussing code
 - Always report blockers to Orchestrator immediately
 
-Maintain EXCEPTIONAL quality standards. No compromises."""
+Maintain EXCEPTIONAL quality standards. No compromises.
+
+{self.create_git_sync_instructions(role, spec, worktree_paths)}
+
+{self.create_context_management_instructions(role)}"""
 
         elif role == 'developer':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Developer for {spec.project.name}.
@@ -1590,7 +1594,11 @@ Collaborate with:
 - Researcher for technical guidance and best practices
 - Tester for early testing feedback
 
-**Remember**: Your code is in `{worktree_paths.get(role, 'your-worktree')}` - PM will review it there!"""
+**Remember**: Your code is in `{worktree_paths.get(role, 'your-worktree')}` - PM will review it there!
+
+{self.create_git_sync_instructions(role, spec, worktree_paths)}
+
+{self.create_context_management_instructions(role)}"""
 
         elif role == 'tester':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Tester for {spec.project.name}.
@@ -1644,7 +1652,11 @@ Start by:
 Collaborate with:
 - Developer (access code at: `{worktree_paths.get('developer', 'dev-worktree')}`)
 - Researcher for security vulnerabilities and testing best practices
-- PM for quality standards"""
+- PM for quality standards
+
+{self.create_git_sync_instructions(role, spec, worktree_paths)}
+
+{self.create_context_management_instructions(role)}"""
 
         elif role == 'testrunner':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Test Runner for {spec.project.name}.
@@ -1693,7 +1705,11 @@ Start by:
 1. Setting up test execution framework
 2. Configuring parallel test runners
 3. Creating test execution pipelines
-4. Establishing baseline metrics"""
+4. Establishing baseline metrics
+
+{self.create_git_sync_instructions(role, spec, worktree_paths)}
+
+{self.create_context_management_instructions(role)}"""
 
         elif role == 'logtracker':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Log Tracker for {spec.project.name}.
@@ -1766,7 +1782,11 @@ Start by:
 2. Identifying all log sources in the project
 3. Setting up log aggregation infrastructure
 4. Creating initial error tracking dashboard
-5. Establishing baseline error rates"""
+5. Establishing baseline error rates
+
+{self.create_git_sync_instructions(role, spec, worktree_paths)}
+
+{self.create_context_management_instructions(role)}"""
 
         elif role == 'devops':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the DevOps Engineer for {spec.project.name}.
@@ -1797,7 +1817,11 @@ Coordinate with:
 - Developer on build requirements
 - PM on deployment timelines
 - Tester on staging environments
-- 🔍 **Researcher** for infrastructure best practices and security hardening"""
+- 🔍 **Researcher** for infrastructure best practices and security hardening
+
+{self.create_git_sync_instructions(role, spec, worktree_paths)}
+
+{self.create_context_management_instructions(role)}"""
 
         elif role == 'code_reviewer':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Code Reviewer for {spec.project.name}.
@@ -1935,7 +1959,11 @@ Report findings to:
 - Developer (implementation guidance)
 - PM (risk assessment)
 - Tester (security/performance testing)
-- DevOps (infrastructure decisions)"""
+- DevOps (infrastructure decisions)
+
+{self.create_git_sync_instructions(role, spec, worktree_paths)}
+
+{self.create_context_management_instructions(role)}"""
 
         elif role == 'documentation_writer':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Documentation Writer for {spec.project.name}.
@@ -2365,6 +2393,258 @@ Leverage these tools as appropriate for your role."""
                     console.print("[yellow]Restored backup file[/yellow]")
                 except:
                     pass
+
+    def create_git_sync_instructions(self, role: str, spec: ImplementationSpec, worktree_paths: Dict[str, Path] = None) -> str:
+        """Create role-specific git synchronization instructions
+        
+        Returns formatted instructions for keeping in sync with other team members
+        """
+        
+        # Base sync instructions for all roles
+        base_instructions = f"""
+🔄 **Git Synchronization Protocol**
+
+Working in isolated worktrees means you MUST regularly sync with your teammates' changes:
+
+**When to Sync**:
+- 🌅 Start of each work session
+- 📋 Before starting new features/tests
+- ⏰ Every hour during active development
+- 🔍 Before code reviews or testing
+- 📢 When teammates announce important pushes
+
+**Basic Sync Commands**:
+```bash
+# Check for updates from all branches
+git fetch origin
+
+# See what branches teammates have pushed
+git branch -r | grep {spec.git_workflow.branch_name}
+
+# Pull specific teammate's changes
+git merge origin/[teammate-branch]
+```
+"""
+        
+        # Role-specific sync instructions
+        if role == 'developer':
+            role_specific = f"""
+**Developer Sync Strategy**:
+1. **Before Starting Work**:
+   ```bash
+   # Pull PM's review feedback
+   git fetch origin
+   git merge origin/pm-review-{spec.git_workflow.branch_name} 2>/dev/null || true
+   
+   # Check for test updates from Tester
+   git merge origin/tests-{spec.git_workflow.branch_name} 2>/dev/null || true
+   ```
+
+2. **After Major Commits**:
+   ```bash
+   # Push your work for others
+   git push -u origin {spec.git_workflow.branch_name}
+   
+   # Notify team via orchestrator
+   # "Pushed authentication module - ready for testing"
+   ```
+
+3. **Collaboration Tips**:
+   - Always push after completing a module
+   - Include clear commit messages for teammates
+   - Tag stable points: `git tag dev-stable-$(date +%Y%m%d-%H%M)`
+"""
+        
+        elif role == 'tester':
+            role_specific = f"""
+**Tester Sync Strategy**:
+1. **Before Writing Tests**:
+   ```bash
+   # ALWAYS pull Developer's latest code first
+   git fetch origin
+   git merge origin/{spec.git_workflow.branch_name}
+   
+   # Check TestRunner's execution results if available
+   git merge origin/testrunner-{spec.git_workflow.branch_name} 2>/dev/null || true
+   ```
+
+2. **Test Development Workflow**:
+   ```bash
+   # After writing tests, push immediately
+   git add tests/
+   git commit -m "test: add integration tests for [module]"
+   git push -u origin tests-{spec.git_workflow.branch_name}
+   ```
+
+3. **Cross-Reference Testing**:
+   - Can also read directly from Developer's worktree:
+     ```bash
+     # View implementation without merging
+     cat {worktree_paths.get('developer', '../developer')}/src/module.py
+     ```
+"""
+        
+        elif role == 'project_manager':
+            role_specific = f"""
+**PM Sync Orchestration**:
+1. **Regular Team Sync Check** (every 30 min):
+   ```bash
+   # Pull from ALL team members
+   git fetch origin --all
+   
+   # Check each teammate's progress
+   for branch in $(git branch -r | grep {spec.git_workflow.branch_name}); do
+     echo "Checking $branch"
+     git log --oneline origin/{spec.git_workflow.parent_branch}..$branch
+   done
+   ```
+
+2. **Review Preparation**:
+   ```bash
+   # Before reviewing, always sync
+   git merge origin/{spec.git_workflow.branch_name}  # Developer's work
+   git merge origin/tests-{spec.git_workflow.branch_name}  # Tester's work
+   ```
+
+3. **Coordination Duties**:
+   - Monitor for merge conflicts between agents
+   - Facilitate cross-team updates
+   - Announce important merges to all agents
+"""
+        
+        elif role == 'testrunner':
+            role_specific = f"""
+**TestRunner Sync Protocol**:
+1. **Before Test Execution**:
+   ```bash
+   # Get latest code AND tests
+   git fetch origin
+   git merge origin/{spec.git_workflow.branch_name}  # Developer code
+   git merge origin/tests-{spec.git_workflow.branch_name}  # Test suites
+   ```
+
+2. **Share Results**:
+   ```bash
+   # After test runs, commit results
+   git add test-results/
+   git commit -m "test-results: [timestamp] - X passed, Y failed"
+   git push -u origin testrunner-{spec.git_workflow.branch_name}
+   ```
+"""
+        
+        elif role == 'researcher':
+            role_specific = f"""
+**Researcher Sync Needs**:
+1. **Stay Current with Implementation**:
+   ```bash
+   # Regular sync to research relevant topics
+   git fetch origin
+   git merge origin/{spec.git_workflow.branch_name}
+   ```
+
+2. **Share Research Findings**:
+   ```bash
+   # Push research docs for team
+   git add research/
+   git commit -m "research: security analysis for auth module"
+   git push -u origin research-{spec.git_workflow.branch_name}
+   ```
+"""
+        
+        else:
+            # Generic role-specific instructions
+            role_specific = f"""
+**{role.title()} Sync Guidelines**:
+1. Fetch updates at session start: `git fetch origin`
+2. Merge relevant branches based on your dependencies
+3. Push your work regularly for team visibility
+4. Coordinate with PM for merge timing
+"""
+        
+        # Communication integration
+        communication = f"""
+**🔔 Sync Communication**:
+When you pull important updates, notify relevant teammates:
+```bash
+# After pulling critical updates
+cd {self.tmux_orchestrator_path}
+./send-claude-message.sh pm:1 "Merged latest auth module changes, found 3 test failures"
+./send-claude-message.sh developer:1 "Pulled your changes - the API endpoints look good!"
+```
+
+**⚠️ Merge Conflict Resolution**:
+If you encounter conflicts:
+1. Don't panic - conflicts are normal in parallel development
+2. Notify PM immediately for coordination
+3. Preserve both changes when unclear
+4. Test thoroughly after resolution
+"""
+        
+        return base_instructions + role_specific + communication
+
+    def create_context_management_instructions(self, role: str) -> str:
+        """Create context management instructions for agents to self-recover"""
+        
+        return f"""
+📊 **Context Management Protocol**
+
+Working in multi-agent systems uses ~15x more tokens than normal. You MUST actively manage your context:
+
+**Signs of Context Degradation**:
+- Feeling confused or repeating questions
+- Forgetting earlier work or decisions  
+- Working continuously for 2+ hours
+- Making similar files multiple times
+
+**Self-Recovery Process**:
+1. **Create Checkpoint** (BEFORE /compact):
+   ```bash
+   cat > {role.upper()}_CHECKPOINT_$(date +%Y%m%d_%H%M).md << 'EOF'
+   ## Context Checkpoint - {role.title()}
+   - Current task: [what you're working on]
+   - Branch: $(git branch --show-current)
+   - Recent work: [what you just completed]
+   - Next steps: [specific next actions]
+   - Key context: [important facts to remember]
+   EOF
+   ```
+
+2. **Clear Context**:
+   ```
+   /compact
+   ```
+
+3. **Reload Essential Context**:
+   ```
+   # Option A: If available
+   /context-prime
+   
+   # Option B: Manual reload
+   Read {self.tmux_orchestrator_path}/CLAUDE.md
+   Read README.md  
+   Read {role.upper()}_CHECKPOINT_*.md  # Your checkpoint
+   git status && git log --oneline -5
+   ```
+
+4. **Verify & Continue**:
+   - Confirm understanding of current task
+   - Check git branch is correct
+   - Continue from checkpoint next steps
+
+**Proactive Context Health**:
+- Create checkpoints every 2 hours
+- Run /compact at natural break points (phase transitions, major commits)
+- Always checkpoint before starting new phases
+- If you notice confusion, compact immediately
+
+**Emergency Recovery**:
+If confused after /compact, read in order:
+1. CLAUDE.md (your role and git rules)
+2. Your latest checkpoint/handoff document
+3. Recent git commits
+4. Ask orchestrator for clarification
+
+Remember: It's better to compact proactively than to hit context exhaustion!"""
 
     def pre_initialize_claude_in_worktree(self, session_name: str, window_idx: int, role_key: str, worktree_path: Path):
         """Pre-initialize Claude to auto-approve MCP servers"""

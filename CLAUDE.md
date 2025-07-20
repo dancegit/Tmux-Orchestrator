@@ -789,6 +789,37 @@ Credit status stored in `~/.claude/credit_schedule.json`:
 3. **Plan Around Resets**: Schedule important work after reset times
 4. **Monitor Warning Signs**: "Approaching usage limit" means <10 minutes left
 
+## Context Window Management
+
+### The /compact Command
+When agents run low on context (confusion, repeated work, 2+ hours of work):
+
+1. **Create Checkpoint First**:
+   ```bash
+   cat > ROLE_CHECKPOINT_$(date +%Y%m%d_%H%M).md << 'EOF'
+   ## Context Checkpoint
+   - Current task: [what you're doing]
+   - Branch: [current branch]
+   - Recent work: [what was completed]
+   - Next steps: [specific actions]
+   EOF
+   ```
+
+2. **Run /compact** to clear conversation history
+
+3. **Reload Context**:
+   - `/context-prime` (if available) OR
+   - Read CLAUDE.md, README.md, checkpoint document
+   - Check git status and recent commits
+
+4. **Continue** from checkpoint next steps
+
+### Proactive Context Health
+- Create checkpoints every 2 hours
+- Compact at natural breaks (phase transitions)
+- Monitor for confusion signs
+- Better to compact early than hit exhaustion
+
 ## Anti-Patterns to Avoid
 
 - ❌ **Meeting Hell**: Use async updates only
@@ -798,6 +829,7 @@ Credit status stored in `~/.claude/credit_schedule.json`:
 - ❌ **Quality Shortcuts**: Never compromise standards
 - ❌ **Blind Scheduling**: Never schedule without verifying target window
 - ❌ **Ignoring Credits**: Always monitor credit status for team continuity
+- ❌ **Context Exhaustion**: Not using /compact proactively
 
 ## Critical Lessons Learned
 
