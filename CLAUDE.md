@@ -741,6 +741,54 @@ CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
 ./schedule_with_note.sh 30 "Developer progress check" "ai-chat:2"
 ```
 
+## Claude Code Credit Management 💳
+
+### Overview
+Claude Code has usage limits that reset every 5 hours. The orchestrator includes smart credit management to handle exhaustion gracefully.
+
+### Credit Monitoring System
+
+#### Quick Health Check
+```bash
+./credit_management/check_agent_health.sh
+```
+Shows credit status for all agents and estimated reset times.
+
+#### Continuous Monitoring
+```bash
+# Install as systemd service (recommended)
+./credit_management/install_monitor.sh
+
+# Or run manually
+python3 credit_management/credit_monitor.py
+```
+
+#### How It Works
+1. **Detection**: Monitors for "/upgrade" messages and "credits will reset at [time]"
+2. **UI Parsing**: Extracts exact reset times from Claude UI
+3. **Fallback Schedule**: Uses 5-hour cycle calculation if UI parsing fails
+4. **Auto-Resume**: Schedules agent wake-up 2 minutes after reset
+5. **Verification**: Confirms credits available before resuming work
+
+#### Credit-Aware Scheduling
+All agent check-ins use credit-aware scheduling:
+- Skips scheduling for exhausted agents
+- Automatically schedules resume at reset time
+- Logs all credit-related events
+
+#### Status Tracking
+Credit status stored in `~/.claude/credit_schedule.json`:
+- Last known reset time
+- Next predicted reset
+- Per-agent exhaustion status
+- Historical reset patterns
+
+### Best Practices
+1. **Start Monitor Early**: Run credit monitor when starting orchestration
+2. **Check Status Regularly**: Use health check before critical operations
+3. **Plan Around Resets**: Schedule important work after reset times
+4. **Monitor Warning Signs**: "Approaching usage limit" means <10 minutes left
+
 ## Anti-Patterns to Avoid
 
 - ❌ **Meeting Hell**: Use async updates only
@@ -749,6 +797,7 @@ CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
 - ❌ **Micromanagement**: Trust agents to work
 - ❌ **Quality Shortcuts**: Never compromise standards
 - ❌ **Blind Scheduling**: Never schedule without verifying target window
+- ❌ **Ignoring Credits**: Always monitor credit status for team continuity
 
 ## Critical Lessons Learned
 
