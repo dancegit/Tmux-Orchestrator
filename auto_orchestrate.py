@@ -364,7 +364,7 @@ Generate a JSON implementation plan with this EXACT structure:
     "researcher": {{
       "responsibilities": ["MCP tool discovery and utilization", "Research best practices", "Security vulnerability analysis", "Performance optimization research", "Document actionable findings"],
       "check_in_interval": 45,
-      "initial_commands": ["cd {self.project_path}", "echo 'Discovering available MCP tools...'", "echo 'Run /mcp to see available research tools'"]
+      "initial_commands": ["cd {self.project_path}", "mkdir -p research", "echo 'Type @ to discover MCP resources, / to discover MCP commands'", "echo 'Look for /mcp__ prefixed commands for MCP tools'"]
     }},
     "documentation_writer": {{
       "responsibilities": ["Write technical docs", "Update README", "Create API documentation"],
@@ -1260,17 +1260,28 @@ Work with Developer to maintain code excellence."""
         elif role == 'researcher':
             return f"""{mandatory_reading}{context_note}You are the Technical Researcher for {spec.project.name}.
 
+📋 **Pre-Session Note**: MCP servers should already be configured in Claude Code.
+If the orchestrator needs to verify MCP availability beforehand:
+- Run `claude mcp list` in terminal to see configured servers
+- Check `.claude.json` for mcpServers configuration
+- Look for "✔ Found X MCP servers" when Claude Code starts
+
 🔍 **CRITICAL MCP TOOL DISCOVERY WORKFLOW**:
 
-1. **Initialize Research Environment**:
-   ```
-   /context-prime  # If available, to understand the project
-   /mcp           # ESSENTIAL: Discover available MCP tools
-   ```
+1. **Discover Available MCP Tools in Claude Code**:
+   - Type `@` to see available resources from all connected MCP servers
+   - Type `/` to see all available commands including MCP tools
+   - MCP commands appear as: `/mcp__servername__promptname`
+   - Example commands you might find:
+     - `/mcp__websearch__search` - For web searches
+     - `/mcp__firecrawl__scrape` - For web scraping  
+     - `/mcp__puppeteer__screenshot` - For browser automation
+     - `/mcp__context7__query` - For knowledge queries
    
 2. **Document Available Tools**:
-   After running `/mcp`, create `research/available-tools.md` listing:
-   - Which MCP servers are connected
+   After discovering tools via `@` and `/`, create `research/available-tools.md` listing:
+   - Which MCP resources are available via `@`
+   - Which MCP slash commands are available via `/`
    - What capabilities each provides
    - Your research strategy based on available tools
 
@@ -1326,9 +1337,11 @@ Project Technologies: {', '.join(spec.project.main_tech)}
 Project Type: {spec.project.type}
 
 **IMMEDIATE ACTIONS**:
-1. Run `/mcp` to discover tools
-2. Create research strategy based on available tools
-3. Begin Phase 1 research aligned with implementation
+1. Type `@` to discover available MCP resources
+2. Type `/` to discover available MCP commands (look for /mcp__ prefixed commands)
+3. Document discovered tools in `research/available-tools.md`
+4. Create research strategy based on available tools
+5. Begin Phase 1 research aligned with implementation
 
 Report findings to:
 - Developer (implementation guidance)
