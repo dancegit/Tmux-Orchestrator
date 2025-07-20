@@ -207,19 +207,29 @@ class AutoOrchestrator:
                 # Some other error - this might be a problem
                 console.print(f"[yellow]Tmux returned an error: {result.stderr}[/yellow]")
                 
-            # Test that we can create a session
-            console.print("[cyan]Testing tmux functionality...[/cyan]")
-            test_result = subprocess.run([
-                'tmux', 'new-session', '-d', '-s', 'tmux-test-' + str(int(time.time())), 
-                'exit'
-            ], capture_output=True, text=True)
+            # Start tmux server by creating a persistent background session
+            console.print("[cyan]Starting tmux server...[/cyan]")
             
-            if test_result.returncode == 0:
-                console.print("[green]✓ Tmux is working correctly[/green]")
+            # Check if our background session already exists
+            check_result = subprocess.run([
+                'tmux', 'has-session', '-t', 'tmux-orchestrator-server'
+            ], capture_output=True)
+            
+            if check_result.returncode != 0:
+                # Create a persistent background session to keep server running
+                start_result = subprocess.run([
+                    'tmux', 'new-session', '-d', '-s', 'tmux-orchestrator-server', 
+                    '-n', 'server', 'echo "Tmux Orchestrator Server - Keep this session running"; sleep infinity'
+                ], capture_output=True, text=True)
+                
+                if start_result.returncode == 0:
+                    console.print("[green]✓ Tmux server started with persistent session 'tmux-orchestrator-server'[/green]")
+                else:
+                    console.print(f"[red]Failed to start tmux server: {start_result.stderr}[/red]")
+                    console.print("[red]Please ensure tmux is properly installed and configured[/red]")
+                    sys.exit(1)
             else:
-                console.print(f"[red]Tmux test failed: {test_result.stderr}[/red]")
-                console.print("[red]Please ensure tmux is properly installed and configured[/red]")
-                sys.exit(1)
+                console.print("[green]✓ Tmux server already has orchestrator session[/green]")
         else:
             console.print("[green]✓ Tmux server is running with existing sessions[/green]")
             if result.stdout.strip():
