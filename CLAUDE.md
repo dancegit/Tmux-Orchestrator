@@ -42,16 +42,97 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
 ### Agent Types
 
 #### Core Roles (Always Deployed)
+
 1. **Orchestrator**: High-level oversight and coordination
+   - Monitors overall project health and progress
+   - Coordinates between multiple project managers
+   - Makes architectural and strategic decisions
+   - Resolves cross-project dependencies
+   - Schedules check-ins and manages team resources
+   - Works from both project worktree AND tool directory
+
 2. **Project Manager**: Quality-focused team coordination
+   - Maintains exceptionally high quality standards
+   - Reviews all code before merging
+   - Coordinates daily standups and status collection
+   - Manages git workflow and branch merging
+   - Identifies and escalates blockers
+   - Ensures 30-minute commit rule compliance
+   - Tracks technical debt and quality metrics
+
 3. **Developer**: Implementation and technical decisions
+   - Writes production code following best practices
+   - Implements features according to specifications
+   - Creates unit tests for new functionality
+   - Follows existing code patterns and conventions
+   - Commits every 30 minutes with clear messages
+   - Collaborates with PM for code reviews
+   - Consults Researcher for technical guidance
+
 4. **Researcher**: MCP-powered research and best practices
+   - Discovers and documents available MCP tools
+   - Researches security vulnerabilities (CVEs)
+   - Finds performance optimization strategies
+   - Analyzes best practices and design patterns
+   - Creates actionable recommendations (not info dumps)
+   - Provides technical guidance to all team members
+   - Maintains research/ directory with findings
 
 #### Additional Roles (Based on Project Size)
-5. **QA Engineer/Tester**: Testing and verification (Medium/Large)
-6. **DevOps**: Infrastructure and deployment (Large)
-7. **Code Reviewer**: Security and best practices (Large)
-8. **Documentation Writer**: Technical documentation (Optional)
+
+5. **Tester** (Small/Medium/Large projects): Testing and verification
+   - Writes comprehensive test suites (unit, integration, E2E)
+   - Ensures all success criteria are met
+   - Creates test plans for new features
+   - Verifies security and performance requirements
+   - Collaborates with Developer for test coverage
+   - Maintains tests/ directory structure
+   - Reports test results to PM
+
+6. **TestRunner** (Small/Medium/Large projects): Automated test execution
+   - Executes test suites continuously
+   - Manages parallel test execution
+   - Monitors test performance and flakiness
+   - Reports failures immediately to team
+   - Maintains test execution logs
+   - Configures CI/CD test pipelines
+   - Optimizes test run times
+
+7. **LogTracker** (Small/Medium/Large projects): System monitoring and logging
+   - Aggregates logs from all services
+   - Monitors for errors and warnings
+   - Creates error tracking dashboards
+   - Sets up alerting for critical issues
+   - Tracks performance metrics
+   - Identifies patterns in log data
+   - Reports anomalies to team
+
+8. **DevOps** (Medium/Large projects): Infrastructure and deployment
+   - Creates and maintains deployment configurations
+   - Sets up CI/CD pipelines
+   - Manages staging and production environments
+   - Implements infrastructure as code
+   - Monitors system health and performance
+   - Coordinates with Developer on build requirements
+   - Ensures security best practices in deployment
+
+9. **Code Reviewer** (Large projects): Security and code quality
+   - Reviews all code for security vulnerabilities
+   - Ensures coding standards compliance
+   - Identifies performance bottlenecks
+   - Checks for proper error handling
+   - Validates test coverage
+   - Prevents sensitive data exposure
+   - Maintains code quality metrics
+
+10. **Documentation Writer** (Optional): Technical documentation
+    - Creates user-facing documentation
+    - Maintains API documentation
+    - Writes setup and installation guides
+    - Documents architectural decisions
+    - Creates troubleshooting guides
+    - Keeps README files updated
+    - Ensures documentation stays in sync with code
 
 ## 🌳 Git Worktree Architecture (Auto-Orchestrate)
 
@@ -156,6 +237,64 @@ git merge FETCH_HEAD
 2. **Communicate Through PM**: Coordinate merges via Project Manager
 3. **Push Branches**: Share work by pushing to origin
 4. **Regular Commits**: Same 30-minute rule applies
+
+### Role-Specific Directories and Files
+
+Each role typically creates and maintains specific directories:
+
+**Orchestrator**:
+- `project_management/` - Status reports, architecture decisions
+- `mcp-inventory.md` - Available MCP tools (in main project, not worktree)
+- Uses Tmux-Orchestrator tools from tool directory
+
+**Project Manager**:
+- `project_management/reviews/` - Code review notes
+- `project_management/quality/` - Quality metrics
+- `project_management/standups/` - Daily status aggregations
+
+**Developer**:
+- `src/` - Source code
+- `tests/` - Unit tests
+- Feature branches for implementation
+
+**Researcher**:
+- `research/` - All research findings
+- `research/available-tools.md` - MCP tool inventory
+- `research/security-analysis.md` - CVE and vulnerability research
+- `research/best-practices.md` - Industry standards
+
+**Tester**:
+- `tests/` - Test suites
+- `tests/integration/` - Integration tests
+- `tests/e2e/` - End-to-end tests
+- `test-plans/` - Test strategy documents
+
+**TestRunner**:
+- `test-results/` - Execution logs
+- `test-metrics/` - Performance data
+- `.test-config/` - Runner configurations
+
+**LogTracker**:
+- `logs/` - Aggregated logs
+- `monitoring/` - Dashboards and alerts
+- `error-reports/` - Analyzed issues
+
+**DevOps**:
+- `deployment/` - Deployment configurations
+- `.github/workflows/` - CI/CD pipelines
+- `infrastructure/` - IaC files
+- `scripts/` - Deployment scripts
+
+**Code Reviewer**:
+- `reviews/` - Review reports
+- `security-scans/` - Vulnerability reports
+- `quality-reports/` - Code metrics
+
+**Documentation Writer**:
+- `docs/` - User documentation
+- `api-docs/` - API references
+- `README.md` - Project overview
+- `CONTRIBUTING.md` - Contribution guidelines
 
 ## 🔍 Researcher MCP Integration
 
@@ -547,6 +686,60 @@ To prevent communication overload (n² complexity), use structured patterns:
 - Cross-functional communication goes through PM
 - Emergency escalation directly to Orchestrator
 
+### Role Communication Matrix
+
+**Orchestrator** communicates with:
+- All Project Managers (primary)
+- Any agent in emergency situations
+
+**Project Manager** communicates with:
+- Orchestrator (upward reporting)
+- Developer (code reviews, task assignment)
+- Tester (quality verification)
+- TestRunner (test execution status)
+- DevOps (deployment coordination)
+- Code Reviewer (quality gates)
+- All other team members as needed
+
+**Developer** communicates with:
+- PM (primary contact)
+- Researcher (technical guidance)
+- Tester (test requirements)
+- Code Reviewer (feedback incorporation)
+
+**Researcher** communicates with:
+- All team members (provides guidance)
+- PM (risk assessments)
+
+**Tester** communicates with:
+- PM (test results)
+- Developer (test requirements)
+- TestRunner (test suite handoff)
+
+**TestRunner** communicates with:
+- PM (execution status)
+- Tester (test suite updates)
+- LogTracker (failure analysis)
+
+**LogTracker** communicates with:
+- PM (anomaly reports)
+- Developer (error details)
+- DevOps (system health)
+
+**DevOps** communicates with:
+- PM (deployment status)
+- Developer (build requirements)
+- LogTracker (monitoring setup)
+
+**Code Reviewer** communicates with:
+- PM (review results)
+- Developer (change requests)
+
+**Documentation Writer** communicates with:
+- PM (documentation priorities)
+- Developer (technical details)
+- All team members (documentation needs)
+
 ### Daily Standup (Async)
 ```bash
 # PM asks each team member
@@ -590,6 +783,27 @@ Multi-agent systems use ~15x more tokens than standard Claude usage. Team sizes 
 | Max 5x | 5 | 3-4 | Balance performance/duration (default) |
 | Max 20x | 8 | 5-6 | Can support larger teams |
 | Console | 10+ | As needed | Enterprise usage |
+
+### Default Role Deployment by Project Size
+
+**Small Projects** (7 agents total):
+- Orchestrator
+- Developer
+- Researcher
+- Tester
+- TestRunner
+- LogTracker
+- DevOps
+
+**Medium Projects** (8 agents total):
+- All Small project roles
+- Project Manager
+
+**Large Projects** (9 agents total):
+- All Medium project roles
+- Code Reviewer
+
+**Note**: Documentation Writer can be added to any size with `--roles documentation_writer`
 
 ### Token Conservation Tips
 - Use `--size small` for longer coding sessions
