@@ -26,6 +26,8 @@ class ComplianceMonitor:
         self.processed_messages: Set[str] = set()
         self.running = True
         self.orchestrator_session = self._find_orchestrator_session()
+        self.rules = self._load_rules()
+        self.rules_mtime = self._get_rules_mtime()
         
     def _find_orchestrator_session(self) -> str:
         """Find the orchestrator's tmux session"""
@@ -47,6 +49,33 @@ class ComplianceMonitor:
         # Default fallback
         return "tmux-orc:0"
         
+    def _load_rules(self) -> Dict[str, Any]:
+        """Load compliance rules from JSON file"""
+        rules_file = self.script_dir / "compliance_rules.json"
+        if rules_file.exists():
+            try:
+                with open(rules_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Error loading rules: {e}")
+        return {"rules": []}
+        
+    def _get_rules_mtime(self) -> float:
+        """Get modification time of rules file"""
+        rules_file = self.script_dir / "compliance_rules.json"
+        if rules_file.exists():
+            return rules_file.stat().st_mtime
+        return 0
+        
+    def _check_rules_update(self):
+        """Check if rules file has been updated and reload if needed"""
+        current_mtime = self._get_rules_mtime()
+        if current_mtime > self.rules_mtime:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Rules updated, reloading...")
+            self.rules = self._load_rules()
+            self.rules_mtime = current_mtime
+            print(f"✓ Loaded {len(self.rules.get('rules', []))} rules")
+        
     def start(self):
         """Start the compliance monitoring service"""
         print(f"Starting compliance monitor...")
@@ -60,7 +89,15 @@ class ComplianceMonitor:
         
         while self.running:
             try:
+                # Check for rule updates
+                self._check_rules_update()
+                
+                # Check for new messages
                 self._check_new_messages()
+                
+                # Check for rules update trigger file
+                self._check_rules_trigger()
+                
                 time.sleep(5)  # Check every 5 seconds
             except Exception as e:
                 print(f"Error in monitoring loop: {e}")
@@ -71,6 +108,19 @@ class ComplianceMonitor:
         print("\nShutting down compliance monitor...")
         self.running = False
         sys.exit(0)
+        
+    def _check_rules_trigger(self):
+        """Check for rules update trigger file from watcher"""
+        today = date.today().strftime("%Y-%m-%d")
+        daily_log_dir = self.logs_dir / "communications" / today
+        trigger_file = daily_log_dir / ".rules_updated"
+        
+        if trigger_file.exists():
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Rules update trigger detected")
+            trigger_file.unlink()
+            # Force reload rules
+            self.rules_mtime = 0
+            self._check_rules_update()
         
     def _check_new_messages(self):
         """Check for new messages to analyze"""
@@ -134,9 +184,14 @@ class ComplianceMonitor:
             f.write('\n')
             
         try:
-            # Call rule analyzer
+            # Save current rules to temp file for analyzer
+            temp_rules = self.script_dir / ".current_rules.json"
+            with open(temp_rules, 'w') as f:
+                json.dump(self.rules, f)
+                
+            # Call rule analyzer with current rules
             result = subprocess.run(
-                [str(self.script_dir / "rule_analyzer.py"), str(temp_file)],
+                [str(self.script_dir / "rule_analyzer.py"), str(temp_file), "--rules", str(temp_rules)],
                 capture_output=True,
                 text=True
             )
