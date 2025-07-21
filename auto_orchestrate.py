@@ -35,6 +35,9 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from pydantic import BaseModel, Field
 
+# Import session state management
+from session_state import SessionStateManager, create_initial_session_state, SessionState, AgentState
+
 console = Console()
 
 # Pydantic models for structured data
@@ -88,6 +91,8 @@ class AutoOrchestrator:
         self.additional_roles: List[str] = []
         self.force: bool = False
         self.plan_type: str = 'max20'  # Default to Max 20x plan
+        self.session_state_manager = SessionStateManager(self.tmux_orchestrator_path)
+        self.worktree_paths: Dict[str, Path] = {}
         
     def ensure_setup(self):
         """Ensure Tmux Orchestrator is properly set up"""
@@ -741,6 +746,225 @@ CLAUDE_EOF
         result = subprocess.run(['tmux', 'has-session', '-t', session_name], 
                               capture_output=True)
         return result.returncode == 0
+        
+    def detect_existing_orchestration(self, project_name: str) -> Optional[SessionState]:
+        """Detect existing orchestration and load its state"""
+        return self.session_state_manager.load_session_state(project_name)
+        
+    def resume_orchestration(self, session_state: SessionState, resume_mode: str = 'full') -> bool:
+        """Resume an existing orchestration session
+        
+        Args:
+            session_state: The loaded session state
+            resume_mode: One of 'full', 'selective', 'status'
+            
+        Returns:
+            True if resume was successful
+        """
+        console.print(Panel.fit(
+            f"[bold cyan]Resuming Orchestration Session[/bold cyan]\n"
+            f"Project: {session_state.project_name}\n"
+            f"Session: {session_state.session_name}\n"
+            f"Created: {session_state.created_at}",
+            title="📋 Resume Details"
+        ))
+        
+        # Update agent status
+        console.print("\n[cyan]Checking agent status...[/cyan]")
+        session_state = self.session_state_manager.update_agent_status(
+            session_state, session_state.session_name
+        )
+        
+        # Display summary
+        summary = self.session_state_manager.get_session_summary(session_state)
+        
+        table = Table(title="Agent Status")
+        table.add_column("Role", style="cyan")
+        table.add_column("Window", style="yellow")
+        table.add_column("Status", style="green")
+        table.add_column("Branch", style="blue")
+        table.add_column("Worktree", style="white")
+        
+        for role, info in summary['agents'].items():
+            status = "✓ Active" if info['alive'] else "✗ Dead"
+            if info['exhausted']:
+                status = "⚠️ Exhausted"
+            table.add_row(
+                role,
+                str(info['window']),
+                status,
+                info['branch'] or "unknown",
+                Path(info['worktree']).name if info['worktree'] else "none"
+            )
+            
+        console.print(table)
+        
+        # Load implementation spec
+        if not Path(session_state.implementation_spec_path).exists():
+            console.print(f"[red]Error: Implementation spec not found at {session_state.implementation_spec_path}[/red]")
+            return False
+            
+        with open(session_state.implementation_spec_path, 'r') as f:
+            spec_dict = json.load(f)
+            
+        # Reconstruct implementation spec
+        self.implementation_spec = ImplementationSpec(**spec_dict)
+        self.project_path = Path(session_state.project_path)
+        
+        # Handle different resume modes
+        if resume_mode == 'status':
+            console.print("\n[green]Status check complete. No changes made.[/green]")
+            console.print(f"To attach: [cyan]tmux attach -t {session_state.session_name}[/cyan]")
+            return True
+            
+        elif resume_mode == 'full':
+            console.print("\n[bold]Full Resume Options:[/bold]")
+            console.print("1. [green]Restart dead agents[/green] - Restart any non-responsive agents")
+            console.print("2. [cyan]Re-brief all agents[/cyan] - Send context restoration to all agents")
+            console.print("3. [yellow]Both[/yellow] - Restart dead and re-brief all")
+            console.print("4. [red]Cancel[/red] - Exit without changes")
+            
+            choice = click.prompt("\nYour choice", type=click.Choice(['1', '2', '3', '4']), default='3')
+            
+            if choice == '4':
+                console.print("[yellow]Resume cancelled.[/yellow]")
+                return False
+                
+            # Restart dead agents
+            if choice in ['1', '3']:
+                for role, agent in session_state.agents.items():
+                    if not agent.is_alive:
+                        console.print(f"\n[yellow]Restarting {role} agent...[/yellow]")
+                        self.restart_agent(session_state, agent)
+                        
+            # Re-brief all agents
+            if choice in ['2', '3']:
+                for role, agent in session_state.agents.items():
+                    if agent.is_alive or choice in ['1', '3']:  # Include newly restarted
+                        console.print(f"\n[cyan]Re-briefing {role} agent...[/cyan]")
+                        self.rebrief_agent(session_state, agent)
+                        
+        # Save updated state
+        self.session_state_manager.save_session_state(session_state)
+        
+        console.print(f"\n[green]✓ Resume complete![/green]")
+        console.print(f"To attach: [cyan]tmux attach -t {session_state.session_name}[/cyan]")
+        
+        # Schedule credit-exhausted agents for auto-resume
+        exhausted_agents = [a for a in session_state.agents.values() if a.is_exhausted]
+        if exhausted_agents:
+            console.print(f"\n[yellow]Note: {len(exhausted_agents)} agents are credit-exhausted.[/yellow]")
+            self.schedule_exhausted_agents(session_state, exhausted_agents)
+            
+        return True
+        
+    def restart_agent(self, session_state: SessionState, agent: AgentState):
+        """Restart a dead agent by recreating its window and briefing"""
+        # Kill the existing window if it exists
+        subprocess.run([
+            'tmux', 'kill-window', '-t', f'{session_state.session_name}:{agent.window_index}'
+        ], capture_output=True)
+        
+        # Recreate the window
+        subprocess.run([
+            'tmux', 'new-window', '-t', f'{session_state.session_name}:{agent.window_index}',
+            '-n', agent.window_name, '-c', agent.worktree_path
+        ], capture_output=True)
+        
+        # Start Claude and send briefing
+        role_config = ROLE_CONFIGS.get(agent.role, ROLE_CONFIGS['developer'])
+        
+        # Check MCP pre-initialization
+        worktree_path = Path(agent.worktree_path)
+        if (worktree_path / '.mcp.json').exists():
+            self.pre_initialize_claude_in_worktree(
+                session_state.session_name, agent.window_index, 
+                agent.role, worktree_path
+            )
+            
+            # Kill and recreate window after MCP approval
+            subprocess.run([
+                'tmux', 'kill-window', '-t', f'{session_state.session_name}:{agent.window_index}'
+            ], capture_output=True)
+            
+            subprocess.run([
+                'tmux', 'new-window', '-t', f'{session_state.session_name}:{agent.window_index}',
+                '-n', agent.window_name, '-c', agent.worktree_path
+            ], capture_output=True)
+            
+        # Start Claude
+        subprocess.run([
+            'tmux', 'send-keys', '-t', f'{session_state.session_name}:{agent.window_index}',
+            'claude --dangerously-skip-permissions', 'Enter'
+        ])
+        time.sleep(5)
+        
+        # Send briefing
+        briefing = self.create_role_briefing(
+            agent.role, self.implementation_spec, role_config,
+            context_primed=True, worktree_paths={agent.role: Path(agent.worktree_path)}
+        )
+        
+        send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
+        subprocess.run([
+            str(send_script),
+            f'{session_state.session_name}:{agent.window_index}',
+            briefing
+        ])
+        
+        # Update agent state
+        agent.is_alive = True
+        agent.last_briefing_time = datetime.now().isoformat()
+        
+    def rebrief_agent(self, session_state: SessionState, agent: AgentState):
+        """Send a context restoration message to an existing agent"""
+        role_config = ROLE_CONFIGS.get(agent.role, ROLE_CONFIGS['developer'])
+        
+        # Create a shorter re-briefing focused on context restoration
+        rebrief_msg = f"""🔄 **Context Restoration**
+
+You are the {agent.window_name} for the {session_state.project_name} project.
+
+**Current Status**:
+- Working directory: {agent.worktree_path}
+- Current branch: {agent.current_branch or 'unknown'}
+- Project continues from where you left off
+
+**Quick Reminders**:
+1. Check your recent work with `git log --oneline -10`
+2. Review uncommitted changes with `git status`
+3. Your role: {role_config.description}
+4. Report to PM for coordination
+
+Please provide a brief status update on your current work and any blockers."""
+        
+        send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
+        subprocess.run([
+            str(send_script),
+            f'{session_state.session_name}:{agent.window_index}',
+            rebrief_msg
+        ])
+        
+        agent.last_briefing_time = datetime.now().isoformat()
+        
+    def schedule_exhausted_agents(self, session_state: SessionState, exhausted_agents: List[AgentState]):
+        """Schedule exhausted agents for auto-resume when credits reset"""
+        # Check if credit monitoring is available
+        credit_schedule_path = Path.home() / '.claude' / 'credit_schedule.json'
+        if not credit_schedule_path.exists():
+            console.print("[yellow]Credit monitoring not available. Manual resume required.[/yellow]")
+            return
+            
+        # Get reset time from first exhausted agent
+        reset_time = None
+        for agent in exhausted_agents:
+            if agent.credit_reset_time:
+                reset_time = agent.credit_reset_time
+                break
+                
+        if reset_time:
+            console.print(f"[cyan]Credits expected to reset at: {reset_time}[/cyan]")
+            console.print("[cyan]Consider using credit_monitor.py for automatic resume[/cyan]")
     
     def setup_worktrees(self, spec: ImplementationSpec, roles_to_deploy: List[Tuple[str, str]]) -> Dict[str, Path]:
         """Create git worktrees for each agent"""
@@ -2944,9 +3168,23 @@ Remember: It's better to compact proactively than to hit context exhaustion!"""
                     elif choice == '2':
                         # Resume
                         if existing_session:
-                            console.print(f"\n[green]✓ Resuming existing session![/green]")
-                            console.print(f"To attach: [cyan]tmux attach -t {session_name}[/cyan]")
-                            sys.exit(0)
+                            # Try to load session state
+                            session_state = self.detect_existing_orchestration(
+                                self.implementation_spec.project.name
+                            )
+                            
+                            if session_state:
+                                # Use smart resume
+                                if self.resume_orchestration(session_state, resume_mode='full'):
+                                    sys.exit(0)
+                                else:
+                                    console.print("[yellow]Resume failed. Creating new session...[/yellow]")
+                                    break
+                            else:
+                                # Fallback to simple attach
+                                console.print(f"\n[yellow]Warning: No session state found. Simple attach only.[/yellow]")
+                                console.print(f"To attach: [cyan]tmux attach -t {session_name}[/cyan]")
+                                sys.exit(0)
                         else:
                             console.print("[red]No existing session to resume. Creating new session...[/red]")
                             break
@@ -2967,13 +3205,40 @@ Remember: It's better to compact proactively than to hit context exhaustion!"""
         
         console.print(f"\n[green]✓ Setup complete![/green]")
         console.print(f"Implementation spec saved to: {spec_file}")
+        
+        # Save session state for resume capability
+        session_name = self.implementation_spec.project.name.lower().replace(' ', '-')[:20] + "-impl"
+        roles_deployed = self.get_roles_for_project_size(self.implementation_spec)
+        
+        # Get current branch as parent branch
+        try:
+            result = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                                  cwd=self.project_path,
+                                  capture_output=True, text=True)
+            parent_branch = result.stdout.strip() if result.returncode == 0 else None
+        except:
+            parent_branch = None
+            
+        session_state = create_initial_session_state(
+            session_name=session_name,
+            project_path=str(self.project_path),
+            project_name=self.implementation_spec.project.name,
+            implementation_spec_path=str(spec_file),
+            agents=[(name, idx, role) for idx, (name, role) in enumerate(roles_deployed)],
+            worktree_paths=self.worktree_paths,
+            project_size=self.implementation_spec.project_size.size,
+            parent_branch=parent_branch
+        )
+        
+        self.session_state_manager.save_session_state(session_state)
+        console.print(f"[green]✓ Session state saved for resume capability[/green]")
 
 
 @click.command()
 @click.option('--project', '-p', required=True, type=click.Path(exists=True), 
               help='Path to the GitHub project')
-@click.option('--spec', '-s', required=True, type=click.Path(exists=True),
-              help='Path to the specification markdown file')
+@click.option('--spec', '-s', type=click.Path(exists=True),
+              help='Path to the specification markdown file (required unless using --resume)')
 @click.option('--size', type=click.Choice(['auto', 'small', 'medium', 'large']), 
               default='auto', help='Project size (auto-detect by default)')
 @click.option('--roles', multiple=True, 
@@ -2982,7 +3247,14 @@ Remember: It's better to compact proactively than to hit context exhaustion!"""
               help='Force overwrite existing session/worktrees without prompting')
 @click.option('--plan', type=click.Choice(['auto', 'pro', 'max5', 'max20', 'console']), 
               default='auto', help='Claude subscription plan (affects team size limits)')
-def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: str):
+@click.option('--resume', '-r', is_flag=True,
+              help='Resume an existing orchestration session')
+@click.option('--status-only', is_flag=True,
+              help='Check status of existing session without making changes')
+@click.option('--rebrief-all', is_flag=True,
+              help='When resuming, re-brief all agents with context')
+def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: str, 
+         resume: bool, status_only: bool, rebrief_all: bool):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
@@ -2999,6 +3271,37 @@ def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: st
     You can manually specify project size with --size or add specific roles
     with --roles (e.g., --roles documentation_writer)
     """
+    # Handle resume operation
+    if resume:
+        # For resume, we need to detect the project from the path
+        project_path = Path(project).resolve()
+        project_name = project_path.name
+        
+        # Create orchestrator with dummy spec path for now
+        orchestrator = AutoOrchestrator(project, spec if spec else "dummy.md")
+        
+        # Try to load session state
+        session_state = orchestrator.session_state_manager.load_session_state(project_name)
+        
+        if not session_state:
+            console.print(f"[red]Error: No existing orchestration found for project '{project_name}'[/red]")
+            console.print("[yellow]Hint: Make sure you're in the same project directory used during setup[/yellow]")
+            sys.exit(1)
+            
+        # Determine resume mode
+        resume_mode = 'status' if status_only else 'full'
+        
+        # Resume the orchestration
+        if orchestrator.resume_orchestration(session_state, resume_mode):
+            sys.exit(0)
+        else:
+            sys.exit(1)
+    
+    # Normal setup flow
+    if not spec:
+        console.print("[red]Error: --spec is required when not using --resume[/red]")
+        sys.exit(1)
+        
     orchestrator = AutoOrchestrator(project, spec)
     orchestrator.manual_size = size if size != 'auto' else None
     orchestrator.additional_roles = list(roles) if roles else []
