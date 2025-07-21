@@ -198,15 +198,21 @@ Return ONLY the JSON, no other text."""
 def main():
     """Analyze a message log file for compliance"""
     if len(sys.argv) < 2:
-        print("Usage: rule_analyzer.py <message_log.jsonl>")
+        print("Usage: rule_analyzer.py <message_log.jsonl> [--rules <rules.json>]")
         sys.exit(1)
         
     script_dir = Path(__file__).parent
-    rules_file = script_dir / "compliance_rules.json"
     log_file = Path(sys.argv[1])
     
+    # Check for custom rules file
+    if "--rules" in sys.argv and sys.argv.index("--rules") + 1 < len(sys.argv):
+        rules_file = Path(sys.argv[sys.argv.index("--rules") + 1])
+    else:
+        rules_file = script_dir / "compliance_rules.json"
+    
     if not rules_file.exists():
-        print(f"Error: Rules file not found. Run extract_rules.py first.")
+        print(f"Error: Rules file not found: {rules_file}")
+        print(f"Run extract_rules.py first or specify --rules")
         sys.exit(1)
         
     if not log_file.exists():
