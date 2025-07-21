@@ -3280,12 +3280,38 @@ def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: st
         # Create orchestrator with dummy spec path for now
         orchestrator = AutoOrchestrator(project, spec if spec else "dummy.md")
         
-        # Try to load session state
+        # Try to load session state - first by exact name
         session_state = orchestrator.session_state_manager.load_session_state(project_name)
         
+        # If not found, try to find by matching project path
         if not session_state:
-            console.print(f"[red]Error: No existing orchestration found for project '{project_name}'[/red]")
+            # Search through all projects in registry
+            registry_projects = orchestrator.tmux_orchestrator_path / 'registry' / 'projects'
+            if registry_projects.exists():
+                for proj_dir in registry_projects.iterdir():
+                    if proj_dir.is_dir():
+                        state_file = proj_dir / 'session_state.json'
+                        if state_file.exists():
+                            # Try to load and check if project path matches
+                            try:
+                                with open(state_file, 'r') as f:
+                                    state_data = json.load(f)
+                                if Path(state_data.get('project_path', '')).resolve() == project_path:
+                                    session_state = orchestrator.session_state_manager.load_session_state(proj_dir.name)
+                                    break
+                            except:
+                                continue
+        
+        if not session_state:
+            console.print(f"[red]Error: No existing orchestration found for project path '{project_path}'[/red]")
             console.print("[yellow]Hint: Make sure you're in the same project directory used during setup[/yellow]")
+            
+            # Show available projects
+            if registry_projects.exists():
+                console.print("\n[cyan]Available orchestrated projects:[/cyan]")
+                for proj_dir in registry_projects.iterdir():
+                    if proj_dir.is_dir() and (proj_dir / 'session_state.json').exists():
+                        console.print(f"  - {proj_dir.name}")
             sys.exit(1)
             
         # Determine resume mode
