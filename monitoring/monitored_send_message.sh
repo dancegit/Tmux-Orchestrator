@@ -29,28 +29,22 @@ SENDER_WINDOW=$(echo "$SENDER_PANE" | cut -d: -f2)
 TARGET_SESSION=$(echo "$TARGET" | cut -d: -f1)
 TARGET_WINDOW=$(echo "$TARGET" | cut -d: -f2)
 
-# Create JSON log entry
+# Create JSON log entry (JSONL format - single line)
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-LOG_ENTRY=$(cat <<EOF
-{
-  "timestamp": "$TIMESTAMP",
-  "sender": {
-    "session": "$SENDER_SESSION",
-    "window": "$SENDER_WINDOW",
-    "pane": "$SENDER_PANE"
-  },
-  "recipient": {
-    "session": "$TARGET_SESSION",
-    "window": "$TARGET_WINDOW",
-    "pane": "$TARGET"
-  },
-  "message": $(echo "$MESSAGE" | jq -Rs .),
-  "compliance_checked": false
-}
-EOF
-)
 
-# Log the message
+# Build JSON as a single line using jq with compact output
+LOG_ENTRY=$(jq -c -n \
+  --arg ts "$TIMESTAMP" \
+  --arg ss "$SENDER_SESSION" \
+  --arg sw "$SENDER_WINDOW" \
+  --arg sp "$SENDER_PANE" \
+  --arg rs "$TARGET_SESSION" \
+  --arg rw "$TARGET_WINDOW" \
+  --arg rp "$TARGET" \
+  --arg msg "$MESSAGE" \
+  '{timestamp: $ts, sender: {session: $ss, window: $sw, pane: $sp}, recipient: {session: $rs, window: $rw, pane: $rp}, message: $msg, compliance_checked: false}')
+
+# Log the message (single line for JSONL)
 echo "$LOG_ENTRY" >> "$MESSAGE_LOG"
 
 # Send the actual message using the original script
