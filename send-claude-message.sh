@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Send message to Claude agent in tmux window
+# Now with smart /compact handling!
 # Usage: send-claude-message.sh <session:window> <message>
 
 if [ $# -lt 2 ]; then
@@ -13,13 +14,31 @@ WINDOW="$1"
 shift  # Remove first argument, rest is the message
 MESSAGE="$*"
 
-# Send the message
-tmux send-keys -t "$WINDOW" "$MESSAGE"
-
-# Wait 0.5 seconds for UI to register
-sleep 0.5
-
-# Send Enter to submit
-tmux send-keys -t "$WINDOW" Enter
-
-echo "Message sent to $WINDOW: $MESSAGE"
+# Check if message contains /compact
+if echo "$MESSAGE" | grep -q "/compact"; then
+    # Extract message without /compact
+    MESSAGE_WITHOUT_COMPACT=$(echo "$MESSAGE" | sed 's|/compact||g' | sed 's/  */ /g' | sed 's/^ *//;s/ *$//')
+    
+    # Send the main message if it's not empty
+    if [ -n "$MESSAGE_WITHOUT_COMPACT" ] && [ "$MESSAGE_WITHOUT_COMPACT" != " " ]; then
+        tmux send-keys -t "$WINDOW" "$MESSAGE_WITHOUT_COMPACT"
+        sleep 0.5
+        tmux send-keys -t "$WINDOW" Enter
+        echo "Message sent to $WINDOW: $MESSAGE_WITHOUT_COMPACT"
+        
+        # Wait for the message to be processed
+        sleep 2
+    fi
+    
+    # Now send /compact as a separate command
+    tmux send-keys -t "$WINDOW" "/compact"
+    sleep 0.5
+    tmux send-keys -t "$WINDOW" Enter
+    echo "Compact command sent separately to $WINDOW"
+else
+    # Normal message sending
+    tmux send-keys -t "$WINDOW" "$MESSAGE"
+    sleep 0.5
+    tmux send-keys -t "$WINDOW" Enter
+    echo "Message sent to $WINDOW: $MESSAGE"
+fi
