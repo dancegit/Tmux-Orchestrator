@@ -1,0 +1,52 @@
+{
+  "monitoring": {
+    "enabled": true,
+    "check_interval_seconds": 5,
+    "orchestrator_session": "tmux-orc:0",
+    "orchestrator_alternatives": [
+      "orchestrator:0",
+      "tmux-orchestrator:0",
+      "signalmatrix-hybrid--impl:0"
+    ]
+  },
+  "notifications": {
+    "enabled": true,
+    "rate_limit": {
+      "max_per_hour": 5,
+      "per_rule": true
+    },
+    "severity_thresholds": {
+      "critical": "immediate",
+      "high": "immediate",
+      "medium": "batched",
+      "low": "daily_summary"
+    }
+  },
+  "analysis": {
+    "use_claude": true,
+    "claude_timeout_seconds": 30,
+    "fallback_enabled": true,
+    "batch_size": 10
+  },
+  "reporting": {
+    "daily_reports": true,
+    "report_time": "02:00",
+    "retain_days": 30,
+    "include_samples": true,
+    "max_violation_samples": 10
+  },
+  "rules": {
+    "auto_update": true,
+    "custom_rules_file": null,
+    "severity_overrides": {
+      "comm-003": "low",
+      "git-002": "medium"
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "max_log_size_mb": 100,
+    "rotation_count": 5,
+    "include_agent_sessions": false
+  }
+}
