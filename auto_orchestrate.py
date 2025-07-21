@@ -1471,20 +1471,26 @@ This means context exhaustion is NOT a crisis - it's a routine, self-managed eve
 
 **Final Integration Protocol**:
 1. **Monitor Agent Progress**: Track which agents have pushed significant work
-2. **Coordinate with PM**: PM will handle the technical merge process
-3. **Verify Integration Readiness**:
-   - All critical features implemented
-   - Tests passing
-   - No blocking issues
-4. **Instruct PM to Create Integration PR**:
+2. **Decide Integration Timing**: When major milestones are complete
+3. **Instruct PM to Execute Integration**:
    ```
-   "PM: Please create the integration branch and merge all agent work.
-   Target parent branch is '{spec.git_workflow.parent_branch}'.
-   Create PR when ready."
+   "PM: Please execute full integration now.
+   Create integration branch, merge all agent work, and auto-merge to {spec.git_workflow.parent_branch}.
+   Notify me when complete or if conflicts need resolution."
+   ```
+4. **Handle Conflict Delegation**:
+   - PM reports conflicts → You assign to appropriate agent
+   - Example: "Developer: PM needs you to resolve merge conflicts in integration branch"
+5. **Post-Merge Notification**:
+   ```bash
+   # After PM confirms merge complete:
+   ./send-claude-message.sh developer:0 "Integration complete! Pull from {spec.git_workflow.parent_branch} and create new feature branch"
+   ./send-claude-message.sh tester:2 "Integration complete! Pull from {spec.git_workflow.parent_branch} and create new feature branch"
+   # Notify all agents...
    ```
 
-**CRITICAL**: All work MUST merge back to `{spec.git_workflow.parent_branch}`, NOT to main!
-Exception: Only if parent_branch IS main can work merge to main."""
+**Integration is AUTOMATED**: No manual PR reviews, no waiting for tests. Trust your agents!
+**CRITICAL**: All work merges to `{spec.git_workflow.parent_branch}`, NOT to main (unless parent IS main)!"""
 
         elif role == 'project_manager':
             # Build PM-specific worktree paths for examples
@@ -2482,6 +2488,19 @@ git merge origin/{spec.git_workflow.branch_name}
 **Communication Flow**:
 - Report pushes to PM → PM tells Orchestrator → Orchestrator notifies affected agents
 - Never assume other agents see your terminal announcements
+
+**Post-Integration Sync** (CRITICAL):
+When Orchestrator announces "Integration complete! All agents please pull from {spec.git_workflow.parent_branch}":
+```bash
+# ALL agents MUST do this immediately:
+git fetch origin
+git checkout {spec.git_workflow.parent_branch}
+git pull origin {spec.git_workflow.parent_branch}
+
+# Then recreate your agent branch from the updated parent
+git checkout -b {spec.git_workflow.branch_name}-{{role}}-v2
+```
+This ensures everyone works from the same integrated codebase!
 """
         
         # Role-specific sync instructions
@@ -2583,7 +2602,7 @@ git merge origin/{spec.git_workflow.branch_name}
    - Request Orchestrator to notify specific agents
    - Example: "Orchestrator: Developer pushed auth changes. Please notify Tester and TestRunner to merge origin/{spec.git_workflow.branch_name}"
    
-4. **Final Integration to Parent Branch ({spec.git_workflow.parent_branch})**:
+4. **Automated Final Integration to Parent Branch ({spec.git_workflow.parent_branch})**:
    ```bash
    # Step 1: Create integration branch from parent
    git checkout {spec.git_workflow.parent_branch}
@@ -2592,23 +2611,37 @@ git merge origin/{spec.git_workflow.branch_name}
    
    # Step 2: Merge all agent branches in order
    git merge origin/{spec.git_workflow.branch_name}  # Developer (main implementation)
+   
+   # IF CONFLICTS: Delegate to Developer
+   # "Developer: Merge conflict in integration branch. Please resolve conflicts between your branch and parent."
+   
    git merge origin/{spec.git_workflow.branch_name}-tester  # Tests
    git merge origin/{spec.git_workflow.branch_name}-testrunner  # Test results
    git merge origin/pm-{spec.git_workflow.branch_name}  # PM docs/reviews
-   # Resolve any conflicts at each step
    
-   # Step 3: Run full test suite on integrated code
-   # Step 4: Push integration branch
+   # Step 3: Push integration branch
    git push -u origin integration/{spec.git_workflow.branch_name}
    
-   # Step 5: Create PR from integration branch to parent
+   # Step 4: Create and AUTO-MERGE PR (skip tests, we trust our agents)
    gh pr create --base {spec.git_workflow.parent_branch} \\
      --head integration/{spec.git_workflow.branch_name} \\
      --title "{spec.git_workflow.pr_title}" \\
-     --body "Integrated work from all agents on {spec.git_workflow.branch_name}"
+     --body "Integrated work from all agents on {spec.git_workflow.branch_name}\\n\\nAuto-merging after integration."
+   
+   # Step 5: Auto-merge immediately (admin merge, skip checks)
+   gh pr merge --admin --merge
+   
+   # Step 6: Notify all agents to sync
+   # "Orchestrator: Integration complete! All agents please pull from {spec.git_workflow.parent_branch}"
    ```
    
-   **CRITICAL**: NEVER merge directly to 'main' unless {spec.git_workflow.parent_branch} IS 'main'!
+   **Conflict Resolution Protocol**:
+   - Developer: Resolves code/implementation conflicts
+   - Tester: Resolves test file conflicts
+   - PM: Resolves documentation conflicts
+   - First merger: Helps resolve cross-agent conflicts
+   
+   **Post-Merge Sync**: ALL agents must pull the merged parent branch!
 """
         
         elif role == 'testrunner':
