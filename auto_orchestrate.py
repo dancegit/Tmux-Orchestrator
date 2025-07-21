@@ -2420,26 +2420,41 @@ Leverage these tools as appropriate for your role."""
         base_instructions = f"""
 🔄 **Git Synchronization Protocol**
 
-Working in isolated worktrees means you MUST regularly sync with your teammates' changes:
+Working in isolated worktrees with **agent-specific branches** means you MUST regularly sync with your teammates' changes:
+
+**Branch Structure**:
+- Each agent works on their own branch to prevent conflicts
+- Developer: `{spec.git_workflow.branch_name}`
+- Tester: `{spec.git_workflow.branch_name}-tester`  
+- PM: `pm-{spec.git_workflow.branch_name}`
+- TestRunner: `{spec.git_workflow.branch_name}-testrunner`
+- Other agents: `{spec.git_workflow.branch_name}-{{role}}`
 
 **When to Sync**:
 - 🌅 Start of each work session
 - 📋 Before starting new features/tests
 - ⏰ Every hour during active development
 - 🔍 Before code reviews or testing
-- 📢 When teammates announce important pushes
+- 📢 When teammates announce pushes via PM/Orchestrator
 
-**Basic Sync Commands**:
+**Cross-Branch Sync Commands**:
 ```bash
-# Check for updates from all branches
+# Check for updates from all agent branches
 git fetch origin
 
-# See what branches teammates have pushed
-git branch -r | grep {spec.git_workflow.branch_name}
+# See what agent branches exist
+git branch -r | grep -E "{spec.git_workflow.branch_name}|pm-{spec.git_workflow.branch_name}"
 
-# Pull specific teammate's changes
-git merge origin/[teammate-branch]
+# Merge specific agent's work into your branch
+git merge origin/[agent-branch-name]
+
+# Example: Tester getting Developer's changes
+git merge origin/{spec.git_workflow.branch_name}
 ```
+
+**Communication Flow**:
+- Report pushes to PM → PM tells Orchestrator → Orchestrator notifies affected agents
+- Never assume other agents see your terminal announcements
 """
         
         # Role-specific sync instructions
@@ -2450,10 +2465,10 @@ git merge origin/[teammate-branch]
    ```bash
    # Pull PM's review feedback
    git fetch origin
-   git merge origin/pm-review-{spec.git_workflow.branch_name} 2>/dev/null || true
+   git merge origin/pm-{spec.git_workflow.branch_name} 2>/dev/null || true
    
    # Check for test updates from Tester
-   git merge origin/tests-{spec.git_workflow.branch_name} 2>/dev/null || true
+   git merge origin/{spec.git_workflow.branch_name}-tester 2>/dev/null || true
    ```
 
 2. **After Major Commits**:
@@ -2461,13 +2476,14 @@ git merge origin/[teammate-branch]
    # Push your work for others
    git push -u origin {spec.git_workflow.branch_name}
    
-   # Notify team via orchestrator
-   # "Pushed authentication module - ready for testing"
+   # Report to PM for distribution
+   # "PM: Pushed authentication module to {spec.git_workflow.branch_name} - ready for testing"
    ```
 
 3. **Collaboration Tips**:
+   - Your branch is the main implementation branch
+   - Other agents will merge FROM your branch
    - Always push after completing a module
-   - Include clear commit messages for teammates
    - Tag stable points: `git tag dev-stable-$(date +%Y%m%d-%H%M)`
 """
         
@@ -2481,15 +2497,20 @@ git merge origin/[teammate-branch]
    git merge origin/{spec.git_workflow.branch_name}
    
    # Check TestRunner's execution results if available
-   git merge origin/testrunner-{spec.git_workflow.branch_name} 2>/dev/null || true
+   git merge origin/{spec.git_workflow.branch_name}-testrunner 2>/dev/null || true
    ```
 
 2. **Test Development Workflow**:
    ```bash
+   # Work on your agent branch
+   git checkout -b {spec.git_workflow.branch_name}-tester
+   
    # After writing tests, push immediately
    git add tests/
    git commit -m "test: add integration tests for [module]"
-   git push -u origin tests-{spec.git_workflow.branch_name}
+   git push -u origin {spec.git_workflow.branch_name}-tester
+   
+   # Report to PM: "Pushed new tests to {spec.git_workflow.branch_name}-tester"
    ```
 
 3. **Cross-Reference Testing**:
@@ -2508,24 +2529,36 @@ git merge origin/[teammate-branch]
    # Pull from ALL team members
    git fetch origin --all
    
-   # Check each teammate's progress
-   for branch in $(git branch -r | grep {spec.git_workflow.branch_name}); do
-     echo "Checking $branch"
+   # List all agent branches
+   git branch -r | grep -E "{spec.git_workflow.branch_name}|pm-{spec.git_workflow.branch_name}"
+   
+   # Check each agent's progress
+   for branch in $(git branch -r | grep -E "{spec.git_workflow.branch_name}"); do
+     echo "=== Changes in $branch ==="
      git log --oneline origin/{spec.git_workflow.parent_branch}..$branch
    done
    ```
 
-2. **Review Preparation**:
+2. **Cross-Agent Merge Coordination**:
    ```bash
-   # Before reviewing, always sync
+   # When Developer pushes important changes
+   # Notify affected agents via Orchestrator:
+   # "Orchestrator: Please tell Tester to merge origin/{spec.git_workflow.branch_name}"
+   
+   # Track merge status
    git merge origin/{spec.git_workflow.branch_name}  # Developer's work
-   git merge origin/tests-{spec.git_workflow.branch_name}  # Tester's work
+   git merge origin/{spec.git_workflow.branch_name}-tester  # Tester's work
    ```
 
-3. **Coordination Duties**:
-   - Monitor for merge conflicts between agents
-   - Facilitate cross-team updates
-   - Announce important merges to all agents
+3. **Push Announcement Protocol**:
+   - Receive push notifications from all agents
+   - Determine which agents need the updates
+   - Request Orchestrator to notify specific agents
+   - Example: "Orchestrator: Developer pushed auth changes. Please notify Tester and TestRunner to merge origin/{spec.git_workflow.branch_name}"
+   
+4. **Final Integration**:
+   - Eventually merge all agent branches to create unified PR
+   - Resolve conflicts between agent-specific branches
 """
         
         elif role == 'testrunner':
@@ -2536,15 +2569,23 @@ git merge origin/[teammate-branch]
    # Get latest code AND tests
    git fetch origin
    git merge origin/{spec.git_workflow.branch_name}  # Developer code
-   git merge origin/tests-{spec.git_workflow.branch_name}  # Test suites
+   git merge origin/{spec.git_workflow.branch_name}-tester  # Test suites
    ```
 
-2. **Share Results**:
+2. **Working on Your Branch**:
+   ```bash
+   # Create/switch to your agent branch
+   git checkout -b {spec.git_workflow.branch_name}-testrunner
+   ```
+
+3. **Share Results**:
    ```bash
    # After test runs, commit results
    git add test-results/
    git commit -m "test-results: [timestamp] - X passed, Y failed"
-   git push -u origin testrunner-{spec.git_workflow.branch_name}
+   git push -u origin {spec.git_workflow.branch_name}-testrunner
+   
+   # Report to PM: "Test results pushed to {spec.git_workflow.branch_name}-testrunner: X passed, Y failed"
    ```
 """
         

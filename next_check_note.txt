@@ -1,4 +1,4 @@
-=== Next Check Note (Mon 21 Jul 06:51:08 WEST 2025) ===
-Scheduled for: 10 minutes
+=== Next Check Note (Mon 21 Jul 07:25:01 WEST 2025) ===
+Scheduled for: 30 minutes
 
-Collect standup responses, assess Phase 6 progress, monitor usage limits
+Final check before usage limit reset, ensure python-multipart fix, plan 4am restart
