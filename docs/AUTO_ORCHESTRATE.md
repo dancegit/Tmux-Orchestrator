@@ -318,6 +318,87 @@ Implement secure user authentication with JWT tokens
 - Documentation complete
 ```
 
+## Resume Functionality
+
+### Resuming Existing Orchestrations
+
+The auto-orchestrate script now supports intelligent resume of existing orchestration sessions:
+
+```bash
+# Basic resume - restarts dead agents and re-briefs all
+./auto_orchestrate.py --project /path/to/project --resume
+
+# Check status only without making changes
+./auto_orchestrate.py --project /path/to/project --resume --status-only
+
+# Resume with forced re-briefing of all agents
+./auto_orchestrate.py --project /path/to/project --resume --rebrief-all
+```
+
+### How Resume Works
+
+1. **Session State Tracking**: The system saves session state after initial setup
+   - Agent roles and window assignments
+   - Worktree paths for each agent
+   - Implementation spec location
+   - Git branch information
+
+2. **Agent Health Detection**: On resume, the system checks each agent:
+   - ✓ Active: Claude is responsive
+   - ✗ Dead: Window exists but Claude not responding
+   - ⚠️ Exhausted: Credit limit reached
+
+3. **Smart Recovery Options**:
+   - Restart dead agents with full briefing
+   - Re-brief active agents with context restoration
+   - Handle credit-exhausted agents gracefully
+
+4. **Context Restoration**: Re-briefed agents receive:
+   - Role reminders
+   - Current branch and worktree info
+   - Instructions to check recent work
+   - Coordination reminders
+
+### Resume Scenarios
+
+#### Scenario 1: Credit Exhaustion
+```bash
+# Check status when agents are exhausted
+./auto_orchestrate.py --project /path/to/project --resume --status-only
+
+# Output shows exhausted agents with reset times
+# System will suggest using credit_monitor.py for auto-resume
+```
+
+#### Scenario 2: Terminal Crash
+```bash
+# Resume after terminal/system crash
+./auto_orchestrate.py --project /path/to/project --resume
+
+# Choose option 3 (Both) to restart dead agents and re-brief all
+```
+
+#### Scenario 3: Context Loss
+```bash
+# When agents have used /compact and lost context
+./auto_orchestrate.py --project /path/to/project --resume --rebrief-all
+
+# All agents receive context restoration messages
+```
+
+### Session State Location
+
+Session states are saved in:
+```
+registry/projects/{project-name}/session_state.json
+```
+
+This file contains:
+- Session and agent metadata
+- Last briefing times
+- Git status for each worktree
+- Credit exhaustion tracking
+
 ## Advanced Usage
 
 ### Git Worktree Management
