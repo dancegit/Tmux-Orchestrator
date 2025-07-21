@@ -10,6 +10,15 @@ The `auto_orchestrate.py` script provides automated setup from specifications:
 ```bash
 # Automatically set up a complete orchestration environment
 ./auto_orchestrate.py --project /path/to/project --spec /path/to/spec.md
+
+# Resume an existing orchestration (NEW!)
+./auto_orchestrate.py --project /path/to/project --resume
+
+# Check status without changes
+./auto_orchestrate.py --project /path/to/project --resume --status-only
+
+# Force re-brief all agents
+./auto_orchestrate.py --project /path/to/project --resume --rebrief-all
 ```
 
 This analyzes your spec with Claude and automatically:
@@ -17,6 +26,14 @@ This analyzes your spec with Claude and automatically:
 - Sets up tmux sessions for Orchestrator, PM, Developer, and Tester
 - Provides role-specific briefings
 - Configures scheduled check-ins
+- **NEW**: Saves session state for intelligent resume capability
+
+### Resume Features (NEW!)
+- **Smart Agent Detection**: Identifies active, dead, and exhausted agents
+- **Selective Recovery**: Restart only dead agents or re-brief all
+- **Context Restoration**: Sends tailored messages to help agents recover context
+- **Credit Awareness**: Handles exhausted agents gracefully
+- **Session Persistence**: Works even after terminal crashes
 
 See `docs/AUTO_ORCHESTRATE.md` for detailed documentation.
 
@@ -1135,7 +1152,15 @@ When agents run low on context (confusion, repeated work, 2+ hours of work):
    EOF
    ```
 
-2. **Type /compact and press Enter** to clear conversation history
+2. **Execute /compact Properly**:
+   - **CRITICAL**: `/compact` must be on its own line, NOT part of your message
+   - **WRONG**: "Status update before compact. /compact" ❌ (won't execute)
+   - **RIGHT**: Send your message first, THEN type `/compact` separately ✅
+   - **Correct Steps**:
+     1. Finish and send your status message
+     2. Press Enter to send it
+     3. Type `/compact` on a new line
+     4. Press Enter to execute the compact
 
 3. **Reload Context**:
    - `/context-prime` (if available) OR
@@ -1143,6 +1168,12 @@ When agents run low on context (confusion, repeated work, 2+ hours of work):
    - Check git status and recent commits
 
 4. **Continue** from checkpoint next steps
+
+### ⚠️ Common /compact Mistakes to Avoid
+- **Don't include /compact in your message text** - it won't execute
+- **Don't type anything else on the /compact line** - keep it isolated
+- **If you accidentally included /compact in a message**, just type it again properly on its own line
+- **Remember**: Claude needs to see `/compact` as a standalone command, not as part of your conversation
 
 ### Proactive Context Health
 - Create checkpoints every 2 hours
@@ -1164,6 +1195,33 @@ When agents run low on context (confusion, repeated work, 2+ hours of work):
 2. Continue normally: Send tasks as usual
 3. They'll compact when needed and continue working
 4. If they seem confused after compacting, remind them to read their checkpoint
+
+### 🛠️ Orchestrator Tools for Context Management
+
+**New**: The orchestrator now has tools to help agents who struggle with compacting:
+
+1. **Monitor Agent Context Levels**:
+   ```bash
+   ./monitor_agent_context.sh
+   ```
+   Shows all agents' context levels and auto-helps those who tried to compact incorrectly
+
+2. **Send Compact Command Directly**:
+   ```bash
+   ./compact-agent.sh session:window
+   # Example: ./compact-agent.sh signalmatrix-hybrid--impl:2
+   ```
+
+3. **Batch Compact Critical Agents**:
+   ```bash
+   ./compact-all-critical.sh [session] [threshold]
+   # Example: ./compact-all-critical.sh signalmatrix-hybrid--impl 10
+   ```
+
+4. **Smart Message Sending** (built into send-claude-message.sh):
+   - Automatically detects `/compact` in messages
+   - Sends it as a separate command
+   - Prevents the common mistake of including it in message text
 
 This self-recovery system means context exhaustion is no longer a blocking issue!
 
