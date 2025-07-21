@@ -21,5 +21,23 @@ else
     echo "⚠️  CLAUDE.md watcher was not running"
 fi
 
+# Stop git activity monitor
+if pgrep -f "git_activity_monitor.py.*--continuous" > /dev/null; then
+    echo "Stopping git activity monitor..."
+    pkill -f "git_activity_monitor.py.*--continuous"
+    echo "✓ Git activity monitor stopped"
+else
+    echo "⚠️  Git activity monitor was not running"
+fi
+
+# Stop workflow bottleneck detector
+if pgrep -f "workflow_bottleneck_detector.py.*--continuous" > /dev/null; then
+    echo "Stopping workflow bottleneck detector..."
+    pkill -f "workflow_bottleneck_detector.py.*--continuous"
+    echo "✓ Bottleneck detector stopped"
+else
+    echo "⚠️  Bottleneck detector was not running"
+fi
+
 echo ""
 echo "Monitoring system stopped."

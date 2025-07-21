@@ -34,6 +34,12 @@ class RuleExtractor:
         # Extract integration rules
         self._extract_integration_rules(content)
         
+        # Extract workflow rules
+        self._extract_workflow_rules(content)
+        
+        # Extract monitored messaging rules
+        self._extract_monitoring_rules(content)
+        
         return self.rules
     
     def _extract_communication_rules(self, content: str):
@@ -83,6 +89,16 @@ class RuleExtractor:
                     {"command": "tmux send-keys", "context": "messaging"}
                 ],
                 "severity": "high"
+            },
+            {
+                "id": "comm-006",
+                "category": "communication",
+                "rule": "Must use monitored messaging (scm or send-monitored-message.sh)",
+                "violation_patterns": [
+                    {"command": "send-claude-message.sh", "context": "direct_use"},
+                    {"missing": "scm", "context": "messaging"}
+                ],
+                "severity": "critical"
             }
         ]
         self.rules.extend(rules)
@@ -134,6 +150,51 @@ class RuleExtractor:
                     {"branch_name": "missing_role_suffix", "agent": True}
                 ],
                 "severity": "medium"
+            },
+            {
+                "id": "git-006",
+                "category": "git",
+                "rule": "Push within 15 minutes of commit",
+                "violation_patterns": [
+                    {"time_since_commit": ">15min", "unpushed_commits": True}
+                ],
+                "severity": "high"
+            },
+            {
+                "id": "git-007",
+                "category": "git",
+                "rule": "Set upstream with -u on first push",
+                "violation_patterns": [
+                    {"first_push": True, "missing_upstream": True}
+                ],
+                "severity": "medium"
+            },
+            {
+                "id": "git-008",
+                "category": "git",
+                "rule": "Announce pushes to PM",
+                "violation_patterns": [
+                    {"push_completed": True, "pm_not_notified": True}
+                ],
+                "severity": "medium"
+            },
+            {
+                "id": "git-009",
+                "category": "git",
+                "rule": "Pull from parent branch after integration",
+                "violation_patterns": [
+                    {"integration_complete": True, "time_since_pull": ">1hour"}
+                ],
+                "severity": "high"
+            },
+            {
+                "id": "git-010",
+                "category": "git",
+                "rule": "Maximum 20 commits behind parent branch",
+                "violation_patterns": [
+                    {"commits_behind": ">20"}
+                ],
+                "severity": "high"
             }
         ]
         self.rules.extend(rules)
@@ -200,6 +261,99 @@ class RuleExtractor:
                     {"integration_complete": True, "agents_not_synced": True}
                 ],
                 "severity": "high"
+            },
+            {
+                "id": "int-004",
+                "category": "integration",
+                "rule": "Create PR within 30 minutes of push",
+                "violation_patterns": [
+                    {"push_time": "recorded", "pr_delay": ">30min"}
+                ],
+                "severity": "high"
+            },
+            {
+                "id": "int-005",
+                "category": "integration",
+                "rule": "Merge PR within 2 hours",
+                "violation_patterns": [
+                    {"pr_age": ">2hours", "status": "open"}
+                ],
+                "severity": "high"
+            },
+            {
+                "id": "int-006",
+                "category": "integration",
+                "rule": "Integration cycle completes within 4 hours",
+                "violation_patterns": [
+                    {"cycle_start": "recorded", "duration": ">4hours"}
+                ],
+                "severity": "critical"
+            }
+        ]
+        self.rules.extend(rules)
+        
+    def _extract_workflow_rules(self, content: str):
+        """Extract workflow health rules"""
+        rules = [
+            {
+                "id": "workflow-001",
+                "category": "workflow",
+                "rule": "No PR should be stuck for more than 2 hours",
+                "violation_patterns": [
+                    {"pr_status": "open", "age": ">2hours", "no_activity": True}
+                ],
+                "severity": "high"
+            },
+            {
+                "id": "workflow-002",
+                "category": "workflow",
+                "rule": "No agent more than 1 hour behind parent after integration",
+                "violation_patterns": [
+                    {"integration_announced": True, "agent_behind": ">1hour"}
+                ],
+                "severity": "high"
+            },
+            {
+                "id": "workflow-003",
+                "category": "workflow",
+                "rule": "Resolve conflicts within 30 minutes",
+                "violation_patterns": [
+                    {"conflict_detected": True, "resolution_time": ">30min"}
+                ],
+                "severity": "high"
+            },
+            {
+                "id": "workflow-004",
+                "category": "workflow",
+                "rule": "Worktree discipline - no cross-worktree modifications",
+                "violation_patterns": [
+                    {"file_modified": True, "outside_own_worktree": True}
+                ],
+                "severity": "critical"
+            }
+        ]
+        self.rules.extend(rules)
+        
+    def _extract_monitoring_rules(self, content: str):
+        """Extract monitoring system rules"""
+        rules = [
+            {
+                "id": "monitor-001",
+                "category": "monitoring",
+                "rule": "All communications must be logged",
+                "violation_patterns": [
+                    {"message_sent": True, "not_logged": True}
+                ],
+                "severity": "high"
+            },
+            {
+                "id": "monitor-002",
+                "category": "monitoring",
+                "rule": "Violations must be reported to orchestrator",
+                "violation_patterns": [
+                    {"violation_detected": True, "orchestrator_not_notified": True}
+                ],
+                "severity": "medium"
             }
         ]
         self.rules.extend(rules)

@@ -84,6 +84,22 @@
       "severity": "high"
     },
     {
+      "id": "comm-006",
+      "category": "communication",
+      "rule": "Must use monitored messaging (scm or send-monitored-message.sh)",
+      "violation_patterns": [
+        {
+          "command": "send-claude-message.sh",
+          "context": "direct_use"
+        },
+        {
+          "missing": "scm",
+          "context": "messaging"
+        }
+      ],
+      "severity": "critical"
+    },
+    {
       "id": "git-001",
       "category": "git",
       "rule": "Never merge to main unless started on main",
@@ -143,6 +159,65 @@
         }
       ],
       "severity": "medium"
+    },
+    {
+      "id": "git-006",
+      "category": "git",
+      "rule": "Push within 15 minutes of commit",
+      "violation_patterns": [
+        {
+          "time_since_commit": ">15min",
+          "unpushed_commits": true
+        }
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "git-007",
+      "category": "git",
+      "rule": "Set upstream with -u on first push",
+      "violation_patterns": [
+        {
+          "first_push": true,
+          "missing_upstream": true
+        }
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "git-008",
+      "category": "git",
+      "rule": "Announce pushes to PM",
+      "violation_patterns": [
+        {
+          "push_completed": true,
+          "pm_not_notified": true
+        }
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "git-009",
+      "category": "git",
+      "rule": "Pull from parent branch after integration",
+      "violation_patterns": [
+        {
+          "integration_complete": true,
+          "time_since_pull": ">1hour"
+        }
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "git-010",
+      "category": "git",
+      "rule": "Maximum 20 commits behind parent branch",
+      "violation_patterns": [
+        {
+          "commits_behind": ">20"
+        }
+      ],
+      "severity": "high"
     },
     {
       "id": "sched-001",
@@ -218,6 +293,115 @@
         }
       ],
       "severity": "high"
+    },
+    {
+      "id": "int-004",
+      "category": "integration",
+      "rule": "Create PR within 30 minutes of push",
+      "violation_patterns": [
+        {
+          "push_time": "recorded",
+          "pr_delay": ">30min"
+        }
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "int-005",
+      "category": "integration",
+      "rule": "Merge PR within 2 hours",
+      "violation_patterns": [
+        {
+          "pr_age": ">2hours",
+          "status": "open"
+        }
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "int-006",
+      "category": "integration",
+      "rule": "Integration cycle completes within 4 hours",
+      "violation_patterns": [
+        {
+          "cycle_start": "recorded",
+          "duration": ">4hours"
+        }
+      ],
+      "severity": "critical"
+    },
+    {
+      "id": "workflow-001",
+      "category": "workflow",
+      "rule": "No PR should be stuck for more than 2 hours",
+      "violation_patterns": [
+        {
+          "pr_status": "open",
+          "age": ">2hours",
+          "no_activity": true
+        }
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "workflow-002",
+      "category": "workflow",
+      "rule": "No agent more than 1 hour behind parent after integration",
+      "violation_patterns": [
+        {
+          "integration_announced": true,
+          "agent_behind": ">1hour"
+        }
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "workflow-003",
+      "category": "workflow",
+      "rule": "Resolve conflicts within 30 minutes",
+      "violation_patterns": [
+        {
+          "conflict_detected": true,
+          "resolution_time": ">30min"
+        }
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "workflow-004",
+      "category": "workflow",
+      "rule": "Worktree discipline - no cross-worktree modifications",
+      "violation_patterns": [
+        {
+          "file_modified": true,
+          "outside_own_worktree": true
+        }
+      ],
+      "severity": "critical"
+    },
+    {
+      "id": "monitor-001",
+      "category": "monitoring",
+      "rule": "All communications must be logged",
+      "violation_patterns": [
+        {
+          "message_sent": true,
+          "not_logged": true
+        }
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "monitor-002",
+      "category": "monitoring",
+      "rule": "Violations must be reported to orchestrator",
+      "violation_patterns": [
+        {
+          "violation_detected": true,
+          "orchestrator_not_notified": true
+        }
+      ],
+      "severity": "medium"
     }
   ]
 }

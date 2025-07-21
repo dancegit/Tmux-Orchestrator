@@ -9,7 +9,8 @@ The compliance monitoring system ensures all agents follow the rules defined in 
 ### 1. Rule Extraction (`extract_rules.py`)
 - Parses CLAUDE.md to extract monitorable rules
 - Creates `compliance_rules.json` with structured rule definitions
-- Categories: communication, git, scheduling, integration
+- Categories: communication, git, scheduling, integration, workflow, monitoring
+- Now extracts 31+ rules including git workflow timing
 
 ### 2. CLAUDE.md Watcher (`claude_md_watcher.py`)
 - Monitors CLAUDE.md for changes using file system events
@@ -34,6 +35,33 @@ The compliance monitoring system ensures all agents follow the rules defined in 
 - Logs all communications in JSONL format
 - Triggers compliance analysis
 - Available via `scm` shortcut
+
+### 6. Git Activity Monitor (`git_activity_monitor.py`)
+- Monitors all agent worktrees for git compliance
+- Tracks commit frequency (30-minute rule)
+- Checks push timing (15-minute target)
+- Monitors branch naming conventions
+- Detects agents falling behind parent branch
+
+### 7. GitHub Activity Monitor (`github_activity_monitor.py`)
+- Uses `gh` CLI to track PR and merge activity
+- Monitors PR age and merge delays
+- Tracks integration cycle timing
+- Detects stale PRs and blocked workflows
+- Checks --admin flag usage for auto-merge
+
+### 8. Workflow Bottleneck Detector (`workflow_bottleneck_detector.py`)
+- Analyzes data from all monitors
+- Detects workflow bottlenecks and delays
+- Generates actionable recommendations
+- Notifies orchestrator of critical issues
+- Tracks overall workflow health
+
+### 9. Workflow Dashboard (`workflow_dashboard.sh`)
+- Unified view of all monitoring data
+- Shows communication, git, and PR status
+- Highlights violations and bottlenecks
+- Provides quick command references
 
 ## Usage
 
@@ -100,29 +128,48 @@ registry/logs/communications/
 │   └── .rules_updated          # Rule update trigger (temporary)
 ```
 
-## Rule Categories
+## Rule Categories (31+ rules)
 
-### Communication Rules
+### Communication Rules (6 rules)
 - Hub-and-spoke model enforcement
 - No direct developer-to-tester communication
 - Work-related messages only
-- Use of proper messaging scripts
+- Use of monitored messaging (scm)
+- Message template compliance
 
-### Git Rules
+### Git Rules (10 rules)
 - Branch protection (no main merge unless started on main)
 - Auto-commit every 30 minutes
 - Commit before task switches
-- Agent-specific branch naming
+- Agent-specific branch naming (feature/, pm-feature/, etc.)
+- Push within 15 minutes of commit
+- Set upstream with -u on first push
+- Announce pushes to PM
+- Pull after integration within 1 hour
+- Maximum 20 commits behind parent
 
-### Scheduling Rules
+### Scheduling Rules (3 rules)
 - Orchestrator startup scheduling test
 - Target window parameter usage
 - Regular check-in maintenance
 
-### Integration Rules
+### Integration Rules (6 rules)
 - PM-only integration handling
 - Auto-merge with --admin flag
 - Post-integration synchronization
+- Create PR within 30 minutes of push
+- Merge PR within 2 hours
+- Integration cycle completes within 4 hours
+
+### Workflow Rules (4 rules)
+- No PR stuck >2 hours without activity
+- No agent >1 hour behind after integration
+- Resolve conflicts within 30 minutes
+- Worktree discipline (no cross-modifications)
+
+### Monitoring Rules (2 rules)
+- All communications must be logged
+- Violations reported to orchestrator
 
 ## Troubleshooting
 

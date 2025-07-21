@@ -442,6 +442,122 @@ Project Managers must enforce git discipline:
 - **Rollback Safety**: Can always return to a working state
 - **Progress Tracking**: Clear history of what was accomplished
 
+## 🌳 Git Worktree & Workflow Rules
+
+### Worktree Structure
+Each agent works in isolated worktree:
+```
+registry/projects/{project}/worktrees/
+├── orchestrator/     # Dual-directory agent
+├── project-manager/  # Integration coordinator
+├── developer/        # Implementation
+├── tester/          # Test creation
+├── researcher/      # MCP research
+└── [other-agents]/  # Role-specific
+```
+
+### Worktree Discipline Rules
+1. **Stay in Your Lane**: Never directly modify files in other agents' worktrees
+2. **Read-Only Access**: Can read/review other worktrees: `cat ../developer/src/file.py`
+3. **Push Your Work**: Share via GitHub, not direct file edits
+4. **Orchestrator Exception**: Works from both project worktree AND tool directory
+
+### Git Push Rules
+1. **Push Frequently**: Within 15 minutes of any significant commit
+2. **Branch Naming Convention**:
+   - Developer: `feature/description`
+   - PM: `pm-feature/description`
+   - Tester: `test/description`
+   - TestRunner: `testrunner/description`
+   - Researcher: `research/description`
+   - DevOps: `devops/description`
+3. **Set Upstream**: First push MUST use `-u`:
+   ```bash
+   git push -u origin feature/your-branch
+   ```
+4. **Announce Pushes**: Notify PM immediately after pushing:
+   ```bash
+   scm pm:0 "Pushed feature/auth-endpoints - ready for review"
+   ```
+
+### Pull Request Workflow
+1. **Timing Requirements**:
+   - Create PR within 30 minutes of push
+   - PM merges within 2 hours
+   - Integration cycle completes within 4 hours
+2. **PR Creation**: Only PM creates integration PRs
+3. **Auto-Merge Protocol**: Use `--admin` flag (no manual approvals)
+4. **Notification**: Announce PR creation and merges
+
+### PM Integration Protocol
+```bash
+# Step 1: Create integration branch
+git checkout main  # or parent branch
+git pull origin main
+git checkout -b integration/feature-name
+
+# Step 2: Merge all agent branches
+git merge origin/feature/developer-work
+git merge origin/test/tester-work
+git merge origin/testrunner/test-results
+
+# Step 3: Resolve conflicts (delegate to appropriate agent)
+# Developer: Code conflicts
+# Tester: Test conflicts
+# PM: Documentation conflicts
+
+# Step 4: Push integration branch
+git push -u origin integration/feature-name
+
+# Step 5: Create PR with auto-merge intent
+gh pr create --base main \
+  --head integration/feature-name \
+  --title "Integration: Feature Name" \
+  --body "Integrated work from all agents on feature-name
+
+Auto-merging after integration."
+
+# Step 6: Auto-merge immediately
+gh pr merge --admin --merge
+
+# Step 7: Notify all agents via orchestrator
+scm orchestrator:0 "Integration complete! All agents pull from main"
+```
+
+### Agent Synchronization Rules
+1. **Pull After Integration**: All agents must pull within 1 hour
+2. **Check for Updates**: Every hour, check teammate branches
+3. **Conflict Resolution**: Resolve within 30 minutes
+4. **Stay Current**: Maximum 20 commits behind parent branch
+5. **Sync Commands**:
+   ```bash
+   # Check your sync status
+   git fetch origin
+   git status
+   git log HEAD..origin/main --oneline
+   
+   # Pull latest changes
+   git pull origin main
+   ```
+
+### Workflow Timing Targets
+- **Commit → Push**: 15 minutes
+- **Push → PR**: 30 minutes  
+- **PR → Merge**: 2 hours
+- **Merge → Pull**: 1 hour
+- **Full Integration Cycle**: 4 hours maximum
+
+### Git Activity Monitoring
+The orchestrator runs automated monitoring that tracks:
+- Commit frequency (30-minute rule compliance)
+- Push timing (15-minute target)
+- PR age and merge delays
+- Agent synchronization status
+- Branch divergence from parent
+- Integration bottlenecks
+
+Violations trigger automatic orchestrator notifications.
+
 ## Startup Behavior - Tmux Window Naming
 
 ### Auto-Rename Feature
@@ -1171,42 +1287,61 @@ When a command fails:
 
 ### Communication with Claude Agents
 
-#### 🎯 IMPORTANT: Always Use send-claude-message.sh Script
+#### 🎯 IMPORTANT: Always Use Monitored Messaging for Compliance
 
-**DO NOT manually send messages with tmux send-keys anymore!** We have a dedicated script that handles all the timing and complexity for you.
+**DO NOT use send-claude-message.sh directly anymore!** Use the monitored wrapper for compliance tracking:
 
-#### Using send-claude-message.sh
 ```bash
-# Basic usage - ALWAYS use this instead of manual tmux commands
-./send-claude-message.sh <target> "message"
+# Use the shortcut command (REQUIRED)
+scm session:window "Your message here"
+
+# Or if scm is not in PATH
+./send-monitored-message.sh session:window "Your message"
+
+# OLD METHOD (DO NOT USE):
+# ❌ ./send-claude-message.sh session:window "message"
+```
+
+**Why Monitored Messaging?**
+- Automatic compliance checking against CLAUDE.md rules
+- Logs all communications for audit trail
+- Detects hub-and-spoke violations
+- Enables workflow analysis
+- Provides orchestrator visibility
+
+#### Using Monitored Messaging (scm)
+```bash
+# Basic usage - ALWAYS use this for compliance
+scm <target> "message"
 
 # Examples:
 # Send to a window
-./send-claude-message.sh agentic-seek:3 "Hello Claude!"
+scm agentic-seek:3 "Hello Claude!"
 
 # Send to a specific pane in split-screen
-./send-claude-message.sh tmux-orc:0.1 "Message to pane 1"
+scm tmux-orc:0.1 "Message to pane 1"
 
 # Send complex instructions
-./send-claude-message.sh glacier-backend:0 "Please check the database schema for the campaigns table and verify all columns are present"
+scm glacier-backend:0 "Please check the database schema for the campaigns table and verify all columns are present"
 
 # Send status update requests
-./send-claude-message.sh ai-chat:2 "STATUS UPDATE: What's your current progress on the authentication implementation?"
+scm ai-chat:2 "STATUS UPDATE: What's your current progress on the authentication implementation?"
 ```
 
-#### Why Use the Script?
-1. **Automatic timing**: Handles the critical 0.5s delay between message and Enter
-2. **Simpler commands**: One line instead of three
-3. **No timing mistakes**: Prevents the common error of Enter being sent too quickly
-4. **Works everywhere**: Handles both windows and panes automatically
-5. **Consistent messaging**: All agents receive messages the same way
+#### Why Use Monitored Messaging?
+1. **Compliance Tracking**: All messages logged and analyzed
+2. **Rule Enforcement**: Automatic detection of violations
+3. **Audit Trail**: Complete communication history
+4. **Workflow Analysis**: Identify bottlenecks and delays
+5. **Orchestrator Alerts**: Real-time violation notifications
 
 #### Script Location and Usage
-- **Location**: `./send-claude-message.sh` (in the Tmux-Orchestrator directory)
-- **Permissions**: Already executable, ready to use
+- **scm shortcut**: Available in PATH after setup
+- **Full path**: `./send-monitored-message.sh` (in Tmux-Orchestrator directory)
 - **Arguments**: 
   - First: target (session:window or session:window.pane)
   - Second: message (can contain spaces, will be properly handled)
+- **Logs**: Communications saved to `registry/logs/communications/`
 
 #### Common Messaging Patterns with the Script
 
@@ -1216,57 +1351,124 @@ When a command fails:
 tmux send-keys -t project:0 "claude" Enter
 sleep 5
 
-# Then use the script for the briefing
-./send-claude-message.sh project:0 "You are responsible for the frontend codebase. Please start by analyzing the current project structure and identifying any immediate issues."
+# Then use the monitored script for the briefing
+scm project:0 "You are responsible for the frontend codebase. Please start by analyzing the current project structure and identifying any immediate issues."
 ```
 
-##### 2. Cross-Agent Coordination
+##### 2. Cross-Agent Coordination (Through Hub-and-Spoke)
 ```bash
-# Ask frontend agent about API usage
-./send-claude-message.sh frontend:0 "Which API endpoints are you currently using from the backend?"
+# Developer reports to PM
+scm pm:0 "API endpoints ready at /api/v1/campaigns and /api/v1/flows"
 
-# Share info with backend agent
-./send-claude-message.sh backend:0 "Frontend is using /api/v1/campaigns and /api/v1/flows endpoints"
+# PM coordinates with other agents
+scm developer:0 "Frontend needs these endpoints documented"
 ```
 
 ##### 3. Status Checks
 ```bash
 # Quick status request
-./send-claude-message.sh session:0 "Quick status update please"
+scm session:0 "Quick status update please"
 
 # Detailed status request
-./send-claude-message.sh session:0 "STATUS UPDATE: Please provide: 1) Completed tasks, 2) Current work, 3) Any blockers"
+scm session:0 "STATUS UPDATE: Please provide: 1) Completed tasks, 2) Current work, 3) Any blockers"
 ```
 
 ##### 4. Providing Assistance
 ```bash
 # Share error information
-./send-claude-message.sh session:0 "I see in your server window that port 3000 is already in use. Try port 3001 instead."
+scm session:0 "I see in your server window that port 3000 is already in use. Try port 3001 instead."
 
 # Guide stuck agents
-./send-claude-message.sh session:0 "The error you're seeing is because the virtual environment isn't activated. Run 'source venv/bin/activate' first."
+scm session:0 "The error you're seeing is because the virtual environment isn't activated. Run 'source venv/bin/activate' first."
 ```
 
-#### OLD METHOD (DO NOT USE)
+#### FORBIDDEN: Direct Messaging Without Monitoring
 ```bash
-# ❌ DON'T DO THIS ANYMORE:
+# ❌ NEVER DO THIS:
 tmux send-keys -t session:window "message"
-sleep 1
-tmux send-keys -t session:window Enter
-
-# ✅ DO THIS INSTEAD:
 ./send-claude-message.sh session:window "message"
+
+# ✅ ALWAYS DO THIS:
+scm session:window "message"
 ```
 
 #### Checking for Responses
 After sending a message, check for the response:
 ```bash
 # Send message
-./send-claude-message.sh session:0 "What's your status?"
+scm session:0 "What's your status?"
 
 # Wait a bit for response
 sleep 5
 
 # Check what the agent said
 tmux capture-pane -t session:0 -p | tail -50
+```
+
+## 📊 Compliance Monitoring System
+
+### Overview
+The Tmux Orchestrator includes an automated compliance monitoring system that ensures all agents follow CLAUDE.md rules.
+
+### What is Monitored
+1. **Communication Compliance**:
+   - Hub-and-spoke model enforcement
+   - Use of monitored messaging (scm)
+   - Message template compliance
+   - Work-related communication only
+
+2. **Git Activity**:
+   - 30-minute commit rule
+   - Push timing (15-minute target)
+   - Branch naming conventions
+   - PR creation and merge timing
+   - Agent synchronization status
+
+3. **Workflow Health**:
+   - Integration cycle duration
+   - PR bottlenecks
+   - Agent responsiveness
+   - Credit exhaustion handling
+
+### Monitoring Commands
+```bash
+# Start monitoring system
+./monitoring/start_monitoring.sh
+
+# Check current violations
+cat registry/logs/communications/$(date +%Y-%m-%d)/violations.jsonl | jq .
+
+# View workflow dashboard
+./monitoring/workflow_dashboard.sh
+
+# Stop monitoring
+./monitoring/stop_monitoring.sh
+```
+
+### Automatic Rule Updates
+- CLAUDE.md changes are detected automatically
+- Rules are re-extracted within 2 seconds
+- All new messages checked against updated rules
+- No restart required
+
+### Violation Handling
+When violations are detected:
+1. Orchestrator receives immediate notification
+2. Specific remediation actions suggested
+3. Violation logged with severity level
+4. Resolution tracked automatically
+
+### Log Structure
+```
+registry/logs/
+├── communications/
+│   └── YYYY-MM-DD/
+│       ├── messages.jsonl        # All communications
+│       ├── violations.jsonl      # Detected violations
+│       └── compliance_analysis.jsonl
+└── git-activity/
+    └── YYYY-MM-DD/
+        ├── commits.jsonl         # Commit activity
+        ├── pushes.jsonl          # Push events
+        └── pr-activity.jsonl     # PR status
 ```
