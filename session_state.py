@@ -107,14 +107,30 @@ class SessionStateManager:
             if result.returncode != 0:
                 return False
                 
-            pane_text = result.stdout
+            pane_text = result.stdout.lower()
             
-            # Check for Claude prompt (indicates it's running)
-            if 'Human:' in pane_text or 'Assistant:' in pane_text:
-                # Check if it's at an interactive prompt (ready for input)
-                lines = pane_text.strip().split('\n')
-                if lines and ('Human:' in lines[-1] or lines[-1].strip() == ''):
+            # Check for various Claude UI indicators
+            claude_indicators = [
+                'human:',
+                'assistant:',
+                '? for shortcuts',
+                'bypassing permissions',
+                '> ',  # Claude's input prompt
+                '│ >',  # Claude's input prompt in box
+                'tokens used:',
+                'context window:',
+                '/exit to quit'
+            ]
+            
+            # Check if any Claude indicator is present
+            for indicator in claude_indicators:
+                if indicator in pane_text:
                     return True
+                    
+            # Also check for the box-drawing characters that Claude uses
+            if '╭' in pane_text or '│' in pane_text or '╰' in pane_text:
+                # Likely Claude's UI
+                return True
                     
             return False
             

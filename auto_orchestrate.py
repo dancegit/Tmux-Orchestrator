@@ -818,29 +818,37 @@ CLAUDE_EOF
             return True
             
         elif resume_mode == 'full':
-            console.print("\n[bold]Full Resume Options:[/bold]")
-            console.print("1. [green]Restart dead agents[/green] - Restart any non-responsive agents")
-            console.print("2. [cyan]Re-brief all agents[/cyan] - Send context restoration to all agents")
-            console.print("3. [yellow]Both[/yellow] - Restart dead and re-brief all")
-            console.print("4. [red]Cancel[/red] - Exit without changes")
-            
-            choice = click.prompt("\nYour choice", type=click.Choice(['1', '2', '3', '4']), default='3')
+            # Check if --rebrief-all was used
+            if hasattr(self, 'rebrief_all') and self.rebrief_all:
+                choice = '2'  # Force re-brief all
+            else:
+                console.print("\n[bold]Full Resume Options:[/bold]")
+                console.print("1. [green]Restart dead agents[/green] - Restart any non-responsive agents")
+                console.print("2. [cyan]Re-brief all agents[/cyan] - Send context restoration to all agents")
+                console.print("3. [yellow]Both[/yellow] - Restart dead and re-brief all")
+                console.print("4. [red]Cancel[/red] - Exit without changes")
+                
+                choice = click.prompt("\nYour choice", type=click.Choice(['1', '2', '3', '4']), default='3')
             
             if choice == '4':
                 console.print("[yellow]Resume cancelled.[/yellow]")
                 return False
                 
             # Restart dead agents
+            restarted_agents = []
             if choice in ['1', '3']:
                 for role, agent in session_state.agents.items():
                     if not agent.is_alive:
                         console.print(f"\n[yellow]Restarting {role} agent...[/yellow]")
                         self.restart_agent(session_state, agent)
+                        restarted_agents.append(role)
                         
             # Re-brief all agents
             if choice in ['2', '3']:
                 for role, agent in session_state.agents.items():
-                    if agent.is_alive or choice in ['1', '3']:  # Include newly restarted
+                    # For option 2, try to rebrief all agents regardless of status
+                    # For option 3, only rebrief if alive or just restarted
+                    if choice == '2' or (choice == '3' and (agent.is_alive or role in restarted_agents)):
                         console.print(f"\n[cyan]Re-briefing {role} agent...[/cyan]")
                         self.rebrief_agent(session_state, agent)
                         
@@ -3279,6 +3287,7 @@ def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: st
         
         # Create orchestrator with dummy spec path for now
         orchestrator = AutoOrchestrator(project, spec if spec else "dummy.md")
+        orchestrator.rebrief_all = rebrief_all
         
         # Try to load session state - first by exact name
         session_state = orchestrator.session_state_manager.load_session_state(project_name)
