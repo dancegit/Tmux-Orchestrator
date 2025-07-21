@@ -880,7 +880,8 @@ CLAUDE_EOF
         ], capture_output=True)
         
         # Start Claude and send briefing
-        role_config = ROLE_CONFIGS.get(agent.role, ROLE_CONFIGS['developer'])
+        # Note: We don't have role_config here, but it's only used for briefing
+        # which we handle separately in create_role_briefing
         
         # Check MCP pre-initialization
         worktree_path = Path(agent.worktree_path)
@@ -908,10 +909,18 @@ CLAUDE_EOF
         time.sleep(5)
         
         # Send briefing
-        briefing = self.create_role_briefing(
-            agent.role, self.implementation_spec, role_config,
-            context_primed=True, worktree_paths={agent.role: Path(agent.worktree_path)}
-        )
+        # For restart, we'll use a simplified briefing since we don't have the full role config
+        briefing = f"""🔄 **Agent Restart**
+
+You are the {agent.window_name} for the {session_state.project_name} project.
+
+Your worktree is at: {agent.worktree_path}
+
+Please:
+1. Check your current status with `git status`
+2. Review recent work with `git log --oneline -10`
+3. Report to the Project Manager with your current status
+4. Continue with your assigned tasks"""
         
         send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
         subprocess.run([
@@ -926,7 +935,20 @@ CLAUDE_EOF
         
     def rebrief_agent(self, session_state: SessionState, agent: AgentState):
         """Send a context restoration message to an existing agent"""
-        role_config = ROLE_CONFIGS.get(agent.role, ROLE_CONFIGS['developer'])
+        # Get role description based on role
+        role_descriptions = {
+            'orchestrator': 'High-level oversight and coordination',
+            'project_manager': 'Quality assurance and team coordination',
+            'developer': 'Implementation and technical execution',
+            'researcher': 'Research best practices and utilize MCP tools',
+            'tester': 'Test execution and quality verification',
+            'testrunner': 'Automated test coordination',
+            'devops': 'Infrastructure and deployment',
+            'logtracker': 'Monitoring and log analysis',
+            'code_reviewer': 'Code quality and security review'
+        }
+        
+        role_desc = role_descriptions.get(agent.role, 'Team member')
         
         # Create a shorter re-briefing focused on context restoration
         rebrief_msg = f"""🔄 **Context Restoration**
@@ -941,7 +963,7 @@ You are the {agent.window_name} for the {session_state.project_name} project.
 **Quick Reminders**:
 1. Check your recent work with `git log --oneline -10`
 2. Review uncommitted changes with `git status`
-3. Your role: {role_config.description}
+3. Your role: {role_desc}
 4. Report to PM for coordination
 
 Please provide a brief status update on your current work and any blockers."""
