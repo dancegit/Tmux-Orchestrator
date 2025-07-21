@@ -3310,8 +3310,20 @@ def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: st
             if registry_projects.exists():
                 console.print("\n[cyan]Available orchestrated projects:[/cyan]")
                 for proj_dir in registry_projects.iterdir():
-                    if proj_dir.is_dir() and (proj_dir / 'session_state.json').exists():
-                        console.print(f"  - {proj_dir.name}")
+                    if proj_dir.is_dir():
+                        state_exists = (proj_dir / 'session_state.json').exists()
+                        spec_exists = (proj_dir / 'implementation_spec.json').exists()
+                        if state_exists:
+                            console.print(f"  - {proj_dir.name} (with session state)")
+                        elif spec_exists:
+                            # Try to guess session name
+                            likely_session = proj_dir.name[:20] + "-impl"
+                            console.print(f"  - {proj_dir.name} (legacy - no session state)")
+                            console.print(f"    Try: tmux attach -t {likely_session}")
+                            
+                if not any((proj_dir / 'session_state.json').exists() for proj_dir in registry_projects.iterdir() if proj_dir.is_dir()):
+                    console.print("\n[yellow]Note: Existing projects were created before session state tracking was added.[/yellow]")
+                    console.print("[yellow]You'll need to use simple tmux attach or recreate the orchestration.[/yellow]")
             sys.exit(1)
             
         # Determine resume mode
