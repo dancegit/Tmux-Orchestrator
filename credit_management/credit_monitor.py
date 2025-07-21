@@ -216,6 +216,8 @@ class CreditMonitor:
         if is_exhausted and exhaustion_status == 'exhausted':
             self.schedule['agents'][session_window]['exhausted_at'] = datetime.now().isoformat()
             self.schedule['agents'][session_window]['scheduled_resume'] = next_reset.isoformat()
+            # Also add to the returned status so schedule_resume can be called
+            agent_status['scheduled_resume'] = next_reset.isoformat()
         
         return agent_status
     
