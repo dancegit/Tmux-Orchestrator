@@ -151,7 +151,7 @@ This will:
 2. **Context-prime** Claude to understand your project structure
 3. **Analyze** your specification to create an implementation plan
 4. **Show** the plan for your approval
-5. **Create** tmux sessions with 4 specialized AI agents
+5. **Create** tmux sessions with 5 specialized AI agents (including Project Manager)
 6. **Brief** each agent with context-aware responsibilities
 7. **Schedule** automatic check-ins for continuous progress
 
@@ -179,7 +179,7 @@ The new `auto_orchestrate.py` script provides fully automated setup:
 - **Context-Aware**: Uses `/context-prime` to understand your project before planning
 - **Spec Analysis**: Claude analyzes your markdown specifications intelligently
 - **Phase Planning**: Generates realistic implementation plans with time estimates
-- **Core Agent Team**: Orchestrator, Developer, Tester, and TestRunner for all projects
+- **Core Agent Team**: Orchestrator, Project Manager, Developer, Tester, and TestRunner for all projects
 - **One Command**: From fresh clone to running AI team in under a minute
 - **Git Workflow**: Enforces best practices with regular commits and PRs
 - **Credit Management**: Automatic handling of Claude Code usage limits with pause/resume

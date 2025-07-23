@@ -68,7 +68,16 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
    - Schedules check-ins and manages team resources
    - Works from both project worktree AND tool directory
 
-2. **Developer**: Implementation and technical decisions
+2. **Project Manager**: Quality-focused team coordination
+   - Maintains exceptionally high quality standards
+   - Reviews all code before merging
+   - Coordinates daily standups and status collection
+   - Manages git workflow and branch merging
+   - Identifies and escalates blockers
+   - Ensures 30-minute commit rule compliance
+   - Tracks technical debt and quality metrics
+
+3. **Developer**: Implementation and technical decisions
    - Writes production code following best practices
    - Implements features according to specifications
    - Creates unit tests for new functionality
@@ -77,7 +86,7 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
    - Collaborates with Tester for test coverage
    - Works directly with Orchestrator for guidance
 
-3. **Tester**: Testing and verification
+4. **Tester**: Testing and verification
    - Writes comprehensive test suites (unit, integration, E2E)
    - Ensures all success criteria are met
    - Creates test plans for new features
@@ -86,7 +95,7 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
    - Maintains tests/ directory structure
    - Reports test results to Orchestrator
 
-4. **TestRunner**: Automated test execution
+5. **TestRunner**: Automated test execution
    - Executes test suites continuously
    - Manages parallel test execution
    - Monitors test performance and flakiness
@@ -96,15 +105,6 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
    - Optimizes test run times
 
 #### Optional Roles (Can be added with --roles flag)
-
-5. **Project Manager**: Quality-focused team coordination
-   - Maintains exceptionally high quality standards
-   - Reviews all code before merging
-   - Coordinates daily standups and status collection
-   - Manages git workflow and branch merging
-   - Identifies and escalates blockers
-   - Ensures 30-minute commit rule compliance
-   - Tracks technical debt and quality metrics
 
 6. **Researcher**: MCP-powered research and best practices
    - Discovers and documents available MCP tools
@@ -860,8 +860,9 @@ Multi-agent systems use ~15x more tokens than standard Claude usage. Team sizes 
 
 ### Default Role Deployment
 
-**All Projects** (4 agents total):
+**All Projects** (5 agents total):
 - Orchestrator
+- Project Manager
 - Developer
 - Tester
 - TestRunner
