@@ -647,50 +647,18 @@ CLAUDE_EOF
     def get_roles_for_project_size(self, spec: ImplementationSpec) -> List[Tuple[str, str]]:
         """Determine which roles to deploy based on project size
         
-        OPTIMIZED FOR CLAUDE CODE MAX 5X PLAN:
-        - Reduced team sizes to conserve tokens (multi-agent uses ~15x normal)
-        - Max 5 concurrent agents recommended for sustainable usage
-        - Prioritizes essential roles for each project size
+        SIMPLIFIED ROLE DEPLOYMENT:
+        - Only essential roles for all project sizes
+        - 4 agents total: Orchestrator, Developer, Tester, TestRunner
+        - Reduces token consumption while maintaining core functionality
         """
-        # Use manual size override if provided
-        size = self.manual_size if self.manual_size else spec.project_size.size
-        
-        if size == "small":
-            # Small projects: 7 agents (Core team with testing, infrastructure, and monitoring)
-            core_roles = [
-                ('Orchestrator', 'orchestrator'),
-                ('Developer', 'developer'),
-                ('Researcher', 'researcher'),
-                ('Tester', 'tester'),
-                ('TestRunner', 'testrunner'),
-                ('LogTracker', 'logtracker'),
-                ('DevOps', 'devops')
-            ]
-        elif size == "medium":
-            # Medium projects: 8 agents (+ Project Manager)
-            core_roles = [
-                ('Orchestrator', 'orchestrator'),
-                ('Project-Manager', 'project_manager'),
-                ('Developer', 'developer'),
-                ('Researcher', 'researcher'),
-                ('Tester', 'tester'),
-                ('TestRunner', 'testrunner'),
-                ('LogTracker', 'logtracker'),
-                ('DevOps', 'devops')
-            ]
-        else:  # large
-            # Large projects: 9 agents (full team with all core roles)
-            core_roles = [
-                ('Orchestrator', 'orchestrator'),
-                ('Project-Manager', 'project_manager'),
-                ('Developer', 'developer'),
-                ('Researcher', 'researcher'),
-                ('Tester', 'tester'),
-                ('TestRunner', 'testrunner'),
-                ('LogTracker', 'logtracker'),
-                ('DevOps', 'devops'),
-                ('Code-Reviewer', 'code_reviewer')
-            ]
+        # Always deploy the same core roles regardless of size
+        core_roles = [
+            ('Orchestrator', 'orchestrator'),
+            ('Developer', 'developer'),
+            ('Tester', 'tester'),
+            ('TestRunner', 'testrunner')
+        ]
         
         # Add any additional requested roles
         role_mapping = {
@@ -3290,10 +3258,10 @@ def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: st
     The script will analyze your specification and set up a complete tmux
     orchestration environment with AI agents based on project size:
     
-    OPTIMIZED FOR CLAUDE CODE MAX 5X PLAN:
-    - Small projects: 3 agents (Orchestrator + Developer + Researcher)
-    - Medium projects: 4 agents (+ Project Manager)
-    - Large projects: 5 agents (+ Tester or DevOps)
+    SIMPLIFIED ROLE DEPLOYMENT:
+    - All projects: 4 agents (Orchestrator + Developer + Tester + TestRunner)
+    - Consistent team structure regardless of project size
+    - Optimized for reduced token consumption
     
     Multi-agent systems use ~15x more tokens than standard usage.
     Use --plan to specify your subscription for appropriate team sizing.

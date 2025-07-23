@@ -11,7 +11,7 @@
 
 ## 🏗️ Architecture
 
-The Tmux Orchestrator uses a three-tier hierarchy to overcome context window limitations:
+The Tmux Orchestrator uses a streamlined architecture with focused roles:
 
 ```
 ┌─────────────┐
@@ -19,28 +19,23 @@ The Tmux Orchestrator uses a three-tier hierarchy to overcome context window lim
 └──────┬──────┘
        │ Monitors & coordinates
        ▼
-┌─────────────┐     ┌─────────────┐
-│  Project    │     │  Project    │
-│  Manager 1  │     │  Manager 2  │ ← Assign tasks, enforce specs
-└──────┬──────┘     └──────┬──────┘
-       │                   │
-       ▼                   ▼
-┌─────────────┐     ┌─────────────┐
-│ Engineer 1  │     │ Engineer 2  │ ← Write code, fix bugs
-└─────────────┘     └─────────────┘
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Developer  │     │   Tester    │     │ TestRunner  │
+└─────────────┘     └─────────────┘     └─────────────┘
+ ↑ Write code        ↑ Create tests       ↑ Execute tests
 ```
 
 ### Why Separate Agents?
 - **Limited context windows** - Each agent stays focused on its role
-- **Specialized expertise** - PMs manage, engineers code
+- **Specialized expertise** - Each role has focused responsibilities
 - **Parallel work** - Multiple engineers can work simultaneously
 - **Better memory** - Smaller contexts mean better recall
 
 ## 📸 Examples in Action
 
-### Project Manager Coordination
-![Initiate Project Manager](Examples/Initiate%20Project%20Manager.png)
-*The orchestrator creating and briefing a new project manager agent*
+### Agent Coordination
+![Agent Coordination](Examples/Initiate%20Project%20Manager.png)
+*The orchestrator coordinating with specialized agents*
 
 ### Status Reports & Monitoring
 ![Status Reports](Examples/Status%20reports.png)
@@ -122,12 +117,13 @@ tmux new-session -s my-project
 # 3. Start project manager in window 0
 claude
 
-# 4. Give PM the spec and let it create an engineer
-"You are a Project Manager. Read project_spec.md and create an engineer 
-in window 1 to implement it. Schedule check-ins every 30 minutes."
+# 4. Give Developer the spec directly
+"You are a Developer. Read project_spec.md and implement it.
+Work with the Tester in window 2 for test coverage.
+Schedule check-ins every 30 minutes."
 
 # 5. Schedule orchestrator check-in
-./schedule_with_note.sh 30 "Check PM progress on auth system"
+./schedule_with_note.sh 30 "Check Developer progress on auth system"
 ```
 
 ### Option 2: Automated Setup with Auto-Orchestrate
@@ -183,7 +179,7 @@ The new `auto_orchestrate.py` script provides fully automated setup:
 - **Context-Aware**: Uses `/context-prime` to understand your project before planning
 - **Spec Analysis**: Claude analyzes your markdown specifications intelligently
 - **Phase Planning**: Generates realistic implementation plans with time estimates
-- **Multiple Specialized Agents**: Orchestrator, PM, Developer, Tester, and more based on project needs
+- **Core Agent Team**: Orchestrator, Developer, Tester, and TestRunner for all projects
 - **One Command**: From fresh clone to running AI team in under a minute
 - **Git Workflow**: Enforces best practices with regular commits and PRs
 - **Credit Management**: Automatic handling of Claude Code usage limits with pause/resume
@@ -330,8 +326,8 @@ tmux new-window -n frontend-pm
 tmux new-window -n backend-pm  
 tmux new-window -n mobile-pm
 
-# Each PM manages their own engineers
-# Orchestrator coordinates between PMs
+# Orchestrator directly manages all agents
+# Simplified structure for better efficiency
 ```
 
 ### Cross-Project Intelligence
