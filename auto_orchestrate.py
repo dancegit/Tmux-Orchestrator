@@ -1491,6 +1491,59 @@ This file is automatically read by Claude Code when working in this directory.
         except Exception as e:
             return f"\n⚠️ Error reading .mcp.json: {str(e)}\n"
     
+    def create_communication_channels(self, current_role: str, roles_deployed: List[Tuple[str, str]]) -> str:
+        """Create a communication channels reference table with correct window numbers"""
+        if not roles_deployed:
+            return ""
+            
+        channels = "\n📡 **CRITICAL: Team Communication Channels**\n\n"
+        channels += "**ALWAYS use these exact window references for messaging:**\n\n"
+        channels += "| Role | Window # | Send Message Command |\n"
+        channels += "|------|----------|---------------------|\n"
+        
+        session_name = None
+        for idx, (window_name, role_key) in enumerate(roles_deployed):
+            # Highlight current role
+            is_current = role_key == current_role
+            prefix = "→ " if is_current else "  "
+            you_marker = " (YOU)" if is_current else ""
+            
+            # Get session name from first window for example commands
+            if session_name is None:
+                result = subprocess.run(['tmux', 'display-message', '-p', '#{session_name}'], 
+                                      capture_output=True, text=True)
+                if result.returncode == 0:
+                    session_name = result.stdout.strip()
+                else:
+                    session_name = "session"
+            
+            # Create the table row
+            channels += f"|{prefix}{window_name}{you_marker} | {idx} | `scm {session_name}:{idx} \"message\"` |\n"
+        
+        channels += "\n**Examples:**\n"
+        
+        # Add role-specific examples
+        if current_role == 'developer':
+            pm_idx = next((idx for idx, (name, role) in enumerate(roles_deployed) if role == 'project_manager'), None)
+            if pm_idx is not None:
+                channels += f"- Report to PM: `scm {session_name}:{pm_idx} \"Pushed feature branch, ready for review\"`\n"
+        elif current_role == 'project_manager':
+            dev_idx = next((idx for idx, (name, role) in enumerate(roles_deployed) if role == 'developer'), None)
+            if dev_idx is not None:
+                channels += f"- Coordinate with Developer: `scm {session_name}:{dev_idx} \"Please resolve merge conflicts\"`\n"
+        elif current_role == 'tester':
+            pm_idx = next((idx for idx, (name, role) in enumerate(roles_deployed) if role == 'project_manager'), None)
+            if pm_idx is not None:
+                channels += f"- Report test results: `scm {session_name}:{pm_idx} \"All tests passing, coverage at 95%\"`\n"
+        
+        channels += "\n**⚠️ Common Mistakes to Avoid:**\n"
+        channels += "- ❌ Using role names like `pm:0` - roles don't have fixed numbers!\n"
+        channels += "- ❌ Using `developer:0` - the developer might be in window 2!\n"
+        channels += "- ✅ Always use the window numbers from the table above\n"
+        channels += "- ✅ Or use full session:window format\n\n"
+        
+        return channels
+    
     def create_role_briefing(self, role: str, spec: ImplementationSpec, role_config: RoleConfig, 
                            context_primed: bool = True, roles_deployed: List[Tuple[str, str]] = None,
                            worktree_paths: Dict[str, Path] = None, mcp_categories: Dict[str, List[str]] = None) -> str:
@@ -1589,6 +1642,9 @@ NOTE: Context priming was not available. Please take a moment to:
         if mcp_categories:
             mcp_guidance = "\n\n" + self.get_role_mcp_guidance(role, mcp_categories) + "\n"
         
+        # Get communication channels table
+        communication_channels = self.create_communication_channels(role, roles_deployed)
+        
         if role == 'orchestrator':
             tool_path = self.tmux_orchestrator_path
             return f"""{mandatory_reading}{team_locations}You are the Orchestrator for {spec.project.name}.
@@ -1623,6 +1679,8 @@ Estimated complexity: {spec.project_size.complexity}
 Your team composition:
 {team_description}
 
+{communication_channels}
+
 Workflow Example:
 ```bash
 # You start in project worktree - create project files here
@@ -1632,7 +1690,8 @@ echo "# Project Status" > project_management/status.md
 
 # Switch to tool directory for orchestrator commands
 cd {tool_path}
-./send-claude-message.sh project-manager:1 "What's your status?"
+# Use window numbers from the communication table above!
+./send-claude-message.sh session:window "What's your status?"
 ./schedule_with_note.sh 30 "Check team progress" "session:0"
 python3 claude_control.py status detailed
 
@@ -1709,9 +1768,10 @@ This means context exhaustion is NOT a crisis - it's a routine, self-managed eve
 5. **Post-Merge Notification**:
    ```bash
    # After PM confirms merge complete:
-   ./send-claude-message.sh developer:0 "Integration complete! Pull from {spec.git_workflow.parent_branch} and create new feature branch"
-   ./send-claude-message.sh tester:2 "Integration complete! Pull from {spec.git_workflow.parent_branch} and create new feature branch"
-   # Notify all agents...
+   # Use window numbers from communication channels table!
+   ./send-claude-message.sh session:dev_window "Integration complete! Pull from {spec.git_workflow.parent_branch} and create new feature branch"
+   ./send-claude-message.sh session:test_window "Integration complete! Pull from {spec.git_workflow.parent_branch} and create new feature branch"
+   # Check communication table for correct window numbers!
    ```
 
 **Integration is AUTOMATED**: No manual PR reviews, no waiting for tests. Trust your agents!
@@ -1770,6 +1830,8 @@ git merge origin/feature-dev
 # If approved, coordinate merge to parent branch
 ```
 
+{communication_channels}
+
 Implementation Phases:
 {chr(10).join(f'{i+1}. {p.name} ({p.duration_hours}h)' for i, p in enumerate(spec.implementation_plan.phases))}
 
@@ -1810,6 +1872,8 @@ Project Details:
 - Path: {spec.project.path}
 - Type: {spec.project.type}
 - Technologies: {', '.join(spec.project.main_tech)}
+
+{communication_channels}
 
 Implementation Phases:
 {chr(10).join(f'{i+1}. {p.name}: {", ".join(p.tasks[:2])}...' for i, p in enumerate(spec.implementation_plan.phases))}
@@ -1881,6 +1945,8 @@ Collaborate with:
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
 
+{communication_channels}
+
 Testing Focus:
 - Technologies: {', '.join(spec.project.main_tech)}
 - Ensure all success criteria are met:
@@ -1939,6 +2005,8 @@ Collaborate with:
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
 
+{communication_channels}
+
 **Test Execution Focus**:
 - Continuous test execution and monitoring
 - Parallel test suite management
@@ -1991,6 +2059,8 @@ Start by:
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+{communication_channels}
 
 **CRITICAL FIRST TASK**: Read the project's CLAUDE.md for logging/monitoring instructions
 ```bash
@@ -2069,6 +2139,8 @@ Start by:
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
 
+{communication_channels}
+
 Project Infrastructure:
 - Type: {spec.project.type}
 - Technologies: {', '.join(spec.project.main_tech)}
@@ -2104,6 +2176,8 @@ Coordinate with:
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
 
+{communication_channels}
+
 Review Focus:
 - Code quality and maintainability
 - Security vulnerabilities
@@ -2137,6 +2211,8 @@ Work with Developer to maintain code excellence."""
         elif role == 'researcher':
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Technical Researcher for {spec.project.name}.
 {mcp_tools_info}
+
+{communication_channels}
 📋 **Pre-Session Note**: 
 - **IMPORTANT**: Check `{self.project_path}/mcp-inventory.md` (in MAIN project, not your worktree!)
 - This file is created by the Orchestrator and lists all available MCP tools
@@ -2245,6 +2321,8 @@ Report findings to:
 
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+{communication_channels}
 
 Documentation Priorities:
 - API documentation
