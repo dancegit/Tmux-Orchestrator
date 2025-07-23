@@ -62,51 +62,31 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
 
 1. **Orchestrator**: High-level oversight and coordination
    - Monitors overall project health and progress
-   - Coordinates between multiple project managers
+   - Coordinates between multiple agents
    - Makes architectural and strategic decisions
    - Resolves cross-project dependencies
    - Schedules check-ins and manages team resources
    - Works from both project worktree AND tool directory
 
-2. **Project Manager**: Quality-focused team coordination
-   - Maintains exceptionally high quality standards
-   - Reviews all code before merging
-   - Coordinates daily standups and status collection
-   - Manages git workflow and branch merging
-   - Identifies and escalates blockers
-   - Ensures 30-minute commit rule compliance
-   - Tracks technical debt and quality metrics
-
-3. **Developer**: Implementation and technical decisions
+2. **Developer**: Implementation and technical decisions
    - Writes production code following best practices
    - Implements features according to specifications
    - Creates unit tests for new functionality
    - Follows existing code patterns and conventions
    - Commits every 30 minutes with clear messages
-   - Collaborates with PM for code reviews
-   - Consults Researcher for technical guidance
+   - Collaborates with Tester for test coverage
+   - Works directly with Orchestrator for guidance
 
-4. **Researcher**: MCP-powered research and best practices
-   - Discovers and documents available MCP tools
-   - Researches security vulnerabilities (CVEs)
-   - Finds performance optimization strategies
-   - Analyzes best practices and design patterns
-   - Creates actionable recommendations (not info dumps)
-   - Provides technical guidance to all team members
-   - Maintains research/ directory with findings
-
-#### Additional Roles (Based on Project Size)
-
-5. **Tester** (Small/Medium/Large projects): Testing and verification
+3. **Tester**: Testing and verification
    - Writes comprehensive test suites (unit, integration, E2E)
    - Ensures all success criteria are met
    - Creates test plans for new features
    - Verifies security and performance requirements
    - Collaborates with Developer for test coverage
    - Maintains tests/ directory structure
-   - Reports test results to PM
+   - Reports test results to Orchestrator
 
-6. **TestRunner** (Small/Medium/Large projects): Automated test execution
+4. **TestRunner**: Automated test execution
    - Executes test suites continuously
    - Manages parallel test execution
    - Monitors test performance and flakiness
@@ -115,7 +95,27 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
    - Configures CI/CD test pipelines
    - Optimizes test run times
 
-7. **LogTracker** (Small/Medium/Large projects): System monitoring and logging
+#### Optional Roles (Can be added with --roles flag)
+
+5. **Project Manager**: Quality-focused team coordination
+   - Maintains exceptionally high quality standards
+   - Reviews all code before merging
+   - Coordinates daily standups and status collection
+   - Manages git workflow and branch merging
+   - Identifies and escalates blockers
+   - Ensures 30-minute commit rule compliance
+   - Tracks technical debt and quality metrics
+
+6. **Researcher**: MCP-powered research and best practices
+   - Discovers and documents available MCP tools
+   - Researches security vulnerabilities (CVEs)
+   - Finds performance optimization strategies
+   - Analyzes best practices and design patterns
+   - Creates actionable recommendations (not info dumps)
+   - Provides technical guidance to all team members
+   - Maintains research/ directory with findings
+
+7. **LogTracker**: System monitoring and logging
    - Aggregates logs from all services
    - Monitors for errors and warnings
    - Creates error tracking dashboards
@@ -177,13 +177,9 @@ Tmux-Orchestrator/
         └── {project-name}/
             └── worktrees/
                 ├── orchestrator/        # Orchestrator's project workspace
-                ├── project-manager/     # PM's isolated workspace
                 ├── developer/           # Developer's workspace
-                ├── researcher/          # Researcher's workspace (core role)
-                ├── developer-2/         # Second developer (if needed)
                 ├── tester/             # Tester's workspace
-                ├── devops/             # DevOps workspace
-                └── code_reviewer/       # Code reviewer workspace
+                └── testrunner/         # TestRunner's workspace
 ```
 
 ### 🎯 Orchestrator's Dual Directory Structure
@@ -264,21 +260,10 @@ Each role typically creates and maintains specific directories:
 - `mcp-inventory.md` - Available MCP tools (in main project, not worktree)
 - Uses Tmux-Orchestrator tools from tool directory
 
-**Project Manager**:
-- `project_management/reviews/` - Code review notes
-- `project_management/quality/` - Quality metrics
-- `project_management/standups/` - Daily status aggregations
-
 **Developer**:
 - `src/` - Source code
 - `tests/` - Unit tests
 - Feature branches for implementation
-
-**Researcher**:
-- `research/` - All research findings
-- `research/available-tools.md` - MCP tool inventory
-- `research/security-analysis.md` - CVE and vulnerability research
-- `research/best-practices.md` - Industry standards
 
 **Tester**:
 - `tests/` - Test suites
@@ -290,22 +275,6 @@ Each role typically creates and maintains specific directories:
 - `test-results/` - Execution logs
 - `test-metrics/` - Performance data
 - `.test-config/` - Runner configurations
-
-**LogTracker**:
-- `logs/` - Aggregated logs
-- `monitoring/` - Dashboards and alerts
-- `error-reports/` - Analyzed issues
-
-**DevOps**:
-- `deployment/` - Deployment configurations
-- `.github/workflows/` - CI/CD pipelines
-- `infrastructure/` - IaC files
-- `scripts/` - Deployment scripts
-
-**Code Reviewer**:
-- `reviews/` - Review reports
-- `security-scans/` - Vulnerability reports
-- `quality-reports/` - Code metrics
 
 **Documentation Writer**:
 - `docs/` - User documentation
@@ -813,65 +782,37 @@ tmux send-keys -t [session]:0 Enter
 ## Communication Protocols
 
 ### Hub-and-Spoke Model
-To prevent communication overload (n² complexity), use structured patterns:
-- Developers report to PM only
-- PM aggregates and reports to Orchestrator
-- Cross-functional communication goes through PM
-- Emergency escalation directly to Orchestrator
+With the simplified structure, the Orchestrator acts as the central hub:
+- All agents report directly to Orchestrator
+- Orchestrator coordinates all cross-functional communication
+- Direct agent-to-agent communication only for immediate needs (test handoffs)
+- Clear, focused communication reduces complexity
 
 ### Role Communication Matrix
 
-**Orchestrator** communicates with:
-- All Project Managers (primary)
-- Any agent in emergency situations
+With the simplified role structure, communication is streamlined:
 
-**Project Manager** communicates with:
-- Orchestrator (upward reporting)
-- Developer (code reviews, task assignment)
+**Orchestrator** communicates with:
+- Developer (task assignment, guidance)
 - Tester (quality verification)
 - TestRunner (test execution status)
-- DevOps (deployment coordination)
-- Code Reviewer (quality gates)
-- All other team members as needed
+- All agents for coordination
 
 **Developer** communicates with:
-- PM (primary contact)
-- Researcher (technical guidance)
+- Orchestrator (primary contact)
 - Tester (test requirements)
-- Code Reviewer (feedback incorporation)
-
-**Researcher** communicates with:
-- All team members (provides guidance)
-- PM (risk assessments)
+- TestRunner (test feedback)
 
 **Tester** communicates with:
-- PM (test results)
+- Orchestrator (test results)
 - Developer (test requirements)
 - TestRunner (test suite handoff)
 
 **TestRunner** communicates with:
-- PM (execution status)
+- Orchestrator (execution status)
 - Tester (test suite updates)
-- LogTracker (failure analysis)
+- Developer (failure details)
 
-**LogTracker** communicates with:
-- PM (anomaly reports)
-- Developer (error details)
-- DevOps (system health)
-
-**DevOps** communicates with:
-- PM (deployment status)
-- Developer (build requirements)
-- LogTracker (monitoring setup)
-
-**Code Reviewer** communicates with:
-- PM (review results)
-- Developer (change requests)
-
-**Documentation Writer** communicates with:
-- PM (documentation priorities)
-- Developer (technical details)
-- All team members (documentation needs)
 
 ### Daily Standup (Async)
 ```bash
@@ -917,26 +858,15 @@ Multi-agent systems use ~15x more tokens than standard Claude usage. Team sizes 
 | Max 20x | 8 | 5-6 | Can support larger teams |
 | Console | 10+ | As needed | Enterprise usage |
 
-### Default Role Deployment by Project Size
+### Default Role Deployment
 
-**Small Projects** (7 agents total):
+**All Projects** (4 agents total):
 - Orchestrator
 - Developer
-- Researcher
 - Tester
 - TestRunner
-- LogTracker
-- DevOps
 
-**Medium Projects** (8 agents total):
-- All Small project roles
-- Project Manager
-
-**Large Projects** (9 agents total):
-- All Medium project roles
-- Code Reviewer
-
-**Note**: Documentation Writer can be added to any size with `--roles documentation_writer`
+**Note**: This simplified deployment ensures core functionality while reducing token consumption. Additional roles can still be added with `--roles` if needed.
 
 ### Token Conservation Tips
 - Use `--size small` for longer coding sessions
