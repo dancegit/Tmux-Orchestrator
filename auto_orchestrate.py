@@ -239,11 +239,13 @@ class AutoOrchestrator:
             console.print("[green]✓ Tmux server is running with existing sessions[/green]")
             if result.stdout.strip():
                 # Show first few sessions
-                sessions = result.stdout.strip().split('\n')[:3]
+                all_sessions = result.stdout.strip().split('\n')
+                sessions = all_sessions[:3]
                 for session in sessions:
                     console.print(f"   • {session}")
-                if len(result.stdout.strip().split('\n')) > 3:
-                    console.print(f"   • ... and {len(result.stdout.strip().split('\n')) - 3} more sessions")
+                if len(all_sessions) > 3:
+                    remaining_count = len(all_sessions) - 3
+                    console.print(f"   • ... and {remaining_count} more sessions")
     
     def get_current_git_branch(self) -> Optional[str]:
         """Get the current git branch of the project"""
