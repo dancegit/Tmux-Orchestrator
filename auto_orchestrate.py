@@ -986,7 +986,7 @@ Please provide a brief status update on your current work and any blockers."""
         )
         
         # Create worktrees directory
-        project_name = spec.project.name.lower().replace(' ', '-')
+        project_name = self.sanitize_project_name(spec.project.name)
         worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
         worktrees_base.mkdir(parents=True, exist_ok=True)
         
@@ -1314,9 +1314,29 @@ This file is automatically read by Claude Code when working in this directory.
             except Exception as e:
                 console.print(f"[yellow]Warning: Could not update CLAUDE.md for {role_key}: {e}[/yellow]")
     
+    def sanitize_session_name(self, name: str) -> str:
+        """Sanitize a name to be safe for tmux session names"""
+        # Replace spaces and special characters with hyphens
+        sanitized = re.sub(r'[^a-zA-Z0-9_-]', '-', name.lower())
+        # Remove multiple consecutive hyphens
+        sanitized = re.sub(r'-+', '-', sanitized)
+        # Remove leading/trailing hyphens
+        sanitized = sanitized.strip('-')
+        return sanitized[:20]
+    
+    def sanitize_project_name(self, name: str) -> str:
+        """Sanitize a name to be safe for directory names"""
+        # Replace spaces and special characters with hyphens
+        sanitized = re.sub(r'[^a-zA-Z0-9_-]', '-', name.lower())
+        # Remove multiple consecutive hyphens
+        sanitized = re.sub(r'-+', '-', sanitized)
+        # Remove leading/trailing hyphens
+        sanitized = sanitized.strip('-')
+        return sanitized
+    
     def setup_tmux_session(self, spec: ImplementationSpec):
         """Set up the tmux session with roles based on project size using git worktrees"""
-        session_name = spec.project.name.lower().replace(' ', '-')[:20] + "-impl"
+        session_name = self.sanitize_session_name(spec.project.name) + "-impl"
         
         # Determine which roles to deploy
         roles_to_deploy = self.get_roles_for_project_size(spec)
@@ -1339,6 +1359,18 @@ This file is automatically read by Claude Code when working in this directory.
             # Kill existing session if it exists
             subprocess.run(['tmux', 'kill-session', '-t', session_name], 
                          capture_output=True)
+            
+            # Add a small delay to ensure session is fully killed
+            time.sleep(0.5)
+            
+            # Double-check session is gone
+            check_result = subprocess.run(['tmux', 'has-session', '-t', session_name], 
+                                        capture_output=True)
+            if check_result.returncode == 0:
+                # Session still exists, force kill it
+                subprocess.run(['tmux', 'kill-session', '-t', session_name, '-f'], 
+                             capture_output=True)
+                time.sleep(0.5)
             
             # Create new session with first role
             first_window, first_role = roles_to_deploy[0]
@@ -3207,8 +3239,8 @@ Remember: It's better to compact proactively than to hit context exhaustion!"""
         console.print("\n[cyan]Step 4:[/cyan] Setting up tmux orchestration...")
         
         # Check for existing session and worktrees
-        session_name = self.implementation_spec.project.name.lower().replace(' ', '-')[:20] + "-impl"
-        project_name = self.implementation_spec.project.name.lower().replace(' ', '-')
+        session_name = self.sanitize_session_name(self.implementation_spec.project.name) + "-impl"
+        project_name = self.sanitize_project_name(self.implementation_spec.project.name)
         roles_to_deploy = self.get_roles_for_project_size(self.implementation_spec)
         
         existing_session = self.check_existing_session(session_name)
@@ -3278,7 +3310,7 @@ Remember: It's better to compact proactively than to hit context exhaustion!"""
         self.setup_tmux_session(self.implementation_spec)
         
         # Save implementation spec for reference
-        registry_dir = self.tmux_orchestrator_path / 'registry' / 'projects' / self.implementation_spec.project.name.lower().replace(' ', '-')
+        registry_dir = self.tmux_orchestrator_path / 'registry' / 'projects' / self.sanitize_project_name(self.implementation_spec.project.name)
         registry_dir.mkdir(parents=True, exist_ok=True)
         
         spec_file = registry_dir / 'implementation_spec.json'
@@ -3288,7 +3320,7 @@ Remember: It's better to compact proactively than to hit context exhaustion!"""
         console.print(f"Implementation spec saved to: {spec_file}")
         
         # Save session state for resume capability
-        session_name = self.implementation_spec.project.name.lower().replace(' ', '-')[:20] + "-impl"
+        session_name = self.sanitize_session_name(self.implementation_spec.project.name) + "-impl"
         roles_deployed = self.get_roles_for_project_size(self.implementation_spec)
         
         # Get current branch as parent branch
