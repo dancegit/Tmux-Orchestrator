@@ -1420,23 +1420,37 @@ This file is automatically read by Claude Code when working in this directory.
                 # Pre-initialize Claude to approve MCP servers
                 self.pre_initialize_claude_in_worktree(session_name, window_idx, role_key, worktree_path)
                 
+                # Wait a bit longer to ensure /exit has completed
+                time.sleep(2)
+                
                 # Kill the window (since it only has one pane)
-                subprocess.run([
+                kill_result = subprocess.run([
                     'tmux', 'kill-window', '-t', f'{session_name}:{window_idx}'
                 ], capture_output=True)
                 
+                # Wait to ensure window is fully killed
+                time.sleep(1)
+                
                 # Create a new window at the same index
                 # Using -a flag to insert at specific index
-                subprocess.run([
+                create_result = subprocess.run([
                     'tmux', 'new-window', '-t', f'{session_name}:{window_idx}',
                     '-n', window_name, '-c', str(worktree_path),
                     '-d'  # Don't switch to it
                 ], capture_output=True)
                 
+                if create_result.returncode != 0:
+                    # Window might still exist, try without index
+                    subprocess.run([
+                        'tmux', 'new-window', '-t', session_name,
+                        '-n', window_name, '-c', str(worktree_path),
+                        '-d'
+                    ], capture_output=True)
+                
                 console.print(f"[green]✓ Recreated window for {role_key} after MCP approval[/green]")
                 
-                # Small delay to ensure window is ready
-                time.sleep(1)
+                # Longer delay to ensure window is ready
+                time.sleep(2)
             
             # Start Claude with dangerous skip permissions
             subprocess.run([
@@ -3167,7 +3181,16 @@ Remember: It's better to compact proactively than to hit context exhaustion!"""
             '/exit', 'Enter'
         ])
         
-        # Wait for Claude to process the exit command
+        # Wait longer for Claude to fully exit
+        time.sleep(3)
+        
+        # Send additional Enter in case there's a confirmation prompt
+        subprocess.run([
+            'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
+            'Enter'
+        ])
+        
+        # Wait a bit more
         time.sleep(1)
         
         # Don't print completion since we'll kill the pane
