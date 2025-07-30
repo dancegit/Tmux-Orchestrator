@@ -25,14 +25,23 @@ echo "Setting up fast lane hooks for project: $PROJECT_NAME"
 for worktree in developer tester testrunner; do
     WORKTREE_PATH="$WORKTREES_DIR/$worktree"
     if [[ -d "$WORKTREE_PATH" ]]; then
-        HOOKS_DIR="$WORKTREE_PATH/.git/hooks"
+        # Handle worktree git directory structure
+        if [[ -f "$WORKTREE_PATH/.git" ]]; then
+            # Worktree with git file pointing to actual git dir
+            GIT_DIR=$(cat "$WORKTREE_PATH/.git" | sed 's/gitdir: //')
+            HOOKS_DIR="$GIT_DIR/hooks"
+        else
+            # Regular git repository
+            HOOKS_DIR="$WORKTREE_PATH/.git/hooks"
+        fi
+        
         mkdir -p "$HOOKS_DIR"
         
         # Copy post-commit hook
         cp "$SCRIPT_DIR/post-commit-fast-lane.sh" "$HOOKS_DIR/post-commit"
         chmod +x "$HOOKS_DIR/post-commit"
         
-        echo "✅ Installed fast lane hook in $worktree worktree"
+        echo "✅ Installed fast lane hook in $worktree worktree (git dir: $HOOKS_DIR)"
     else
         echo "⚠️  Worktree not found: $worktree"
     fi
