@@ -1,28 +1,48 @@
 # Local configuration
 config.local.sh
+config.local.sh.bak
 
 # Temporary files
 next_check_note.txt
 *.log
-
-# Registry directory (logs and session data)
-registry/
-
-# Python cache
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Editor files
-.vscode/
-.idea/
+*.tmp
+*.temp
+*.bak
 *.swp
 *.swo
 *~
 
+# Registry directory (logs and session data)
+registry/
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor files
+.vscode/
+.idea/
+
 # OS files
 .DS_Store
 Thumbs.db
+.Spotlight-V100
+.Trashes
 
-# Operational files (should not be in version control)
-next_check_note.txt
+# Log files
+*.log
+*.out
