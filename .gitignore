@@ -23,3 +23,6 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Operational files (should not be in version control)
+next_check_note.txt
