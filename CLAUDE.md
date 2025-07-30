@@ -1069,92 +1069,53 @@ Credit status stored in `~/.claude/credit_schedule.json`:
 
 ## Context Window Management
 
-### The /compact Command
-When agents run low on context (confusion, repeated work, 2+ hours of work):
+### Context Management is Automatic
+Context window management happens automatically - agents don't need to worry about running any special commands. The system handles compacting and context management behind the scenes.
 
-1. **Create Checkpoint First**:
-   ```bash
-   cat > ROLE_CHECKPOINT_$(date +%Y%m%d_%H%M).md << 'EOF'
-   ## Context Checkpoint
-   - Current task: [what you're doing]
-   - Branch: [current branch]
-   - Recent work: [what was completed]
-   - Next steps: [specific actions]
-   EOF
-   ```
+### Creating Checkpoints (Optional)
+While not required, agents may choose to create checkpoint documents to track progress:
 
-2. **Execute /compact Properly**:
-   - **CRITICAL**: `/compact` must be on its own line, NOT part of your message
-   - **WRONG**: "Status update before compact. /compact" ❌ (won't execute)
-   - **RIGHT**: Send your message first, THEN type `/compact` separately ✅
-   - **Correct Steps**:
-     1. Finish and send your status message
-     2. Press Enter to send it
-     3. Type `/compact` on a new line
-     4. Press Enter to execute the compact
+```bash
+cat > ROLE_CHECKPOINT_$(date +%Y%m%d_%H%M).md << 'EOF'
+## Context Checkpoint
+- Current task: [what you're doing]
+- Branch: [current branch]
+- Recent work: [what was completed]
+- Next steps: [specific actions]
+EOF
+```
 
-3. **Reload Context**:
-   - `/context-prime` (if available) OR
-   - Read CLAUDE.md, README.md, checkpoint document
-   - Check git status and recent commits
-
-4. **Continue** from checkpoint next steps
-
-### ⚠️ Common /compact Mistakes to Avoid
-- **Don't include /compact in your message text** - it won't execute
-- **Don't type anything else on the /compact line** - keep it isolated
-- **If you accidentally included /compact in a message**, just type it again properly on its own line
-- **Remember**: Claude needs to see `/compact` as a standalone command, not as part of your conversation
-
-### Proactive Context Health
-- Create checkpoints every 2 hours
-- Compact at natural breaks (phase transitions)
-- Monitor for confusion signs
-- Better to compact early than hit exhaustion
+### Best Practices
+- Create checkpoints at natural breaks (phase transitions)
+- Document progress periodically
+- Keep clear notes about next steps
 
 ### For Orchestrators: Don't Worry About Low Context Agents
 
 **IMPORTANT**: You can continue sending commands to agents even when they report low context (3%, 6%, etc). Here's why:
 
-- **Agents will auto-compact**: They know to create checkpoints and run /compact when needed
-- **Work continues seamlessly**: After compacting, they reload context and continue
-- **No manual intervention needed**: Agents self-manage their context
-- **Keep delegating tasks**: Don't avoid low-context agents - they'll handle it
+- **Context management is automatic**: The system handles context management automatically
+- **Work continues seamlessly**: Agents can continue working without interruption
+- **No manual intervention needed**: Context is managed behind the scenes
+- **Keep delegating tasks**: Don't avoid low-context agents - they can handle it
 
 **Best Practice**: When an agent mentions low context:
 1. Acknowledge it: "Thanks for the heads up about context"
 2. Continue normally: Send tasks as usual
-3. They'll compact when needed and continue working
-4. If they seem confused after compacting, remind them to read their checkpoint
+3. The system will handle context management automatically
+4. If they seem confused, remind them to read their checkpoint (if they created one)
 
 ### 🛠️ Orchestrator Tools for Context Management
 
-**New**: The orchestrator now has tools to help agents who struggle with compacting:
+The orchestrator has tools to monitor agent context levels:
 
 1. **Monitor Agent Context Levels**:
    ```bash
    ./monitor_agent_context.sh
    ```
-   Shows all agents' context levels and auto-helps those who tried to compact incorrectly
+   Shows all agents' context levels for awareness
 
-2. **Send Compact Command Directly**:
-   ```bash
-   ./compact-agent.sh session:window
-   # Example: ./compact-agent.sh signalmatrix-hybrid--impl:2
-   ```
-
-3. **Batch Compact Critical Agents**:
-   ```bash
-   ./compact-all-critical.sh [session] [threshold]
-   # Example: ./compact-all-critical.sh signalmatrix-hybrid--impl 10
-   ```
-
-4. **Smart Message Sending** (built into send-claude-message.sh):
-   - Automatically detects `/compact` in messages
-   - Sends it as a separate command
-   - Prevents the common mistake of including it in message text
-
-This self-recovery system means context exhaustion is no longer a blocking issue!
+Since context management is now automatic, these tools are primarily for monitoring purposes rather than intervention.
 
 ## Anti-Patterns to Avoid
 
@@ -1165,7 +1126,6 @@ This self-recovery system means context exhaustion is no longer a blocking issue
 - ❌ **Quality Shortcuts**: Never compromise standards
 - ❌ **Blind Scheduling**: Never schedule without verifying target window
 - ❌ **Ignoring Credits**: Always monitor credit status for team continuity
-- ❌ **Context Exhaustion**: Not using /compact proactively
 
 ## Critical Lessons Learned
 
