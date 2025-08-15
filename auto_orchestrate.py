@@ -1781,16 +1781,16 @@ nohup ./credit_management/credit_monitor.py > /dev/null 2>&1 &
 📊 **Context Window Management - Don't Worry About Low Context!**
 
 IMPORTANT: You can continue sending tasks to agents reporting low context (3%, 6%, etc):
-- **Agents self-manage**: They know to checkpoint and /compact when needed
-- **Work continues**: After compacting, they reload context and keep working
+- **Context management is automatic**: The system handles context management automatically
+- **Work continues**: Context is managed behind the scenes without interruption
 - **No intervention needed**: Don't avoid or "save" low-context agents
 - **Keep delegating**: Send tasks normally - they'll handle context themselves
 
 When an agent mentions low context:
 1. Acknowledge: "Thanks for the context update"
 2. Continue normally: Assign tasks as planned
-3. They'll auto-compact when ready
-4. If confused after compact, remind them: "Check your checkpoint document"
+3. Context management happens automatically
+4. If they seem confused, remind them to read their checkpoint (if they created one)
 
 This means context exhaustion is NOT a crisis - it's a routine, self-managed event!
 
@@ -3172,8 +3172,8 @@ Working in multi-agent systems uses ~15x more tokens than normal. You MUST activ
 - Working continuously for 2+ hours
 - Making similar files multiple times
 
-**Self-Recovery Process**:
-1. **Create Checkpoint** (BEFORE /compact):
+**Checkpoint Creation (Optional)**:
+1. **Create Checkpoint** at natural breaks:
    ```bash
    cat > {role.upper()}_CHECKPOINT_$(date +%Y%m%d_%H%M).md << 'EOF'
    ## Context Checkpoint - {role.title()}
@@ -3185,13 +3185,9 @@ Working in multi-agent systems uses ~15x more tokens than normal. You MUST activ
    EOF
    ```
 
-2. **Clear Context**:
-   Type the following and press Enter:
-   ```
-   /compact
-   ```
+2. **Context Management is Automatic**: Context is handled automatically by the system
 
-3. **Reload Essential Context**:
+3. **Recovery Context** (if needed):
    ```
    # Option A: If available
    /context-prime
@@ -3210,18 +3206,18 @@ Working in multi-agent systems uses ~15x more tokens than normal. You MUST activ
 
 **Proactive Context Health**:
 - Create checkpoints every 2 hours
-- Run /compact at natural break points (phase transitions, major commits)
+- Context management happens automatically at natural break points
 - Always checkpoint before starting new phases
-- If you notice confusion, compact immediately
+- Context is managed automatically when needed
 
 **Emergency Recovery**:
-If confused after /compact, read in order:
+If confused, read in order:
 1. CLAUDE.md (your role and git rules)
 2. Your latest checkpoint/handoff document
 3. Recent git commits
 4. Ask orchestrator for clarification
 
-Remember: It's better to compact proactively than to hit context exhaustion!"""
+Remember: Context management is automatic - focus on creating good checkpoints to track progress!"""
 
     def pre_initialize_claude_in_worktree(self, session_name: str, window_idx: int, role_key: str, worktree_path: Path):
         """Pre-initialize Claude to auto-approve MCP servers"""

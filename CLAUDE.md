@@ -124,7 +124,7 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
    - Identifies patterns in log data
    - Reports anomalies to team
 
-8. **DevOps** (Medium/Large projects): Infrastructure and deployment
+8. **DevOps** (Enhanced for system operations): Infrastructure and deployment
    - Creates and maintains deployment configurations
    - Sets up CI/CD pipelines
    - Manages staging and production environments
@@ -132,6 +132,10 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
    - Monitors system health and performance
    - Coordinates with Developer on build requirements
    - Ensures security best practices in deployment
+   - **NEW**: Manages Docker containers and orchestration
+   - **NEW**: Configures systemd services and init scripts
+   - **NEW**: Handles package installation and dependency management
+   - **NEW**: Sets up reverse proxies and load balancers
 
 9. **Code Reviewer** (Large projects): Security and code quality
    - Reviews all code for security vulnerabilities
@@ -150,6 +154,197 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
     - Creates troubleshooting guides
     - Keeps README files updated
     - Ensures documentation stays in sync with code
+
+#### System Operations Roles (For infrastructure projects)
+
+11. **SysAdmin**: System administration and server management
+    - Creates and manages system users and groups
+    - Configures file permissions and ownership
+    - Installs and updates system packages
+    - Manages system services (systemd, init.d)
+    - Configures system security (sudo, PAM, etc.)
+    - Sets up and maintains cron jobs
+    - Manages disk partitions and storage
+    - Configures system logging and rotation
+    - Handles system backups and recovery
+    - Maintains `/etc` configurations
+
+12. **SecurityOps**: Security hardening and compliance
+    - Implements AppArmor/SELinux policies
+    - Configures firewall rules (iptables, ufw)
+    - Sets up fail2ban and intrusion detection
+    - Manages SSL certificates and TLS configuration
+    - Implements security scanning and auditing
+    - Configures secure SSH access
+    - Sets up VPN and secure tunnels
+    - Manages secrets and key rotation
+    - Implements RBAC and access controls
+    - Ensures compliance with security standards
+
+13. **NetworkOps**: Network configuration and management
+    - Configures network interfaces and routing
+    - Sets up DNS and DHCP services
+    - Manages port forwarding and NAT
+    - Configures load balancers and reverse proxies
+    - Implements network segmentation (VLANs)
+    - Sets up monitoring for network services
+    - Manages CDN and edge configurations
+    - Configures network security policies
+    - Optimizes network performance
+    - Troubleshoots connectivity issues
+
+14. **MonitoringOps**: Advanced monitoring and alerting
+    - Sets up Prometheus/Grafana stacks
+    - Configures custom metrics and dashboards
+    - Implements log aggregation (ELK stack)
+    - Sets up alerting rules and escalation
+    - Creates SLI/SLO monitoring
+    - Implements distributed tracing
+    - Monitors resource usage and capacity
+    - Sets up synthetic monitoring
+    - Creates runbooks for incidents
+    - Implements on-call rotations
+
+15. **DatabaseOps**: Database administration
+    - Installs and configures database servers
+    - Manages database users and permissions
+    - Implements backup and recovery strategies
+    - Optimizes database performance
+    - Sets up replication and clustering
+    - Manages schema migrations
+    - Monitors database health and metrics
+    - Implements database security
+    - Handles data archival and retention
+    - Troubleshoots database issues
+
+## 🎯 Dynamic Team Configuration System
+
+### Project Type Detection
+The orchestrator automatically detects project types and deploys appropriate teams:
+
+```yaml
+# Team Templates (configured in team_templates.yaml)
+web_application:
+  core_roles: [orchestrator, developer, tester, testrunner]
+  optional_roles: [devops, researcher, documentation_writer]
+  
+system_deployment:
+  core_roles: [orchestrator, sysadmin, devops, securityops]
+  optional_roles: [networkops, monitoringops, databaseops]
+  
+data_pipeline:
+  core_roles: [orchestrator, developer, databaseops, devops]
+  optional_roles: [monitoringops, researcher]
+  
+infrastructure_as_code:
+  core_roles: [orchestrator, devops, sysadmin, securityops]
+  optional_roles: [networkops, monitoringops]
+```
+
+### Dynamic Role Deployment
+```bash
+# Automatic team configuration based on project analysis
+./auto_orchestrate.py --project /path/to/project --spec spec.md
+
+# Override with specific team template
+./auto_orchestrate.py --project /path/to/project --spec spec.md --team-type system_deployment
+
+# Custom role selection
+./auto_orchestrate.py --project /path/to/project --spec spec.md \
+  --roles "developer,sysadmin,devops,securityops"
+
+# Add roles to existing orchestration
+./auto_orchestrate.py --project /path/to/project --resume \
+  --add-roles "sysadmin,networkops"
+```
+
+### Project Type Detection Logic
+The system analyzes project characteristics to determine appropriate roles:
+
+1. **Web Application Indicators**:
+   - `package.json`, `requirements.txt`, `Gemfile`
+   - Frontend frameworks (React, Vue, Angular)
+   - API/backend frameworks (Express, Django, Rails)
+
+2. **System Deployment Indicators**:
+   - Deployment specs/plans (`*_deployment_*.md`)
+   - Infrastructure configs (Terraform, Ansible)
+   - Docker/Kubernetes manifests
+   - Systemd service files
+
+3. **Data Pipeline Indicators**:
+   - ETL scripts, data processing code
+   - Database migration files
+   - Apache Airflow, Luigi, or similar
+   - Large data directories
+
+4. **Infrastructure as Code Indicators**:
+   - Terraform files (`*.tf`)
+   - CloudFormation templates
+   - Ansible playbooks
+   - Pulumi code
+
+### Role Dependencies and Prerequisites
+Some roles require others to function effectively:
+
+```yaml
+role_dependencies:
+  monitoringops: [sysadmin]  # Needs system access
+  securityops: [sysadmin]     # Needs system privileges
+  databaseops: [sysadmin]     # Needs to install software
+  networkops: [sysadmin]      # Needs network access
+```
+
+### Conditional Role Deployment
+Roles can be deployed based on project conditions:
+
+```yaml
+conditional_roles:
+  - role: databaseops
+    conditions:
+      - has_database: true  # Detects DB config files
+      - database_complexity: high  # Multiple DBs or clustering
+      
+  - role: securityops
+    conditions:
+      - production_deployment: true
+      - handles_sensitive_data: true
+      - compliance_required: true
+      
+  - role: monitoringops
+    conditions:
+      - service_count: ">5"
+      - requires_sla: true
+```
+
+### Team Scaling Based on Complexity
+
+The system automatically scales teams based on project metrics:
+
+| Project Size | Base Roles | Additional Roles | Token Multiplier |
+|-------------|------------|------------------|------------------|
+| Small | 3-4 | 0-1 optional | 10x |
+| Medium | 5-6 | 2-3 optional | 15x |
+| Large | 7-8 | 4-5 optional | 20x |
+| Enterprise | 9-10+ | All relevant | 25x+ |
+
+### Role Communication Matrices
+
+Different project types have different communication patterns:
+
+**System Deployment Projects**:
+```
+Orchestrator ← → SysAdmin ← → SecurityOps
+     ↓             ↓              ↓
+   DevOps ← → NetworkOps ← → MonitoringOps
+```
+
+**Web Application Projects** (standard):
+```
+Orchestrator ← → Developer ← → Tester
+                    ↓            ↓
+                DevOps ← → TestRunner
+```
 
 ## 🌳 Git Worktree Architecture (Auto-Orchestrate)
 
@@ -282,6 +477,48 @@ Each role typically creates and maintains specific directories:
 - `README.md` - Project overview
 - `CONTRIBUTING.md` - Contribution guidelines
 
+**SysAdmin**:
+- `infrastructure/` - System configurations
+- `scripts/` - Automation scripts
+- `ansible/` - Ansible playbooks (if used)
+- `backup/` - Backup configurations
+- `monitoring/` - System monitoring configs
+
+**SecurityOps**:
+- `security/` - Security policies and configs
+- `security/firewall/` - Firewall rules
+- `security/certificates/` - SSL/TLS certificates
+- `security/audit/` - Audit logs and reports
+- `security/compliance/` - Compliance documentation
+
+**NetworkOps**:
+- `network/` - Network configurations
+- `network/routing/` - Routing tables
+- `network/proxy/` - Reverse proxy configs
+- `network/dns/` - DNS configurations
+- `network/diagrams/` - Network topology
+
+**MonitoringOps**:
+- `monitoring/` - Monitoring stack configs
+- `monitoring/dashboards/` - Grafana dashboards
+- `monitoring/alerts/` - Alert rules
+- `monitoring/runbooks/` - Incident runbooks
+- `monitoring/metrics/` - Custom metrics
+
+**DatabaseOps**:
+- `database/` - Database configurations
+- `database/migrations/` - Schema migrations
+- `database/backups/` - Backup scripts
+- `database/performance/` - Performance tuning
+- `database/replication/` - Replication configs
+
+**DevOps** (enhanced):
+- `deployment/` - Deployment configurations
+- `docker/` - Dockerfiles and compose files
+- `kubernetes/` - K8s manifests
+- `ci-cd/` - Pipeline configurations
+- `terraform/` - Infrastructure as code
+
 ## 🔍 Researcher MCP Integration
 
 The Researcher role uses MCP (Model Context Protocol) tools for comprehensive research:
@@ -412,6 +649,7 @@ git stash pop  # Restore stashed changes if needed
 
 ### Project Manager Git Responsibilities
 
+#### Core Responsibilities
 Project Managers must enforce git discipline:
 - **VERIFY the starting branch** at project initialization
 - **PREVENT unauthorized merges to main** - only if project started on main
@@ -420,6 +658,58 @@ Project Managers must enforce git discipline:
 - Ensure meaningful commit messages
 - Check that stable tags are created
 - Track branch hierarchy to prevent accidental main branch pollution
+
+#### Advanced PM Git Management
+
+**Daily Health Checks**:
+```bash
+# Morning routine - check team sync status
+git fetch --all
+git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads
+
+# Check for agents falling behind
+git log --oneline --graph --all -20
+
+# Verify no one is working on main directly
+git log main --since="1 day ago" --format="%an %s"
+```
+
+**Integration Risk Assessment**:
+```bash
+# Before starting integration - assess complexity
+git diff main..feature/developer-work --stat
+git diff main..test/tester-work --stat
+
+# Check for overlapping changes (high conflict risk)
+git diff main..feature/developer-work --name-only > /tmp/dev_files
+git diff main..test/tester-work --name-only > /tmp/test_files
+comm -12 /tmp/dev_files /tmp/test_files  # Files changed by both
+
+# If overlap detected - coordinate first
+if [ -s overlap ]; then
+  scm developer:0 "Coordinate with Tester - overlapping changes detected in: $(cat overlap)"
+fi
+```
+
+**Rollback Procedures**:
+```bash
+# Emergency rollback if integration fails
+git checkout main
+git pull origin main
+
+# Create rollback branch
+git checkout -b rollback/emergency-$(date +%Y%m%d-%H%M)
+
+# Reset to last known good state  
+LAST_GOOD=$(git log --oneline -10 | grep "Integration:" | head -1 | cut -d' ' -f1)
+git reset --hard $LAST_GOOD
+
+# Force push to main (only in emergencies)
+git push origin main --force-with-lease
+
+# Notify all agents
+scm orchestrator:0 "EMERGENCY ROLLBACK: All agents rebase from main immediately"
+```
 
 ### Why This Matters
 
@@ -475,39 +765,118 @@ registry/projects/{project}/worktrees/
 3. **Auto-Merge Protocol**: Use `--admin` flag (no manual approvals)
 4. **Notification**: Announce PR creation and merges
 
-### PM Integration Protocol
+### 📋 PM Integration Protocol - Step by Step
+
+#### Pre-Integration Checklist
 ```bash
-# Step 1: Create integration branch
+# Step 0: Pre-integration safety checks
+git fetch --all
 git checkout main  # or parent branch
 git pull origin main
-git checkout -b integration/feature-name
 
-# Step 2: Merge all agent branches
-git merge origin/feature/developer-work
-git merge origin/test/tester-work
-git merge origin/testrunner/test-results
+# Check all agent branches are pushed and ready
+git branch -r | grep -E "(feature|test|pm-)"
+git log --oneline --graph --all -10
 
-# Step 3: Resolve conflicts (delegate to appropriate agent)
-# Developer: Code conflicts
-# Tester: Test conflicts
-# PM: Documentation conflicts
+# Verify no agents are mid-commit (check with orchestrator)
+scm orchestrator:0 "Ready for integration? All agents commit current work"
+```
 
-# Step 4: Push integration branch
-git push -u origin integration/feature-name
+#### Daily Integration Workflow
+```bash
+# Step 1: Create timestamped integration branch
+DATE=$(date +%Y%m%d-%H%M)
+git checkout -b integration/daily-$DATE
 
-# Step 5: Create PR with auto-merge intent
+# Step 2: Merge in dependency order (Backend → Frontend → Tests)
+# CRITICAL: Use --no-ff to preserve merge history
+
+# Infrastructure/Backend first
+git merge origin/feature/developer-backend --no-ff
+if [ $? -ne 0 ]; then
+  echo "CONFLICT: Backend merge failed - escalate to Developer"
+  scm developer:0 "Merge conflict in backend code - please resolve in integration/daily-$DATE"
+  exit 1
+fi
+
+# Frontend second  
+git merge origin/feature/developer-frontend --no-ff
+if [ $? -ne 0 ]; then
+  echo "CONFLICT: Frontend merge failed - escalate to Developer"
+  scm developer:0 "Merge conflict in frontend code - please resolve in integration/daily-$DATE"
+  exit 1
+fi
+
+# Tests last
+git merge origin/test/tester-work --no-ff
+if [ $? -ne 0 ]; then
+  echo "CONFLICT: Test merge failed - escalate to Tester"
+  scm tester:0 "Merge conflict in tests - please resolve in integration/daily-$DATE"
+  exit 1
+fi
+
+# Step 3: Integration testing BEFORE creating PR
+git push -u origin integration/daily-$DATE
+scm testrunner:0 "Run full integration test suite on integration/daily-$DATE"
+
+# Wait for test results before proceeding
+# Only continue if tests pass
+```
+
+#### Safe Merge Process
+```bash
+# Step 4: Create PR only after tests pass
 gh pr create --base main \
-  --head integration/feature-name \
-  --title "Integration: Feature Name" \
-  --body "Integrated work from all agents on feature-name
+  --head integration/daily-$DATE \
+  --title "Integration: $(date +%Y-%m-%d %H:%M)" \
+  --body "Daily integration of all agent work
 
-Auto-merging after integration."
+## Included Changes:
+- Developer: [brief description]
+- Tester: [brief description]
+- TestRunner: All tests passing
 
-# Step 6: Auto-merge immediately
-gh pr merge --admin --merge
+Integration tests: ✅ PASSED"
 
-# Step 7: Notify all agents via orchestrator
-scm orchestrator:0 "Integration complete! All agents pull from main"
+# Step 5: Merge with safety checks
+gh pr merge --admin --merge --delete-branch
+
+# Step 6: Immediate post-merge verification
+git checkout main
+git pull origin main
+npm run build  # or appropriate build command
+npm run test   # smoke test
+
+# Step 7: Notify all agents to sync
+scm orchestrator:0 "Integration complete! All agents pull from main within 1 hour"
+```
+
+#### Conflict Resolution Protocol
+```bash
+# When conflicts occur - delegate but don't abandon
+if git merge origin/feature/branch-name --no-ff; then
+  echo "✅ Clean merge successful"
+else
+  echo "⚠️  Conflicts detected - resolving..."
+  
+  # Check conflict type
+  git status | grep "both modified"
+  
+  # Delegate based on file type
+  if git status | grep -q "\.py\|\.js\|\.ts"; then
+    scm developer:0 "Code conflicts in integration branch $(git branch --show-current) - please resolve and commit"
+  elif git status | grep -q "test"; then
+    scm tester:0 "Test conflicts in integration branch $(git branch --show-current) - please resolve and commit"
+  else
+    # PM handles documentation/config conflicts
+    git mergetool  # or manual resolution
+    git add .
+    git commit -m "Resolve integration conflicts"
+  fi
+  
+  # Wait for agent to resolve before continuing
+  echo "Waiting for conflict resolution..."
+fi
 ```
 
 ### 🚀 Fast Lane Coordination (NEW)
@@ -796,6 +1165,155 @@ tmux send-keys -t task-templates:0 "claude" Enter
 - Let the agent figure out project-specific details
 - Monitor for successful startup before considering task complete
 
+## Creating Specialized Agents
+
+### Creating a SysAdmin Agent
+
+```bash
+# Create window
+tmux new-window -t [session] -n "SysAdmin" -c "$PROJECT_PATH"
+
+# Start and brief
+tmux send-keys -t [session]:[window] "claude" Enter
+sleep 5
+
+tmux send-keys -t [session]:[window] "You are the System Administrator for this deployment. Your responsibilities:
+
+1. **System Setup**: Configure servers, install packages, manage users
+2. **Permissions**: Set proper file ownership and permissions  
+3. **Service Management**: Configure systemd/init services
+4. **Security**: Implement system-level security measures
+5. **Resource Management**: Monitor and optimize system resources
+
+Key Commands You'll Use:
+- sudo for privileged operations
+- systemctl for service management
+- useradd/usermod for user management
+- chmod/chown for permissions
+- apt/yum for package management
+
+IMPORTANT: Always use sudo responsibly. Document all system changes.
+
+First, check the deployment spec and verify system prerequisites."
+tmux send-keys -t [session]:[window] Enter
+```
+
+### Creating a SecurityOps Agent
+
+```bash
+# Create window
+tmux new-window -t [session] -n "SecurityOps" -c "$PROJECT_PATH"
+
+# Start and brief
+tmux send-keys -t [session]:[window] "claude" Enter
+sleep 5
+
+tmux send-keys -t [session]:[window] "You are the Security Operations specialist. Your responsibilities:
+
+1. **System Hardening**: Implement security best practices
+2. **Access Control**: Configure firewalls, SSH, and access policies
+3. **Compliance**: Ensure security standards compliance
+4. **Monitoring**: Set up security monitoring and alerts
+5. **Incident Response**: Create security runbooks
+
+Security Tools:
+- ufw/iptables for firewall configuration
+- fail2ban for intrusion prevention
+- AppArmor/SELinux for mandatory access control
+- SSL/TLS certificate management
+- Security scanning tools
+
+Work closely with SysAdmin for system access. Report security concerns immediately to Orchestrator."
+tmux send-keys -t [session]:[window] Enter
+```
+
+### Creating a NetworkOps Agent
+
+```bash
+# Create window
+tmux new-window -t [session] -n "NetworkOps" -c "$PROJECT_PATH"
+
+# Start and brief
+tmux send-keys -t [session]:[window] "claude" Enter
+sleep 5
+
+tmux send-keys -t [session]:[window] "You are the Network Operations specialist. Your responsibilities:
+
+1. **Network Configuration**: Set up routing, DNS, load balancers
+2. **Reverse Proxy**: Configure Nginx/HAProxy for services
+3. **Port Management**: Manage port allocations and firewall rules
+4. **Performance**: Optimize network performance
+5. **Troubleshooting**: Diagnose connectivity issues
+
+Key Areas:
+- Nginx/Apache reverse proxy configuration
+- Load balancing and failover
+- DNS configuration
+- Network security policies
+- Performance monitoring
+
+Coordinate with SecurityOps for firewall rules and SysAdmin for system access."
+tmux send-keys -t [session]:[window] Enter
+```
+
+### Creating a MonitoringOps Agent
+
+```bash
+# Create window
+tmux new-window -t [session] -n "MonitoringOps" -c "$PROJECT_PATH"
+
+# Start and brief
+tmux send-keys -t [session]:[window] "claude" Enter
+sleep 5
+
+tmux send-keys -t [session]:[window] "You are the Monitoring Operations specialist. Your responsibilities:
+
+1. **Monitoring Stack**: Set up Prometheus/Grafana or similar
+2. **Metrics Collection**: Configure service and system metrics
+3. **Alerting**: Create alert rules and notifications
+4. **Dashboards**: Build monitoring dashboards
+5. **Incident Response**: Create runbooks for common issues
+
+Monitoring Stack:
+- Prometheus for metrics collection
+- Grafana for visualization
+- AlertManager for notifications
+- Log aggregation (ELK/Loki)
+- Custom metrics and exporters
+
+Work with all technical roles to ensure comprehensive monitoring coverage."
+tmux send-keys -t [session]:[window] Enter
+```
+
+### Creating a DatabaseOps Agent
+
+```bash
+# Create window
+tmux new-window -t [session] -n "DatabaseOps" -c "$PROJECT_PATH"
+
+# Start and brief
+tmux send-keys -t [session]:[window] "claude" Enter
+sleep 5
+
+tmux send-keys -t [session]:[window] "You are the Database Operations specialist. Your responsibilities:
+
+1. **Database Setup**: Install and configure database servers
+2. **Performance**: Optimize queries and configurations
+3. **Replication**: Set up HA and replication
+4. **Backups**: Implement backup strategies
+5. **Security**: Database access control and encryption
+
+Database Systems:
+- PostgreSQL/MySQL for relational data
+- MongoDB for document storage
+- Redis/Valkey for caching
+- Elasticsearch for search
+- Database migrations and versioning
+
+Coordinate with SysAdmin for system resources and Developer for schema requirements."
+tmux send-keys -t [session]:[window] Enter
+```
+
 ## Creating a Project Manager
 
 ### When User Says "Create a project manager for [session]"
@@ -868,7 +1386,9 @@ With the simplified structure, the Orchestrator acts as the central hub:
 
 ### Role Communication Matrix
 
-With the simplified role structure, communication is streamlined:
+Communication patterns vary by project type:
+
+#### Standard Development Projects
 
 **Orchestrator** communicates with:
 - Developer (task assignment, guidance)
@@ -890,6 +1410,50 @@ With the simplified role structure, communication is streamlined:
 - Orchestrator (execution status)
 - Tester (test suite updates)
 - Developer (failure details)
+
+#### System Operations Projects
+
+**Orchestrator** communicates with:
+- SysAdmin (system requirements, status)
+- DevOps (deployment coordination)
+- SecurityOps (security requirements)
+- All agents for coordination
+
+**SysAdmin** communicates with:
+- Orchestrator (primary contact)
+- SecurityOps (security implementation)
+- NetworkOps (network configuration)
+- MonitoringOps (monitoring setup)
+- DatabaseOps (database installation)
+
+**DevOps** communicates with:
+- Orchestrator (deployment status)
+- SysAdmin (system requirements)
+- Developer (if present, for app deployment)
+- MonitoringOps (deployment monitoring)
+
+**SecurityOps** communicates with:
+- Orchestrator (security status)
+- SysAdmin (system hardening)
+- NetworkOps (network security)
+- MonitoringOps (security monitoring)
+
+**NetworkOps** communicates with:
+- Orchestrator (network status)
+- SysAdmin (network access)
+- SecurityOps (firewall rules)
+- MonitoringOps (network monitoring)
+
+**MonitoringOps** communicates with:
+- Orchestrator (monitoring status)
+- All technical roles (metric collection)
+- SecurityOps (security alerts)
+
+**DatabaseOps** communicates with:
+- Orchestrator (database status)
+- SysAdmin (system resources)
+- Developer (schema requirements)
+- MonitoringOps (database monitoring)
 
 
 ### Daily Standup (Async)
@@ -967,34 +1531,102 @@ Multi-agent systems use ~15x more tokens than standard Claude usage. Team sizes 
 
 ### When User Says "Work on [new project]"
 
-**Recommended**: Use auto_orchestrate.py for automated setup with git worktrees:
+**Recommended**: Use auto_orchestrate.py for automated setup with dynamic team configuration:
 ```bash
+# Automatic team selection based on project analysis
 ./auto_orchestrate.py --project /any/path/to/project --spec project_spec.md
+
+# Force specific team type
+./auto_orchestrate.py --project /path/to/project --spec spec.md --team-type system_deployment
+
+# Custom role selection
+./auto_orchestrate.py --project /path/to/project --spec spec.md \
+  --roles "orchestrator,sysadmin,devops,securityops,networkops"
 ```
 
-For manual setup:
+### System Operations Workflow Example
+
+For deployment projects like the elliott-wave example:
+
+```bash
+# 1. Create deployment spec
+cat > deployment_spec.md << 'EOF'
+PROJECT: Elliott Wave Service Deployment
+TARGET: 185.177.73.38
+TYPE: System Deployment
+
+REQUIREMENTS:
+- Install Python 3.11+ environment
+- Configure systemd service
+- Set up Redis/Valkey connections
+- Implement security hardening
+- Configure monitoring
+
+DELIVERABLES:
+- Running service on port 8002
+- Systemd auto-restart
+- Health endpoint
+- Monitoring dashboard
+EOF
+
+# 2. Deploy with system operations team
+./auto_orchestrate.py \
+  --project /opt/signalmatrix/slices/elliott-wave \
+  --spec deployment_spec.md \
+  --team-type system_deployment
+
+# This automatically deploys:
+# - Orchestrator: Overall coordination
+# - SysAdmin: System setup, users, permissions
+# - DevOps: Service deployment, systemd
+# - SecurityOps: Hardening, firewall, AppArmor
+# - (Optional) NetworkOps: If reverse proxy needed
+# - (Optional) MonitoringOps: If complex monitoring required
+```
+
+### Team Selection Logic
+
+The system analyzes your project and spec to determine the best team:
 
 #### 1. Project Analysis
-```bash
-# Find project (if in ~/projects/)
-ls -la ~/projects/ | grep -i "[project-name]"
-
-# Or work with any project path
-cd /path/to/project
-
-# Analyze project type
-test -f package.json && echo "Node.js project"
-test -f requirements.txt && echo "Python project"
+```python
+# Automatic detection looks for:
+project_indicators = {
+    'web_app': ['package.json', 'requirements.txt', 'app.py'],
+    'system_deployment': ['*_deployment_*.md', '*.service', 'ansible/'],
+    'infrastructure': ['*.tf', 'terraform/', 'cloudformation.json'],
+    'data_pipeline': ['airflow.cfg', 'etl/', 'pipeline.py']
+}
 ```
 
-#### 2. Propose Team Structure
+#### 2. Dynamic Team Assignment
 
-**Small Project**: Orchestrator + PM + Developer + Researcher
-**Medium Project**: + Second Developer + Tester
-**Large Project**: + DevOps + Code Reviewer
+Based on detection, different teams are deployed:
 
-#### 3. Deploy Team
-Create session and deploy all agents with specific briefings for their roles.
+**Web Application Detected**:
+- Core: Orchestrator, Developer, Tester, TestRunner
+- Optional: DevOps (if Docker found), Researcher
+
+**System Deployment Detected**:
+- Core: Orchestrator, SysAdmin, DevOps, SecurityOps
+- Optional: NetworkOps, MonitoringOps, DatabaseOps
+
+**Infrastructure as Code Detected**:
+- Core: Orchestrator, DevOps, SysAdmin, SecurityOps
+- Optional: NetworkOps, MonitoringOps
+
+#### 3. Manual Override Options
+
+```bash
+# Force team type regardless of detection
+--team-type [web_application|system_deployment|infrastructure_as_code|data_pipeline]
+
+# Add specific roles to detected team
+--add-roles "monitoringops,databaseops"
+
+# Completely custom team
+--roles "orchestrator,developer,sysadmin,devops,securityops"
+```
 
 ## Agent Lifecycle Management
 

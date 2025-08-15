@@ -1,0 +1,229 @@
+# Team Templates for Dynamic Orchestration
+# This file defines team configurations for different project types
+
+# Team Template Structure:
+# - core_roles: Always deployed for this project type
+# - optional_roles: Can be added based on complexity or user request
+# - conditions: When to automatically select this template
+# - description: What this team configuration is best for
+
+templates:
+  # Standard web application development
+  web_application:
+    description: "Standard web application with frontend/backend"
+    core_roles:
+      - orchestrator
+      - developer
+      - tester
+      - testrunner
+    optional_roles:
+      - devops
+      - researcher
+      - documentation_writer
+      - code_reviewer
+    conditions:
+      - file_exists: ["package.json", "requirements.txt", "Gemfile"]
+      - contains_framework: ["react", "vue", "angular", "django", "rails", "express"]
+    
+  # System deployment and infrastructure
+  system_deployment:
+    description: "Server setup, deployment automation, infrastructure"
+    core_roles:
+      - orchestrator
+      - sysadmin
+      - devops
+      - securityops
+    optional_roles:
+      - networkops
+      - monitoringops
+      - databaseops
+      - documentation_writer
+    conditions:
+      - file_pattern: ["*deployment*.md", "*deploy*.yaml", "*.service"]
+      - contains_tools: ["ansible", "terraform", "docker", "kubernetes"]
+      
+  # Infrastructure as Code
+  infrastructure_as_code:
+    description: "Cloud infrastructure automation with IaC tools"
+    core_roles:
+      - orchestrator
+      - devops
+      - sysadmin
+      - securityops
+    optional_roles:
+      - networkops
+      - monitoringops
+      - code_reviewer
+    conditions:
+      - file_exists: ["*.tf", "*.yaml", "cloudformation.json"]
+      - directory_exists: ["terraform", "ansible", "pulumi"]
+      
+  # Data pipeline and ETL
+  data_pipeline:
+    description: "Data processing, ETL, analytics pipelines"
+    core_roles:
+      - orchestrator
+      - developer
+      - databaseops
+      - devops
+    optional_roles:
+      - monitoringops
+      - researcher
+      - documentation_writer
+    conditions:
+      - file_exists: ["*.etl", "airflow.cfg", "luigi.cfg"]
+      - contains_keywords: ["pipeline", "etl", "data_processing"]
+      
+  # Microservices architecture
+  microservices:
+    description: "Distributed microservices system"
+    core_roles:
+      - orchestrator
+      - developer
+      - devops
+      - networkops
+      - tester
+    optional_roles:
+      - monitoringops
+      - securityops
+      - databaseops
+      - code_reviewer
+    conditions:
+      - multiple_services: true
+      - file_exists: ["docker-compose.yml", "kubernetes/*.yaml"]
+      - directory_count: [">5", "services/"]
+      
+  # Security audit and hardening
+  security_audit:
+    description: "Security assessment and system hardening"
+    core_roles:
+      - orchestrator
+      - securityops
+      - sysadmin
+      - networkops
+    optional_roles:
+      - monitoringops
+      - devops
+      - documentation_writer
+    conditions:
+      - spec_contains: ["security", "audit", "compliance", "hardening"]
+      - file_exists: ["security-audit.md", "compliance-checklist.md"]
+      
+  # Database migration and optimization
+  database_project:
+    description: "Database setup, migration, or optimization"
+    core_roles:
+      - orchestrator
+      - databaseops
+      - sysadmin
+      - developer
+    optional_roles:
+      - devops
+      - monitoringops
+      - documentation_writer
+    conditions:
+      - file_exists: ["migrations/", "*.sql", "database.yml"]
+      - spec_contains: ["database", "migration", "replication"]
+
+# Role configurations
+roles:
+  orchestrator:
+    always_required: true
+    works_from_dual_directory: true
+    max_one_per_team: true
+    
+  developer:
+    languages: ["python", "javascript", "typescript", "go", "rust", "java"]
+    can_have_multiple: true
+    specializations: ["frontend", "backend", "fullstack"]
+    
+  sysadmin:
+    requires_sudo: true
+    platforms: ["linux", "unix", "windows"]
+    tools: ["bash", "ansible", "puppet", "chef"]
+    
+  devops:
+    tools: ["docker", "kubernetes", "terraform", "jenkins", "gitlab-ci"]
+    cloud_platforms: ["aws", "gcp", "azure", "digitalocean"]
+    
+  securityops:
+    tools: ["nmap", "metasploit", "burpsuite", "wireshark"]
+    compliance: ["pci", "hipaa", "gdpr", "sox"]
+    requires: ["sysadmin"]
+    
+  networkops:
+    tools: ["nginx", "haproxy", "iptables", "tcpdump"]
+    protocols: ["tcp/ip", "http/https", "dns", "vpn"]
+    requires: ["sysadmin"]
+    
+  monitoringops:
+    stacks: ["prometheus-grafana", "elk", "datadog", "newrelic"]
+    requires: ["sysadmin"]
+    
+  databaseops:
+    databases: ["postgresql", "mysql", "mongodb", "redis", "elasticsearch"]
+    requires: ["sysadmin"]
+    
+  tester:
+    frameworks: ["pytest", "jest", "mocha", "rspec", "junit"]
+    types: ["unit", "integration", "e2e", "performance"]
+    
+  testrunner:
+    ci_platforms: ["jenkins", "github-actions", "gitlab-ci", "circleci"]
+    requires: ["tester"]
+
+# Team size recommendations based on project complexity
+team_sizing:
+  small:
+    max_agents: 4
+    token_multiplier: 10
+    description: "Simple projects, single service"
+    
+  medium:
+    max_agents: 6
+    token_multiplier: 15
+    description: "Multi-component projects"
+    
+  large:
+    max_agents: 8
+    token_multiplier: 20
+    description: "Complex systems, multiple services"
+    
+  enterprise:
+    max_agents: 12
+    token_multiplier: 25
+    description: "Large-scale distributed systems"
+
+# Role dependencies
+dependencies:
+  monitoringops: ["sysadmin"]
+  securityops: ["sysadmin"]
+  networkops: ["sysadmin"]
+  databaseops: ["sysadmin"]
+  testrunner: ["tester"]
+
+# Conditional role deployment
+conditional_roles:
+  - role: databaseops
+    deploy_when:
+      - has_database_files: true
+      - multiple_databases: true
+      - requires_migration: true
+      
+  - role: securityops
+    deploy_when:
+      - production_environment: true
+      - handles_pii: true
+      - requires_compliance: true
+      
+  - role: monitoringops
+    deploy_when:
+      - service_count: ">3"
+      - requires_sla: true
+      - production_environment: true
+      
+  - role: code_reviewer
+    deploy_when:
+      - team_size: ">5"
+      - critical_system: true
+      - security_sensitive: true
