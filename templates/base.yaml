@@ -1,0 +1,10 @@
+# Base template - inherited by all project types
+roles:
+  - orchestrator
+  - project_manager
+
+# Base configuration that all projects inherit
+config:
+  check_in_interval: 45  # minutes
+  git_sync_interval: 15  # minutes
+  max_agents: 5  # default for most plans

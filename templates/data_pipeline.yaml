@@ -1,0 +1,22 @@
+# Data pipeline project template
+inherits: base
+roles:
+  - developer
+  - databaseops
+  - devops
+
+# Optional roles based on pipeline complexity
+optional_roles:
+  - monitoringops  # for pipeline monitoring
+  - researcher     # for optimization strategies
+
+# Project type indicators
+indicators:
+  - "airflow.cfg"
+  - "luigi.cfg"
+  - "etl/"
+  - "pipeline/"
+  - "data/"
+  - "*.parquet"
+  - "*.csv"
+  - "dbt_project.yml"

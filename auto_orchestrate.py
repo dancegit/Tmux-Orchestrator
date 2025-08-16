@@ -41,6 +41,9 @@ from session_state import SessionStateManager, create_initial_session_state, Ses
 # Import concurrent orchestration support
 from concurrent_orchestration import ConcurrentOrchestrationManager
 
+# Import dynamic team composition
+from dynamic_team import DynamicTeamComposer
+
 console = Console()
 
 # Pydantic models for structured data
@@ -99,6 +102,8 @@ class AutoOrchestrator:
         self.worktree_paths: Dict[str, Path] = {}
         self.unique_session_name: Optional[str] = None
         self.unique_registry_dir: Optional[Path] = None
+        self.team_type: Optional[str] = None  # Force specific team type
+        self.dynamic_team_composer = DynamicTeamComposer()
         
     def ensure_setup(self):
         """Ensure Tmux Orchestrator is properly set up"""
@@ -444,6 +449,31 @@ Generate a JSON implementation plan with this EXACT structure:
       "responsibilities": ["Write technical docs", "Update README", "Create API documentation"],
       "check_in_interval": 60,  # Still longer as docs are updated less frequently
       "initial_commands": ["cd {self.project_path}", "ls -la *.md"]
+    }},
+    "sysadmin": {{
+      "responsibilities": ["System setup", "User management", "Service configuration", "Package management", "System hardening"],
+      "check_in_interval": 30,
+      "initial_commands": ["cd {self.project_path}", "sudo -n true && echo 'sudo available' || echo 'need sudo password'", "uname -a", "lsb_release -a 2>/dev/null || cat /etc/os-release"]
+    }},
+    "securityops": {{
+      "responsibilities": ["Security hardening", "Firewall configuration", "Access control", "SSL/TLS setup", "Security monitoring"],
+      "check_in_interval": 30,
+      "initial_commands": ["cd {self.project_path}", "sudo iptables -L -n 2>/dev/null || echo 'checking firewall status'", "sestatus 2>/dev/null || echo 'SELinux not available'"]
+    }},
+    "networkops": {{
+      "responsibilities": ["Network configuration", "Load balancing", "Reverse proxy setup", "DNS management", "Performance optimization"],
+      "check_in_interval": 30,
+      "initial_commands": ["cd {self.project_path}", "ip addr show", "netstat -tlnp 2>/dev/null || ss -tlnp"]
+    }},
+    "monitoringops": {{
+      "responsibilities": ["Monitoring stack setup", "Metrics collection", "Alert configuration", "Dashboard creation", "Log aggregation"],
+      "check_in_interval": 20,
+      "initial_commands": ["cd {self.project_path}", "mkdir -p monitoring/dashboards monitoring/alerts", "echo 'Setting up monitoring infrastructure'"]
+    }},
+    "databaseops": {{
+      "responsibilities": ["Database setup", "Performance tuning", "Replication", "Backup strategies", "Schema management"],
+      "check_in_interval": 30,
+      "initial_commands": ["cd {self.project_path}", "echo 'Checking database requirements'", "which psql mysql mongod redis-server 2>/dev/null || echo 'No databases installed yet'"]
     }}
   }},
   "git_workflow": {{
@@ -653,59 +683,105 @@ CLAUDE_EOF
         return plan_limits.get(self.plan_type, 5)
     
     def get_roles_for_project_size(self, spec: ImplementationSpec) -> List[Tuple[str, str]]:
-        """Determine which roles to deploy based on project size
+        """Determine which roles to deploy using dynamic team composition
         
-        CORE ROLE DEPLOYMENT:
-        - Essential roles required for all project sizes
-        - 5 agents total: Orchestrator, Project Manager, Developer, Tester, TestRunner
-        - PM is mandatory for git integration workflow coordination
+        DYNAMIC TEAM DEPLOYMENT:
+        - Analyzes project type and automatically selects appropriate roles
+        - Supports custom role selection via --roles
+        - Enforces plan constraints for token management
+        - Can be overridden with --team-type
         """
-        # Always deploy the same core roles regardless of size
-        core_roles = [
-            ('Orchestrator', 'orchestrator'),
-            ('Project-Manager', 'project_manager'),
-            ('Developer', 'developer'),
-            ('Tester', 'tester'),
-            ('TestRunner', 'testrunner')
-        ]
-        
-        # Add any additional requested roles
+        # Role mapping for display names
         role_mapping = {
+            'orchestrator': ('Orchestrator', 'orchestrator'),
             'project_manager': ('Project-Manager', 'project_manager'),
-            'pm': ('Project-Manager', 'project_manager'),
-            'researcher': ('Researcher', 'researcher'),
-            'documentation_writer': ('Documentation', 'documentation_writer'),
-            'documentation': ('Documentation', 'documentation_writer'),
-            'docs': ('Documentation', 'documentation_writer'),
-            'devops': ('DevOps', 'devops'),
-            'code_reviewer': ('Code-Reviewer', 'code_reviewer'),
+            'developer': ('Developer', 'developer'),
             'tester': ('Tester', 'tester'),
             'testrunner': ('TestRunner', 'testrunner'),
-            'logtracker': ('LogTracker', 'logtracker')
+            'researcher': ('Researcher', 'researcher'),
+            'documentation_writer': ('Documentation', 'documentation_writer'),
+            'devops': ('DevOps', 'devops'),
+            'code_reviewer': ('Code-Reviewer', 'code_reviewer'),
+            'logtracker': ('LogTracker', 'logtracker'),
+            # System operations roles
+            'sysadmin': ('SysAdmin', 'sysadmin'),
+            'securityops': ('SecurityOps', 'securityops'),
+            'networkops': ('NetworkOps', 'networkops'),
+            'monitoringops': ('MonitoringOps', 'monitoringops'),
+            'databaseops': ('DatabaseOps', 'databaseops')
         }
         
-        for role in self.additional_roles:
-            if role.lower() in role_mapping:
-                core_roles.append(role_mapping[role.lower()])
+        # If custom roles are specified via --roles, use them
+        if self.additional_roles:
+            console.print(f"\n[bold]Using custom role selection[/bold]")
+            selected_roles = []
+            
+            # Always include orchestrator if not explicitly added
+            if 'orchestrator' not in [r.lower() for r in self.additional_roles]:
+                selected_roles.append(role_mapping['orchestrator'])
+            
+            # Add requested roles
+            for role in self.additional_roles:
+                role_lower = role.lower()
+                if role_lower in role_mapping:
+                    if role_mapping[role_lower] not in selected_roles:
+                        selected_roles.append(role_mapping[role_lower])
+                else:
+                    console.print(f"[yellow]Warning: Unknown role '{role}' - skipping[/yellow]")
+        else:
+            # Use dynamic team composition
+            console.print(f"\n[bold]Analyzing project for optimal team composition...[/bold]")
+            
+            # Get team recommendation
+            team_recommendation = self.dynamic_team_composer.recommend_team_size(
+                str(self.project_path),
+                subscription_plan=self.plan_type
+            )
+            
+            # Compose the team
+            team_comp = self.dynamic_team_composer.compose_team(
+                str(self.project_path),
+                force_type=self.team_type,
+                include_optional=False  # Don't include optional by default
+            )
+            
+            # Display analysis results
+            console.print(f"Project Type: [cyan]{team_comp['project_type']}[/cyan]")
+            console.print(f"Detection Confidence: [cyan]{team_comp['confidence']:.1%}[/cyan]")
+            console.print(f"Complexity Score: [cyan]{team_recommendation['complexity']['complexity_score']:.1f}[/cyan]")
+            console.print(f"Reasoning: {team_comp['reasoning']}")
+            
+            # Get the recommended roles
+            roles_to_use = team_recommendation['selected_roles']
+            
+            # Convert to display format
+            selected_roles = []
+            for role in roles_to_use:
+                if role in role_mapping:
+                    selected_roles.append(role_mapping[role])
         
         # Enforce plan constraints
         max_agents = self.get_plan_constraints()
-        if len(core_roles) > max_agents:
-            console.print(f"\n[yellow]⚠️  Warning: {len(core_roles)} agents requested but {self.plan_type} plan recommends max {max_agents}[/yellow]")
+        if len(selected_roles) > max_agents:
+            console.print(f"\n[yellow]⚠️  Warning: {len(selected_roles)} agents recommended but {self.plan_type} plan supports max {max_agents}[/yellow]")
             console.print(f"[yellow]Team will be limited to {max_agents} agents to prevent token exhaustion[/yellow]")
             console.print(f"[yellow]Multi-agent systems use ~15x more tokens than standard usage[/yellow]\n")
             
-            # Prioritize roles based on importance
-            priority_order = ['orchestrator', 'developer', 'researcher', 'project_manager', 'tester', 'testrunner', 'logtracker', 'devops', 'code_reviewer', 'documentation_writer']
+            # Prioritize roles based on importance and project type
+            if self.team_type == 'system_deployment' or (hasattr(team_comp, 'project_type') and team_comp['project_type'] == 'system_deployment'):
+                priority_order = ['orchestrator', 'sysadmin', 'devops', 'securityops', 'project_manager', 'networkops', 'monitoringops', 'databaseops']
+            else:
+                priority_order = ['orchestrator', 'developer', 'project_manager', 'tester', 'testrunner', 'researcher', 'devops', 'logtracker', 'code_reviewer', 'documentation_writer']
             
             # Sort roles by priority
-            core_roles.sort(key=lambda x: priority_order.index(x[1]) if x[1] in priority_order else 999)
+            selected_roles.sort(key=lambda x: priority_order.index(x[1]) if x[1] in priority_order else 999)
             
             # Trim to max agents
-            core_roles = core_roles[:max_agents]
-            console.print(f"[yellow]Selected roles: {', '.join([r[0] for r in core_roles])}[/yellow]")
+            selected_roles = selected_roles[:max_agents]
         
-        return core_roles
+        console.print(f"\n[green]Selected roles ({len(selected_roles)}): {', '.join([r[0] for r in selected_roles])}[/green]")
+        
+        return selected_roles
     
     def check_existing_worktrees(self, project_name: str, roles_to_deploy: List[Tuple[str, str]]) -> List[str]:
         """Check if worktrees already exist for this project"""
@@ -2459,6 +2535,206 @@ Coordinate with:
 - PM on documentation priorities
 - Tester on testing procedures"""
 
+        elif role == 'sysadmin':
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the System Administrator for {spec.project.name}.
+{mcp_tools_info}
+
+Your responsibilities:
+- System setup and configuration
+- User and permission management
+- Package installation and updates
+- Service management (systemd/init)
+- System security hardening
+- Resource monitoring and optimization
+- Backup and recovery procedures
+
+{communication_channels}
+
+**System Operations Focus**:
+- Server provisioning and configuration
+- System user and group management
+- File permissions and ownership
+- System service configuration
+- Package management (apt/yum)
+- System monitoring and logging
+- Disk and storage management
+
+Git Worktree Information:
+- Your worktree path: {worktree_paths.get(role, 'N/A')}
+- {self.get_worktree_branch_info(worktree_paths.get(role, Path('.'))) if worktree_paths else 'Branch status unknown'}
+
+Start by:
+1. Reviewing deployment specifications
+2. Checking system prerequisites
+3. Setting up base system configuration
+4. Coordinating with SecurityOps on hardening
+
+{self.create_context_management_instructions(role)}"""
+
+        elif role == 'securityops':
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Security Operations specialist for {spec.project.name}.
+{mcp_tools_info}
+
+Your responsibilities:
+- System security hardening
+- Firewall configuration
+- Access control implementation
+- SSL/TLS certificate management
+- Security monitoring and auditing
+- Compliance enforcement
+- Incident response planning
+
+{communication_channels}
+
+**Security Focus**:
+- AppArmor/SELinux policy implementation
+- Firewall rules (iptables/ufw)
+- SSH hardening and key management
+- Intrusion detection (fail2ban)
+- Security scanning and vulnerability assessment
+- Secrets management
+- Audit logging
+
+Git Worktree Information:
+- Your worktree path: {worktree_paths.get(role, 'N/A')}
+- {self.get_worktree_branch_info(worktree_paths.get(role, Path('.'))) if worktree_paths else 'Branch status unknown'}
+
+Start by:
+1. Security assessment of current setup
+2. Implementing baseline security policies
+3. Configuring firewall rules
+4. Setting up security monitoring
+
+Coordinate with:
+- SysAdmin for system access
+- NetworkOps for network security
+- MonitoringOps for security alerts
+
+{self.create_context_management_instructions(role)}"""
+
+        elif role == 'networkops':
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Network Operations specialist for {spec.project.name}.
+{mcp_tools_info}
+
+Your responsibilities:
+- Network configuration and routing
+- Load balancer setup
+- Reverse proxy configuration (Nginx/HAProxy)
+- DNS configuration
+- Port management
+- Network performance optimization
+- CDN and edge configuration
+
+{communication_channels}
+
+**Network Operations Focus**:
+- Network interface configuration
+- Routing table management
+- NAT and port forwarding
+- Load balancing strategies
+- SSL termination
+- Network segmentation (VLANs)
+- Traffic monitoring and analysis
+
+Git Worktree Information:
+- Your worktree path: {worktree_paths.get(role, 'N/A')}
+- {self.get_worktree_branch_info(worktree_paths.get(role, Path('.'))) if worktree_paths else 'Branch status unknown'}
+
+Start by:
+1. Analyzing network requirements
+2. Configuring network interfaces
+3. Setting up reverse proxy/load balancer
+4. Implementing network security policies
+
+Coordinate with:
+- SecurityOps for firewall rules
+- SysAdmin for system network access
+- MonitoringOps for network monitoring
+
+{self.create_context_management_instructions(role)}"""
+
+        elif role == 'monitoringops':
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Monitoring Operations specialist for {spec.project.name}.
+{mcp_tools_info}
+
+Your responsibilities:
+- Monitoring stack setup (Prometheus/Grafana)
+- Metrics collection and aggregation
+- Alert rule configuration
+- Dashboard creation
+- Log aggregation (ELK/Loki)
+- Performance monitoring
+- Incident response automation
+
+{communication_channels}
+
+**Monitoring Focus**:
+- Service health monitoring
+- Resource utilization tracking
+- Application performance metrics
+- Log analysis and correlation
+- Alert threshold tuning
+- SLI/SLO implementation
+- Runbook creation
+
+Git Worktree Information:
+- Your worktree path: {worktree_paths.get(role, 'N/A')}
+- {self.get_worktree_branch_info(worktree_paths.get(role, Path('.'))) if worktree_paths else 'Branch status unknown'}
+
+Start by:
+1. Setting up monitoring infrastructure
+2. Configuring metric collection
+3. Creating essential dashboards
+4. Implementing critical alerts
+
+Coordinate with:
+- All technical roles for metric requirements
+- SecurityOps for security monitoring
+- SysAdmin for system metrics
+
+{self.create_context_management_instructions(role)}"""
+
+        elif role == 'databaseops':
+            return f"""{mandatory_reading}{context_note}{team_locations}You are the Database Operations specialist for {spec.project.name}.
+{mcp_tools_info}
+
+Your responsibilities:
+- Database server installation and configuration
+- Performance optimization
+- Replication and clustering setup
+- Backup and recovery strategies
+- Schema migration management
+- Database security
+- Monitoring and diagnostics
+
+{communication_channels}
+
+**Database Operations Focus**:
+- Database engine selection and setup
+- Query optimization
+- Index management
+- Replication configuration
+- Backup automation
+- Disaster recovery planning
+- Database user management
+
+Git Worktree Information:
+- Your worktree path: {worktree_paths.get(role, 'N/A')}
+- {self.get_worktree_branch_info(worktree_paths.get(role, Path('.'))) if worktree_paths else 'Branch status unknown'}
+
+Start by:
+1. Analyzing database requirements
+2. Installing and configuring database servers
+3. Setting up backup procedures
+4. Implementing security policies
+
+Coordinate with:
+- Developer for schema requirements
+- SysAdmin for system resources
+- MonitoringOps for database monitoring
+
+{self.create_context_management_instructions(role)}"""
+
         else:
             # Fallback for any undefined roles
             return f"""{mandatory_reading}{context_note}{team_locations}You are a team member for {spec.project.name}.
@@ -3500,6 +3776,8 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='Path to the specification markdown file (required unless using --resume)')
 @click.option('--size', type=click.Choice(['auto', 'small', 'medium', 'large']), 
               default='auto', help='Project size (auto-detect by default)')
+@click.option('--team-type', type=click.Choice(['auto', 'code_project', 'system_deployment', 'data_pipeline', 'infrastructure_as_code']),
+              default='auto', help='Force specific team type (auto-detect by default)')
 @click.option('--roles', multiple=True, 
               help='Additional roles to include (e.g., --roles researcher --roles documentation_writer)')
 @click.option('--force', '-f', is_flag=True,
@@ -3514,7 +3792,7 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='When resuming, re-brief all agents with context')
 @click.option('--list', '-l', is_flag=True,
               help='List all active orchestrations')
-def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: str, 
+def main(project: str, spec: str, size: str, team_type: str, roles: tuple, force: bool, plan: str, 
          resume: bool, status_only: bool, rebrief_all: bool, list: bool):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
@@ -3577,6 +3855,7 @@ def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: st
         # Create orchestrator with dummy spec path for now
         orchestrator = AutoOrchestrator(project, spec if spec else "dummy.md")
         orchestrator.rebrief_all = rebrief_all
+        orchestrator.team_type = team_type if team_type != 'auto' else None
         
         # Try to load session state - first by exact name
         session_state = orchestrator.session_state_manager.load_session_state(project_name)
@@ -3640,6 +3919,7 @@ def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: st
         
     orchestrator = AutoOrchestrator(project, spec)
     orchestrator.manual_size = size if size != 'auto' else None
+    orchestrator.team_type = team_type if team_type != 'auto' else None
     orchestrator.additional_roles = list(roles) if roles else []
     orchestrator.force = force
     orchestrator.plan_type = plan if plan != 'auto' else 'max20'  # Default to max20
