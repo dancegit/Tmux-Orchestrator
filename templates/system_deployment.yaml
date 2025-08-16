@@ -1,0 +1,21 @@
+# System deployment project template
+inherits: base
+roles:
+  - sysadmin
+  - devops
+  - securityops
+
+# Optional roles based on deployment complexity
+optional_roles:
+  - networkops     # if complex networking required
+  - monitoringops  # if monitoring stack needed
+  - databaseops    # if database deployment detected
+
+# Project type indicators
+indicators:
+  - "*_deployment_*.md"
+  - "*.service"
+  - "ansible/"
+  - "terraform/"
+  - "deployment/"
+  - "infrastructure/"

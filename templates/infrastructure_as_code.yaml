@@ -1,0 +1,21 @@
+# Infrastructure as Code project template
+inherits: base
+roles:
+  - devops
+  - sysadmin
+  - securityops
+
+# Optional roles based on infrastructure complexity
+optional_roles:
+  - networkops     # for complex network configurations
+  - monitoringops  # for infrastructure monitoring
+
+# Project type indicators
+indicators:
+  - "*.tf"
+  - "terraform/"
+  - "*.tfvars"
+  - "cloudformation.json"
+  - "cloudformation.yaml"
+  - "pulumi/"
+  - "crossplane/"

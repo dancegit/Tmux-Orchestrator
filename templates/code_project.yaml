@@ -1,0 +1,22 @@
+# Code/Application project template
+inherits: base
+roles:
+  - developer
+  - tester
+  - testrunner
+
+# Optional roles based on project characteristics
+optional_roles:
+  - devops      # if Docker/Kubernetes files detected
+  - researcher  # if complex architecture detected
+  - documentation_writer  # if docs/ directory exists
+
+# Project type indicators
+indicators:
+  - "package.json"
+  - "requirements.txt"
+  - "Gemfile"
+  - "go.mod"
+  - "Cargo.toml"
+  - "pom.xml"
+  - "build.gradle"

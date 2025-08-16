@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/home/clauderun/Tmux-Orchestrator/logs/.5975869273a6f4c660635bd40a67674c49e88986-audit.json",
+    "files": [
+        {
+            "date": 1755355895364,
+            "name": "/home/clauderun/Tmux-Orchestrator/logs/mcp-puppeteer-2025-08-16.log",
+            "hash": "c906decc49c712db82ec634bf9a44d96c288e783172ddd66583febfa7c1b1a92"
+        }
+    ],
+    "hashType": "sha256"
+}
