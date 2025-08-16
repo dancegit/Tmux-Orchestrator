@@ -38,6 +38,9 @@ from pydantic import BaseModel, Field
 # Import session state management
 from session_state import SessionStateManager, create_initial_session_state, SessionState, AgentState
 
+# Import concurrent orchestration support
+from concurrent_orchestration import ConcurrentOrchestrationManager
+
 console = Console()
 
 # Pydantic models for structured data
@@ -92,7 +95,10 @@ class AutoOrchestrator:
         self.force: bool = False
         self.plan_type: str = 'max20'  # Default to Max 20x plan
         self.session_state_manager = SessionStateManager(self.tmux_orchestrator_path)
+        self.concurrent_manager = ConcurrentOrchestrationManager(self.tmux_orchestrator_path)
         self.worktree_paths: Dict[str, Path] = {}
+        self.unique_session_name: Optional[str] = None
+        self.unique_registry_dir: Optional[Path] = None
         
     def ensure_setup(self):
         """Ensure Tmux Orchestrator is properly set up"""
@@ -703,7 +709,11 @@ CLAUDE_EOF
     
     def check_existing_worktrees(self, project_name: str, roles_to_deploy: List[Tuple[str, str]]) -> List[str]:
         """Check if worktrees already exist for this project"""
-        worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
+        # Use unique registry directory if available
+        if self.unique_registry_dir:
+            worktrees_base = self.unique_registry_dir / 'worktrees'
+        else:
+            worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
         existing_worktrees = []
         
         if worktrees_base.exists():
@@ -986,8 +996,12 @@ Please provide a brief status update on your current work and any blockers."""
         )
         
         # Create worktrees directory
-        project_name = self.sanitize_project_name(spec.project.name)
-        worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
+        # Use unique registry directory if available
+        if self.unique_registry_dir:
+            worktrees_base = self.unique_registry_dir / 'worktrees'
+        else:
+            project_name = self.sanitize_project_name(spec.project.name)
+            worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
         worktrees_base.mkdir(parents=True, exist_ok=True)
         
         # Get current branch from project
@@ -1231,7 +1245,11 @@ Please provide a brief status update on your current work and any blockers."""
     
     def cleanup_worktrees(self, project_name: str):
         """Clean up worktrees and any agent-specific branches"""
-        worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
+        # Use unique registry directory if available
+        if self.unique_registry_dir:
+            worktrees_base = self.unique_registry_dir / 'worktrees'
+        else:
+            worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
         if worktrees_base.exists():
             console.print("\n[yellow]Cleaning up worktrees...[/yellow]")
             # Remove all worktrees
@@ -1339,7 +1357,17 @@ This file is automatically read by Claude Code when working in this directory.
     
     def setup_tmux_session(self, spec: ImplementationSpec):
         """Set up the tmux session with roles based on project size using git worktrees"""
-        session_name = self.sanitize_session_name(spec.project.name) + "-impl"
+        # Use concurrent orchestration manager for unique naming
+        if not self.unique_session_name:
+            try:
+                self.unique_session_name, self.unique_registry_dir = self.concurrent_manager.start_orchestration(
+                    spec.project.name, timeout=30
+                )
+            except Exception as e:
+                console.print(f"[red]Error starting orchestration: {e}[/red]")
+                raise
+        
+        session_name = self.unique_session_name
         
         # Determine which roles to deploy
         roles_to_deploy = self.get_roles_for_project_size(spec)
@@ -3343,7 +3371,18 @@ Remember: Context management is automatic - focus on creating good checkpoints t
         console.print("\n[cyan]Step 4:[/cyan] Setting up tmux orchestration...")
         
         # Check for existing session and worktrees
-        session_name = self.sanitize_session_name(self.implementation_spec.project.name) + "-impl"
+        # First, start the orchestration to get unique names
+        try:
+            self.unique_session_name, self.unique_registry_dir = self.concurrent_manager.start_orchestration(
+                self.implementation_spec.project.name, timeout=30
+            )
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            console.print("[yellow]Another orchestration may be starting for this project.[/yellow]")
+            console.print("[yellow]Use --list to see active orchestrations.[/yellow]")
+            sys.exit(1)
+            
+        session_name = self.unique_session_name
         project_name = self.sanitize_project_name(self.implementation_spec.project.name)
         roles_to_deploy = self.get_roles_for_project_size(self.implementation_spec)
         
@@ -3414,7 +3453,10 @@ Remember: Context management is automatic - focus on creating good checkpoints t
         self.setup_tmux_session(self.implementation_spec)
         
         # Save implementation spec for reference
-        registry_dir = self.tmux_orchestrator_path / 'registry' / 'projects' / self.sanitize_project_name(self.implementation_spec.project.name)
+        # Use the unique registry directory from concurrent manager
+        registry_dir = self.unique_registry_dir
+        if not registry_dir:
+            registry_dir = self.tmux_orchestrator_path / 'registry' / 'projects' / self.sanitize_project_name(self.implementation_spec.project.name)
         registry_dir.mkdir(parents=True, exist_ok=True)
         
         spec_file = registry_dir / 'implementation_spec.json'
@@ -3424,7 +3466,7 @@ Remember: Context management is automatic - focus on creating good checkpoints t
         console.print(f"Implementation spec saved to: {spec_file}")
         
         # Save session state for resume capability
-        session_name = self.sanitize_session_name(self.implementation_spec.project.name) + "-impl"
+        session_name = self.unique_session_name or self.sanitize_session_name(self.implementation_spec.project.name) + "-impl"
         roles_deployed = self.get_roles_for_project_size(self.implementation_spec)
         
         # Get current branch as parent branch
@@ -3470,8 +3512,10 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='Check status of existing session without making changes')
 @click.option('--rebrief-all', is_flag=True,
               help='When resuming, re-brief all agents with context')
+@click.option('--list', '-l', is_flag=True,
+              help='List all active orchestrations')
 def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: str, 
-         resume: bool, status_only: bool, rebrief_all: bool):
+         resume: bool, status_only: bool, rebrief_all: bool, list: bool):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
@@ -3488,6 +3532,42 @@ def main(project: str, spec: str, size: str, roles: tuple, force: bool, plan: st
     You can manually specify project size with --size or add specific roles
     with --roles (e.g., --roles documentation_writer)
     """
+    # Handle list option first
+    if list:
+        # Create a temporary manager to list orchestrations
+        tmux_orchestrator_path = Path(__file__).parent
+        manager = ConcurrentOrchestrationManager(tmux_orchestrator_path)
+        orchestrations = manager.list_active_orchestrations()
+        
+        if orchestrations:
+            console.print("\n[cyan]Active Orchestrations:[/cyan]")
+            table = Table(show_header=True)
+            table.add_column("Project", style="bright_blue")
+            table.add_column("Session", style="green")
+            table.add_column("Status", style="yellow")
+            table.add_column("Created", style="magenta")
+            table.add_column("Agents", style="cyan")
+            
+            for orch in orchestrations:
+                status = "[green]ACTIVE[/green]" if orch.get('active') else "[red]INACTIVE[/red]"
+                created = orch['created_at'].split('T')[0]  # Just date
+                agents = str(orch.get('agents', 'N/A'))
+                
+                table.add_row(
+                    orch['project_name'],
+                    orch['session_name'],
+                    status,
+                    created,
+                    agents
+                )
+                
+            console.print(table)
+            console.print("\n[cyan]To attach to a session:[/cyan] tmux attach -t <session-name>")
+        else:
+            console.print("[yellow]No active orchestrations found[/yellow]")
+        
+        return
+    
     # Handle resume operation
     if resume:
         # For resume, we need to detect the project from the path
