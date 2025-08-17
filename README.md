@@ -55,10 +55,10 @@ The Tmux Orchestrator uses a streamlined architecture with focused roles:
 - tmux installed on your system
 - Claude Code (`claude` command available) - NOT the old Claude CLI
 - Python 3.11+ (for utilities)
-- UV (for Python script management) - Recommended for dependencies
+- UV (for Python script management) - **Required for all Python scripts**
 - Basic familiarity with tmux commands
 
-**Note**: All Python scripts use UV shebangs for dependency management. Install UV with:
+**Important**: All Python scripts use UV shebangs for zero-dependency execution. Install UV with:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
@@ -67,7 +67,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/Tmux-Orchestrator.git
+   git clone https://github.com/dancegit/Tmux-Orchestrator.git
    cd Tmux-Orchestrator
    ```
 
@@ -90,9 +90,59 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
    export PROJECTS_DIR="$HOME/your-projects-folder"
    ```
 
+## 🚀 Main Scripts Overview
+
+### Core Orchestration Scripts
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| **`auto_orchestrate.py`** | Automated setup from specifications | Starting new projects with a spec file |
+| **`send-claude-message.sh`** | Send messages to Claude agents | Communicating with any agent |
+| **`schedule_with_note.sh`** | Schedule agent check-ins | Setting up recurring tasks |
+| **`monitoring_dashboard.py`** | Real-time web dashboard | Monitoring system health |
+
+### Management & Monitoring Scripts
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| **`claude_control.py`** | Agent status monitoring | Check what agents are doing |
+| **`sync_dashboard.py`** | Sync status dashboard | Monitor git synchronization |
+| **`multi_project_monitor.py`** | Multi-project overview | Managing multiple orchestrations |
+| **`performance_tuner.py`** | Performance optimization | System tuning and cleanup |
+
+### Advanced Features
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| **`dynamic_team.py`** | Dynamic team composition | Automatic role selection |
+| **`ai_team_refiner.py`** | AI-powered team optimization | Refining team composition |
+| **`concurrent_orchestration.py`** | Concurrent project management | Running multiple projects |
+| **`scheduler.py`** | Task scheduling daemon | Background task management |
+
+### Testing & Validation
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| **`test_integration.py`** | Integration testing | Validating system components |
+| **`chaos_tester.py`** | Resilience testing | Testing failure recovery |
+| **`load_tester.py`** | Load testing | Capacity validation |
+
 ## 🎯 Quick Start
 
-### Option 1: Basic Setup (Single Project)
+### Option 1: Automated Setup (Recommended) 🌟
+
+```bash
+# One command to go from spec to running AI team!
+./auto_orchestrate.py --project /path/to/project --spec /path/to/spec.md
+
+# Resume an interrupted orchestration
+./auto_orchestrate.py --project /path/to/project --resume
+
+# With custom team size based on your Claude plan
+./auto_orchestrate.py --project /path/to/project --spec spec.md --plan max5
+```
+
+### Option 2: Basic Setup (Single Project)
 
 ```bash
 # 1. Create a project spec
@@ -126,37 +176,6 @@ Schedule check-ins every 30 minutes."
 ./schedule_with_note.sh 30 "Check Developer progress on auth system"
 ```
 
-### Option 2: Automated Setup with Auto-Orchestrate
-
-Use the new `auto_orchestrate.py` script to automatically analyze a specification and set up a complete orchestration environment:
-
-```bash
-# Clone and run - no setup needed!
-git clone https://github.com/yourusername/Tmux-Orchestrator.git
-cd Tmux-Orchestrator
-
-# Automatic setup from specification
-./auto_orchestrate.py \
-  --project /path/to/your/project \
-  --spec /path/to/your/spec.md
-
-# Example with SignalMatrix
-./auto_orchestrate.py \
-  --project /home/per/gitrepos/SignalMatrix_tag_checkouts_for_main \
-  --spec /home/per/gitrepos/SignalMatrix_tag_checkouts_for_main/project_management/planning/dashboard_comprehensive_testing_spec.md
-```
-
-This will:
-1. **Auto-setup** the Tmux Orchestrator environment (first time only)
-2. **Context-prime** Claude to understand your project structure
-3. **Analyze** your specification to create an implementation plan
-4. **Show** the plan for your approval
-5. **Create** tmux sessions with 5 specialized AI agents (including Project Manager)
-6. **Brief** each agent with context-aware responsibilities
-7. **Schedule** automatic check-ins for continuous progress
-
-The script handles all setup automatically - no configuration needed!
-
 ### Option 3: Manual Full Orchestrator Setup
 
 ```bash
@@ -174,36 +193,39 @@ Schedule yourself to check in every hour."
 ## ✨ Key Features
 
 ### 🚀 Auto-Orchestrate: Spec to Implementation
-The new `auto_orchestrate.py` script provides fully automated setup:
+The `auto_orchestrate.py` script provides fully automated setup:
 - **Zero Configuration**: Clone and run - automatic setup on first use
 - **Context-Aware**: Uses `/context-prime` to understand your project before planning
 - **Spec Analysis**: Claude analyzes your markdown specifications intelligently
-- **Phase Planning**: Generates realistic implementation plans with time estimates
-- **Core Agent Team**: Orchestrator, Project Manager, Developer, Tester, and TestRunner for all projects
-- **One Command**: From fresh clone to running AI team in under a minute
-- **Git Workflow**: Enforces best practices with regular commits and PRs
+- **Dynamic Team Composition**: Automatically selects appropriate roles based on project type
+- **Git Worktree Isolation**: Each agent works in isolated git worktree to prevent conflicts
+- **Resume Capability**: Intelligently resume interrupted orchestrations
 - **Credit Management**: Automatic handling of Claude Code usage limits with pause/resume
 
-### 🔄 Self-Scheduling Agents
-Agents can schedule their own check-ins using:
-```bash
-./schedule_with_note.sh 30 "Continue dashboard implementation"
-```
+### 🎯 Dynamic Team System
+- **Automatic Role Selection**: Detects project type and deploys appropriate specialists
+- **System Operations Roles**: SysAdmin, SecurityOps, NetworkOps for deployments
+- **AI-Powered Refinement**: Optional AI analysis to optimize team composition
+- **Flexible Sizing**: Adapts team size to your Claude subscription plan
 
-### 👥 Multi-Agent Coordination
-- Project managers communicate with engineers
-- Orchestrator monitors all project managers
-- Cross-project knowledge sharing
+### 📊 Advanced Monitoring & Testing
+- **Real-Time Dashboard**: Web-based monitoring interface at `monitoring_dashboard.py`
+- **Performance Tuning**: System optimization with `performance_tuner.py`
+- **Chaos Testing**: Resilience validation with controlled failures
+- **Load Testing**: Validate capacity for 20+ concurrent orchestrations
+- **Integration Testing**: Comprehensive test suite for all components
 
-### 💾 Automatic Git Backups
-- Commits every 30 minutes of work
-- Tags stable versions
-- Creates feature branches for experiments
+### 🔄 Self-Scheduling & Coordination
+- **Automatic Check-ins**: Agents schedule their own follow-ups
+- **Fast Lane Coordination**: Reduced Developer→Tester cycle from 45min to 5min
+- **Git Synchronization**: Automated worktree syncing with conflict detection
+- **Multi-Project Support**: Manage multiple projects simultaneously
 
-### 📊 Real-Time Monitoring
-- See what every agent is doing
-- Intervene when needed
-- Review progress across all projects
+### 💾 Git Safety & Workflow
+- **Branch Protection**: Never merge to main unless started on main
+- **30-Minute Commits**: Enforced regular commits to prevent work loss
+- **Worktree Isolation**: Each agent has separate workspace
+- **Automatic PR Creation**: Streamlined integration workflow
 
 ## 📋 Best Practices
 
@@ -266,7 +288,19 @@ SUCCESS CRITERIA:
    git merge feature/[task-name]
    ```
 
-## 🚨 Common Pitfalls & Solutions
+## 🚨 Common Issues & Solutions
+
+### Quick Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| **"ModuleNotFoundError: No module named 'yaml'"** | Install UV: `curl -LsSf https://astral.sh/uv/install.sh | sh` |
+| **Scripts not executable** | Run: `chmod +x *.py *.sh` |
+| **Agent exhausted credits** | Wait for reset or use: `./auto_orchestrate.py --resume` |
+| **Tmux session not found** | Check with: `tmux ls` and use correct session name |
+| **Git worktree conflicts** | The scripts handle this automatically with fallback strategies |
+
+### Common Pitfalls & Solutions
 
 | Pitfall | Consequence | Solution |
 |---------|-------------|----------|
@@ -275,6 +309,7 @@ SUCCESS CRITERIA:
 | Too many tasks | Context overload, confusion | One task per agent at a time |
 | No specifications | Unpredictable results | Always start with written spec |
 | Missing checkpoints | Agents stop working | Schedule regular check-ins |
+| Wrong tmux window | Messages sent to nowhere | Verify with `tmux list-windows` |
 
 ## 🛠️ How It Works
 
@@ -316,18 +351,77 @@ echo "Current window: $(tmux display-message -p "#{session_name}:#{window_index}
 
 ## 🎓 Advanced Usage
 
+### Common Script Usage Examples
+
+#### Starting a New Project
+```bash
+# Basic orchestration with specification
+./auto_orchestrate.py --project /path/to/project --spec spec.md
+
+# With specific team composition
+./auto_orchestrate.py --project /path/to/project --spec spec.md \
+  --roles "orchestrator,developer,sysadmin,devops"
+
+# For system deployment projects
+./auto_orchestrate.py --project /path/to/project --spec deployment_spec.md \
+  --team-type system_deployment
+```
+
+#### Monitoring Active Orchestrations
+```bash
+# Start web dashboard (access at http://localhost:5000)
+./monitoring_dashboard.py
+
+# Check agent status from command line
+./claude_control.py status
+
+# Monitor multiple projects
+./multi_project_monitor.py
+
+# Check system performance
+./performance_tuner.py --watch
+```
+
+#### Managing Running Orchestrations
+```bash
+# Send message to specific agent
+./send-claude-message.sh project-impl:0 "What's your current status?"
+
+# Schedule a check-in
+./schedule_with_note.sh 30 "Review implementation progress" "project-impl:0"
+
+# Resume an interrupted orchestration
+./auto_orchestrate.py --project /path/to/project --resume
+
+# Check agent credit status
+./credit_management/check_agent_health.sh
+```
+
+#### Testing & Optimization
+```bash
+# Run integration tests
+./test_integration.py
+
+# Test system resilience (dry run first!)
+./chaos_tester.py --duration 30 --dry-run
+
+# Load test with 10 concurrent orchestrations
+./load_tester.py concurrent --count 10
+
+# Optimize system performance
+./performance_tuner.py --clean-logs
+```
+
 ### Multi-Project Orchestration
 ```bash
-# Start orchestrator
-tmux new-session -s orchestrator
+# Start concurrent orchestrations
+./concurrent_orchestration.py start project1 project2 project3
 
-# Create project managers for each project
-tmux new-window -n frontend-pm
-tmux new-window -n backend-pm  
-tmux new-window -n mobile-pm
+# Monitor all projects
+./multi_project_monitor.py
 
-# Orchestrator directly manages all agents
-# Simplified structure for better efficiency
+# Sync dashboard for git status
+./sync_dashboard.py
 ```
 
 ### Cross-Project Intelligence
@@ -336,17 +430,43 @@ The orchestrator can share insights between projects:
 - "Authentication is working in Project A, use same pattern in Project B"
 - "Performance issue found in shared library, fix across all projects"
 
-## 📚 Core Files
+## 📚 Complete Script Reference
 
-- `auto_orchestrate.py` - Automated setup from specifications (NEW!)
-- `send-claude-message.sh` - Simplified agent communication script
-- `schedule_with_note.sh` - Self-scheduling functionality
-- `claude_control.py` - Status monitoring and reporting
-- `tmux_utils.py` - Tmux interaction utilities
-- `config.sh` - Configuration management
-- `setup.sh` - Initial environment setup
-- `CLAUDE.md` - Agent behavior instructions
-- `LEARNINGS.md` - Accumulated knowledge base
+### Core Orchestration
+- **`auto_orchestrate.py`** - Automated setup from specifications with dynamic teams
+- **`send-claude-message.sh`** - Send messages to any Claude agent
+- **`schedule_with_note.sh`** - Schedule agent check-ins and tasks
+- **`setup.sh`** - Initial environment setup
+
+### Monitoring & Management
+- **`monitoring_dashboard.py`** - Web-based real-time monitoring dashboard
+- **`claude_control.py`** - Agent status monitoring and reporting
+- **`sync_dashboard.py`** - Git synchronization status dashboard
+- **`multi_project_monitor.py`** - Monitor multiple orchestrations
+- **`performance_tuner.py`** - System performance optimization
+
+### Team & Coordination
+- **`dynamic_team.py`** - Automatic team composition based on project type
+- **`ai_team_refiner.py`** - AI-powered team optimization
+- **`concurrent_orchestration.py`** - Manage multiple concurrent projects
+- **`sync_coordinator.py`** - Git worktree synchronization
+- **`scheduler.py`** - Background task scheduling daemon
+
+### Testing & Validation
+- **`test_integration.py`** - Comprehensive integration testing
+- **`chaos_tester.py`** - Resilience testing with controlled failures
+- **`load_tester.py`** - Load testing for concurrent orchestrations
+
+### Configuration & Documentation
+- **`config.sh`** - Configuration management
+- **`CLAUDE.md`** - Agent behavior instructions and knowledge base
+- **`LEARNINGS.md`** - Accumulated knowledge and best practices
+
+### Credit Management
+- **`credit_management/`** - Scripts for handling Claude usage limits
+  - `check_agent_health.sh` - Check credit status
+  - `credit_monitor.py` - Automatic credit monitoring
+  - `install_monitor.sh` - Install as system service
 
 ## 🤝 Contributing & Optimization
 
