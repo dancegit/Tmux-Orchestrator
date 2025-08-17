@@ -1,4 +1,10 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "pyyaml",
+# ]
+# ///
 """
 Dynamic Team Composition for Tmux Orchestrator
 Detects project type and composes appropriate agent teams

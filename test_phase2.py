@@ -1,4 +1,10 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "pyyaml",
+# ]
+# ///
 """
 Test Suite for Phase 2 Improvements
 Tests dynamic team composition, sync dashboard, and multi-project monitoring

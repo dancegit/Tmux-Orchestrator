@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """
 Tmux Orchestrator Scheduler - Replaces at command with reliable Python-based scheduling
 Provides persistent task queue, credit exhaustion detection, and missed task recovery
