@@ -148,7 +148,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 |--------|---------|-------------|
 | **`dynamic_team.py`** | Dynamic team composition | Automatic role selection |
 | **`ai_team_refiner.py`** | AI-powered team optimization | Refining team composition |
-| **`concurrent_orchestration.py`** | Concurrent project management | Running multiple projects |
+| **`concurrent_orchestration.py`** | Lock management for orchestrations | Preventing concurrent conflicts |
 | **`scheduler.py`** | Task scheduling daemon | Background task management |
 
 ### Testing & Validation
@@ -446,13 +446,18 @@ echo "Current window: $(tmux display-message -p "#{session_name}:#{window_index}
 
 ### Multi-Project Orchestration
 ```bash
-# Start concurrent orchestrations
-./concurrent_orchestration.py start project1 project2 project3
+# Start each project with its specification
+./auto_orchestrate.py --project ~/projects/project1 --spec spec1.md
+./auto_orchestrate.py --project ~/projects/project2 --spec spec2.md
+./auto_orchestrate.py --project ~/projects/project3 --spec spec3.md
 
-# Monitor all projects
+# Monitor all projects in one dashboard
 ./multi_project_monitor.py
 
-# Sync dashboard for git status
+# Check orchestration locks and conflicts
+./concurrent_orchestration.py --list
+
+# Monitor git synchronization across all projects
 ./sync_dashboard.py
 ```
 
@@ -645,22 +650,19 @@ export ANTHROPIC_API_KEY="your-key"
   --spec production-spec.md
 ```
 
-#### `concurrent_orchestration.py` - Multiple Project Management
+#### `concurrent_orchestration.py` - Orchestration Lock Management
 ```bash
-# Start multiple orchestrations
-./concurrent_orchestration.py start webapp backend mobile
+# List active orchestrations (checks lock files)
+./concurrent_orchestration.py --list
 
-# Stop specific project
-./concurrent_orchestration.py stop webapp
+# Clean up stale orchestration locks
+./concurrent_orchestration.py --cleanup
 
-# List all running orchestrations
-./concurrent_orchestration.py list
+# Start a new orchestration with lock (low-level)
+./concurrent_orchestration.py --start my-project
 
-# Get detailed status
-./concurrent_orchestration.py status --verbose
-
-# Restart failed orchestrations
-./concurrent_orchestration.py restart --failed-only
+# Note: This is a low-level utility. For starting projects, use:
+# ./auto_orchestrate.py --project /path/to/project --spec spec.md
 ```
 
 ### Testing & Validation Scripts
@@ -879,17 +881,22 @@ EOF
 
 ### Workflow 4: Multi-Project Coordination
 ```bash
-# 1. Start multiple projects
-./concurrent_orchestration.py start frontend backend mobile
+# 1. Start multiple projects (each with its own spec)
+./auto_orchestrate.py --project ~/projects/frontend --spec frontend-spec.md
+./auto_orchestrate.py --project ~/projects/backend --spec backend-spec.md
+./auto_orchestrate.py --project ~/projects/mobile --spec mobile-spec.md
 
 # 2. Monitor all projects
 ./multi_project_monitor.py
 
-# 3. Share insights between projects
+# 3. Check active orchestrations
+./concurrent_orchestration.py --list
+
+# 4. Share insights between projects
 ./send-claude-message.sh frontend-impl:0 \
   "Backend team implemented new auth endpoint at /api/v2/auth"
 
-# 4. Coordinate releases
+# 5. Coordinate releases
 ./send-claude-message.sh backend-impl:0 \
   "Frontend will deploy at 2 PM, ensure API is ready"
 ```
