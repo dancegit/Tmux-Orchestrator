@@ -51,17 +51,29 @@ The Tmux Orchestrator uses a streamlined architecture with focused roles:
 
 ## 🔧 Setup & Prerequisites
 
+### System Requirements
+- **OS**: Linux, macOS, or WSL2 on Windows
+- **Memory**: 8GB RAM minimum (16GB recommended for multiple orchestrations)
+- **Disk**: 10GB free space for logs and worktrees
+- **Network**: Stable internet for Claude API access
+
 ### Prerequisites
-- tmux installed on your system
-- Claude Code (`claude` command available) - NOT the old Claude CLI
-- Python 3.11+ (for utilities)
-- UV (for Python script management) - **Required for all Python scripts**
+- **tmux** 2.0+ installed on your system
+- **Claude Code** (`claude` command available) - NOT the old Claude CLI
+- **Python** 3.11+ (for utilities)
+- **UV** (for Python script management) - **Required for all Python scripts**
+- **Git** 2.0+ configured with user credentials
 - Basic familiarity with tmux commands
 
 **Important**: All Python scripts use UV shebangs for zero-dependency execution. Install UV with:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+### Recommended Setup
+- **Claude Subscription**: Pro or higher for best performance
+- **Terminal**: Full-featured terminal with 256 color support
+- **Shell**: Bash or Zsh (scripts assume bash-compatible shell)
 
 ### Initial Setup
 
@@ -89,6 +101,26 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
    ```bash
    export PROJECTS_DIR="$HOME/your-projects-folder"
    ```
+
+## 🚀 Quick Reference
+
+### Most Common Commands
+```bash
+# Start new project
+./auto_orchestrate.py --project /path/to/project --spec spec.md
+
+# Resume after interruption
+./auto_orchestrate.py --project /path/to/project --resume
+
+# Monitor everything
+./monitoring_dashboard.py
+
+# Send message to agent
+./send-claude-message.sh session:window "message"
+
+# Check performance
+./performance_tuner.py
+```
 
 ## 🚀 Main Scripts Overview
 
@@ -430,43 +462,502 @@ The orchestrator can share insights between projects:
 - "Authentication is working in Project A, use same pattern in Project B"
 - "Performance issue found in shared library, fix across all projects"
 
-## 📚 Complete Script Reference
+## 📚 Complete Script Reference with Examples
 
-### Core Orchestration
-- **`auto_orchestrate.py`** - Automated setup from specifications with dynamic teams
-- **`send-claude-message.sh`** - Send messages to any Claude agent
-- **`schedule_with_note.sh`** - Schedule agent check-ins and tasks
-- **`setup.sh`** - Initial environment setup
+### Core Orchestration Scripts
 
-### Monitoring & Management
-- **`monitoring_dashboard.py`** - Web-based real-time monitoring dashboard
-- **`claude_control.py`** - Agent status monitoring and reporting
-- **`sync_dashboard.py`** - Git synchronization status dashboard
-- **`multi_project_monitor.py`** - Monitor multiple orchestrations
-- **`performance_tuner.py`** - System performance optimization
+#### `auto_orchestrate.py` - Automated Setup from Specifications
+```bash
+# Basic usage - start a new project
+./auto_orchestrate.py --project ~/projects/my-webapp --spec ~/specs/auth-system.md
 
-### Team & Coordination
-- **`dynamic_team.py`** - Automatic team composition based on project type
-- **`ai_team_refiner.py`** - AI-powered team optimization
-- **`concurrent_orchestration.py`** - Manage multiple concurrent projects
-- **`sync_coordinator.py`** - Git worktree synchronization
-- **`scheduler.py`** - Background task scheduling daemon
+# Resume after credit exhaustion
+./auto_orchestrate.py --project ~/projects/my-webapp --resume
 
-### Testing & Validation
-- **`test_integration.py`** - Comprehensive integration testing
-- **`chaos_tester.py`** - Resilience testing with controlled failures
-- **`load_tester.py`** - Load testing for concurrent orchestrations
+# Check status without making changes
+./auto_orchestrate.py --project ~/projects/my-webapp --resume --status-only
 
-### Configuration & Documentation
-- **`config.sh`** - Configuration management
-- **`CLAUDE.md`** - Agent behavior instructions and knowledge base
-- **`LEARNINGS.md`** - Accumulated knowledge and best practices
+# Force specific team composition
+./auto_orchestrate.py --project ~/projects/deployment \
+  --spec deployment.md \
+  --roles "orchestrator,sysadmin,devops,securityops"
 
-### Credit Management
-- **`credit_management/`** - Scripts for handling Claude usage limits
-  - `check_agent_health.sh` - Check credit status
-  - `credit_monitor.py` - Automatic credit monitoring
-  - `install_monitor.sh` - Install as system service
+# System deployment with specialized team
+./auto_orchestrate.py --project /opt/services/api-server \
+  --spec deploy-spec.md \
+  --team-type system_deployment
+
+# Adjust for Claude subscription plan
+./auto_orchestrate.py --project ~/projects/startup \
+  --spec mvp.md \
+  --plan pro \
+  --size small
+```
+
+#### `send-claude-message.sh` - Agent Communication
+```bash
+# Check status of specific agent
+./send-claude-message.sh myproject-impl:0 "What's your current status?"
+
+# Assign new task to developer
+./send-claude-message.sh webapp-impl:1 "Please implement the login endpoint at /api/auth/login"
+
+# Request test coverage report
+./send-claude-message.sh webapp-impl:2 "Show me the current test coverage for authentication"
+
+# Coordinate between agents
+./send-claude-message.sh backend-impl:0 "The frontend needs a /api/users/profile endpoint"
+
+# Emergency stop
+./send-claude-message.sh project-impl:0 "STOP all current work and report status"
+```
+
+#### `schedule_with_note.sh` - Task Scheduling
+```bash
+# Schedule regular check-ins
+./schedule_with_note.sh 30 "Review developer progress on auth system" "webapp-impl:0"
+
+# Schedule test runs
+./schedule_with_note.sh 60 "Run full test suite and report failures" "webapp-impl:3"
+
+# Schedule git operations
+./schedule_with_note.sh 45 "Commit current work and push to feature branch" "webapp-impl:1"
+
+# Schedule integration
+./schedule_with_note.sh 120 "Merge feature branches and run integration tests" "webapp-impl:4"
+
+# Self-scheduling for orchestrator
+CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
+./schedule_with_note.sh 90 "Check all project status and reassign tasks" "$CURRENT_WINDOW"
+```
+
+### Monitoring & Management Scripts
+
+#### `monitoring_dashboard.py` - Real-time Web Dashboard
+```bash
+# Start dashboard on default port
+./monitoring_dashboard.py
+# Access at: http://localhost:5000
+
+# Custom port for remote access
+./monitoring_dashboard.py --port 8080 --host 0.0.0.0
+
+# Debug mode with detailed logging
+./monitoring_dashboard.py --debug
+```
+
+#### `claude_control.py` - Agent Status Monitor
+```bash
+# Get status of all agents
+./claude_control.py status
+
+# Check specific session
+./claude_control.py status webapp-impl
+
+# Generate detailed report
+./claude_control.py report --output status-report.md
+
+# Monitor agent activity
+./claude_control.py monitor --interval 10
+```
+
+#### `sync_dashboard.py` - Git Synchronization Monitor
+```bash
+# Start sync dashboard
+./sync_dashboard.py
+
+# Custom refresh interval
+./sync_dashboard.py --refresh 5
+
+# Monitor specific project
+./sync_dashboard.py --project ~/projects/webapp
+
+# Export sync status
+./sync_dashboard.py --export sync-status.json
+```
+
+#### `multi_project_monitor.py` - Multi-Project Overview
+```bash
+# Monitor all active projects
+./multi_project_monitor.py
+
+# Focus on specific projects
+./multi_project_monitor.py --projects "webapp,backend,mobile"
+
+# Generate project summary
+./multi_project_monitor.py --summary
+
+# Export metrics
+./multi_project_monitor.py --export project-metrics.csv
+```
+
+#### `performance_tuner.py` - System Optimization
+```bash
+# One-time performance check
+./performance_tuner.py
+
+# Continuous monitoring mode
+./performance_tuner.py --watch --interval 30
+
+# Clean old logs and optimize
+./performance_tuner.py --clean-logs
+
+# Skip database optimization
+./performance_tuner.py --no-optimize-db
+
+# Export performance report
+./performance_tuner.py --json > performance-report.json
+```
+
+### Team & Coordination Scripts
+
+#### `dynamic_team.py` - Automatic Team Composition
+```bash
+# Analyze project and suggest team
+./dynamic_team.py --project ~/projects/webapp
+
+# Get team for specific project type
+./dynamic_team.py --project ~/projects/infra --type infrastructure_as_code
+
+# Custom team size constraints
+./dynamic_team.py --project ~/projects/startup --max-size 3
+
+# Export team configuration
+./dynamic_team.py --project ~/projects/api --export team-config.yaml
+```
+
+#### `ai_team_refiner.py` - AI-Powered Team Optimization
+```bash
+# Refine existing team composition
+./ai_team_refiner.py --project ~/projects/webapp \
+  --team "orchestrator,developer,tester" \
+  --spec requirements.md
+
+# Use mock AI for testing
+./ai_team_refiner.py --project ~/projects/test \
+  --team "orchestrator,developer" \
+  --mock
+
+# With custom Claude API
+export ANTHROPIC_API_KEY="your-key"
+./ai_team_refiner.py --project ~/projects/production \
+  --team "orchestrator,developer,devops" \
+  --spec production-spec.md
+```
+
+#### `concurrent_orchestration.py` - Multiple Project Management
+```bash
+# Start multiple orchestrations
+./concurrent_orchestration.py start webapp backend mobile
+
+# Stop specific project
+./concurrent_orchestration.py stop webapp
+
+# List all running orchestrations
+./concurrent_orchestration.py list
+
+# Get detailed status
+./concurrent_orchestration.py status --verbose
+
+# Restart failed orchestrations
+./concurrent_orchestration.py restart --failed-only
+```
+
+### Testing & Validation Scripts
+
+#### `test_integration.py` - Component Testing
+```bash
+# Run all integration tests
+./test_integration.py
+
+# Run specific test class
+./test_integration.py TestFullOrchestration
+
+# Verbose output
+./test_integration.py -v
+
+# Generate test coverage report
+./test_integration.py --coverage
+```
+
+#### `chaos_tester.py` - Resilience Testing
+```bash
+# Dry run to see what would happen
+./chaos_tester.py --duration 30 --dry-run
+
+# Run 15-minute chaos test
+./chaos_tester.py --duration 15
+
+# Test only medium severity events
+./chaos_tester.py --severity medium --duration 30
+
+# Custom event intervals
+./chaos_tester.py --min-interval 60 --max-interval 300
+
+# Export results as JSON
+./chaos_tester.py --duration 60 --json > chaos-results.json
+```
+
+#### `load_tester.py` - Capacity Testing
+```bash
+# Test with 5 concurrent orchestrations
+./load_tester.py concurrent --count 5 --hold 300
+
+# Gradual ramp up test
+./load_tester.py ramp --max 20 --duration 600 --hold 300
+
+# Quick stress test
+./load_tester.py concurrent --count 10 --interval 2 --hold 60
+
+# Export detailed metrics
+./load_tester.py concurrent --count 5 --json > load-test-results.json
+```
+
+### Credit Management Scripts
+
+#### `check_agent_health.sh` - Credit Status Check
+```bash
+# Check all agents
+./credit_management/check_agent_health.sh
+
+# Check specific session
+./credit_management/check_agent_health.sh webapp-impl
+
+# Show reset times
+./credit_management/check_agent_health.sh --show-resets
+```
+
+#### `credit_monitor.py` - Automatic Monitoring
+```bash
+# Start credit monitor
+./credit_management/credit_monitor.py
+
+# Custom check interval
+./credit_management/credit_monitor.py --interval 300
+
+# Monitor specific sessions
+./credit_management/credit_monitor.py --sessions "webapp-impl,backend-impl"
+
+# Enable auto-resume
+./credit_management/credit_monitor.py --auto-resume
+```
+
+### Utility Scripts
+
+#### `setup.sh` - Initial Setup
+```bash
+# Basic setup
+./setup.sh
+
+# Setup with custom project directory
+PROJECTS_DIR=~/my-projects ./setup.sh
+
+# Non-interactive setup
+./setup.sh --non-interactive
+
+# Verify installation
+./setup.sh --verify
+```
+
+#### `scheduler.py` - Background Task Daemon
+```bash
+# Start scheduler daemon
+./scheduler.py start
+
+# Stop scheduler
+./scheduler.py stop
+
+# Check scheduler status
+./scheduler.py status
+
+# Run in foreground for debugging
+./scheduler.py run --debug
+
+# Clear all pending tasks
+./scheduler.py clear --confirm
+```
+
+#### `sync_coordinator.py` - Git Worktree Sync
+```bash
+# Start sync coordinator
+./sync_coordinator.py start
+
+# Manual sync trigger
+./sync_coordinator.py sync webapp-impl
+
+# Check sync status
+./sync_coordinator.py status
+
+# Force sync all projects
+./sync_coordinator.py sync --all --force
+
+# Resolve conflicts
+./sync_coordinator.py resolve webapp-impl --strategy theirs
+```
+
+## 🎯 Common Workflows & Real-World Examples
+
+### Workflow 1: Starting a New Web Application Feature
+```bash
+# 1. Create specification
+cat > feature-spec.md << 'EOF'
+PROJECT: E-commerce Cart Enhancement
+GOAL: Add wishlist functionality to shopping cart
+
+REQUIREMENTS:
+- Users can add items to wishlist
+- Wishlist persists across sessions
+- Move items between cart and wishlist
+- Share wishlist via link
+
+DELIVERABLES:
+1. Database schema for wishlists
+2. API endpoints (CRUD operations)
+3. Frontend components
+4. Unit and integration tests
+EOF
+
+# 2. Launch orchestration
+./auto_orchestrate.py --project ~/projects/ecommerce --spec feature-spec.md
+
+# 3. Monitor progress
+./monitoring_dashboard.py &
+
+# 4. Check in after 30 minutes
+./send-claude-message.sh ecommerce-impl:0 "Status update on wishlist feature?"
+```
+
+### Workflow 2: Deploying a Production Service
+```bash
+# 1. Create deployment specification
+cat > deploy-spec.md << 'EOF'
+PROJECT: API Service Deployment
+TARGET: production-server.example.com
+SERVICE: FastAPI Order Processing
+
+REQUIREMENTS:
+- Install Python 3.11 environment
+- Configure PostgreSQL connection
+- Set up Nginx reverse proxy
+- Implement systemd service
+- Configure monitoring
+- SSL certificate setup
+
+SECURITY:
+- Firewall rules for port 443 only
+- API key authentication
+- Rate limiting
+EOF
+
+# 2. Deploy specialized team
+./auto_orchestrate.py \
+  --project /opt/deployments/order-api \
+  --spec deploy-spec.md \
+  --team-type system_deployment
+
+# 3. Monitor deployment
+./claude_control.py monitor --interval 5
+
+# 4. Verify deployment
+./send-claude-message.sh order-api-impl:1 "Run health checks on all endpoints"
+```
+
+### Workflow 3: Handling Credit Exhaustion
+```bash
+# 1. Check credit status
+./credit_management/check_agent_health.sh
+
+# 2. If agents exhausted, wait or use resume
+./auto_orchestrate.py --project ~/projects/webapp --resume
+
+# 3. Monitor credit resets
+./credit_management/credit_monitor.py --auto-resume &
+
+# 4. Schedule work around resets
+./schedule_with_note.sh 310 "Resume after credit reset" "webapp-impl:0"
+```
+
+### Workflow 4: Multi-Project Coordination
+```bash
+# 1. Start multiple projects
+./concurrent_orchestration.py start frontend backend mobile
+
+# 2. Monitor all projects
+./multi_project_monitor.py
+
+# 3. Share insights between projects
+./send-claude-message.sh frontend-impl:0 \
+  "Backend team implemented new auth endpoint at /api/v2/auth"
+
+# 4. Coordinate releases
+./send-claude-message.sh backend-impl:0 \
+  "Frontend will deploy at 2 PM, ensure API is ready"
+```
+
+### Workflow 5: Performance Issues & Optimization
+```bash
+# 1. Check system performance
+./performance_tuner.py
+
+# 2. If issues found, clean up
+./performance_tuner.py --clean-logs
+
+# 3. Run chaos test to identify weaknesses
+./chaos_tester.py --duration 30 --dry-run
+
+# 4. Optimize based on results
+# Example: Too many tmux sessions
+tmux ls | grep -E "old-project|test-" | cut -d: -f1 | xargs -I {} tmux kill-session -t {}
+```
+
+### Workflow 6: Testing Before Production
+```bash
+# 1. Run integration tests
+./test_integration.py
+
+# 2. Load test the system
+./load_tester.py concurrent --count 10 --hold 300
+
+# 3. Chaos engineering test
+./chaos_tester.py --duration 60 --severity medium
+
+# 4. Generate reports
+./performance_tuner.py --json > pre-prod-report.json
+./load_tester.py ramp --max 15 --json > load-report.json
+```
+
+### Workflow 7: Debugging Failed Orchestrations
+```bash
+# 1. Check what went wrong
+./claude_control.py status webapp-impl
+
+# 2. Read agent logs
+tmux capture-pane -t webapp-impl:1 -p -S -1000 | less
+
+# 3. Check git worktree status
+cd registry/projects/webapp/worktrees/developer
+git status
+git log --oneline -10
+
+# 4. Restart with specific instructions
+./send-claude-message.sh webapp-impl:1 \
+  "Previous attempt failed. Start fresh from main branch"
+```
+
+### Workflow 8: Quick Prototyping Session
+```bash
+# 1. Simple two-agent setup
+tmux new-session -s prototype
+claude  # In window 0
+
+# 2. Brief the developer directly
+"You're a Developer. Create a quick prototype for a URL shortener.
+Tech stack: FastAPI + SQLite. Include basic tests.
+Work in feature/url-shortener branch."
+
+# 3. Schedule follow-up
+./schedule_with_note.sh 45 "Review prototype and suggest improvements"
+```
 
 ## 🤝 Contributing & Optimization
 
