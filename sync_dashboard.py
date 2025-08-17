@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """
 Git Sync Status Dashboard for Tmux Orchestrator
 Real-time monitoring of git worktree synchronization status

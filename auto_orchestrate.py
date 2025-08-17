@@ -5,6 +5,7 @@
 #     "click",
 #     "rich",
 #     "pydantic",
+#     "pyyaml",
 # ]
 # ///
 
