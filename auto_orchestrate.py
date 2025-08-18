@@ -996,7 +996,7 @@ Please:
             str(send_script),
             f'{session_state.session_name}:{agent.window_index}',
             briefing
-        ])
+        ], capture_output=True)
         
         # Update agent state
         agent.is_alive = True
@@ -1042,7 +1042,7 @@ Please provide a brief status update on your current work and any blockers."""
             str(send_script),
             f'{session_state.session_name}:{agent.window_index}',
             rebrief_msg
-        ])
+        ], capture_output=True)
         
         agent.last_briefing_time = datetime.now().isoformat()
         
@@ -1591,7 +1591,7 @@ This file is automatically read by Claude Code when working in this directory.
                         str(send_script),
                         f'{session_name}:{window_idx}',
                         context_prime_msg
-                    ])
+                    ], capture_output=True)
                     # Wait for context priming to complete
                     time.sleep(8)
                 except Exception as e:
@@ -1613,7 +1613,7 @@ This file is automatically read by Claude Code when working in this directory.
                 str(send_script),
                 f'{session_name}:{window_idx}',
                 briefing
-            ])
+            ], capture_output=True)
             
             # Run initial commands
             for cmd in role_config.initial_commands:
@@ -1622,7 +1622,7 @@ This file is automatically read by Claude Code when working in this directory.
                     str(send_script),
                     f'{session_name}:{window_idx}',
                     f"Please run: {cmd}"
-                ])
+                ], capture_output=True)
             
             # Schedule check-ins
             if role_key != 'orchestrator':  # Orchestrator schedules its own
