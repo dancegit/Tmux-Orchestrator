@@ -1446,9 +1446,41 @@ Please provide a brief status update on your current work and any blockers."""
                                     worktree_created = True
                 
                 if not worktree_created:
-                    console.print(f"[red]Failed to create worktree for {role_key} after all strategies[/red]")
-                    console.print(f"[red]Error: {result.stderr}[/red]")
-                    sys.exit(1)
+                    # Check if it's a locked worktree issue
+                    if "missing but locked" in result.stderr:
+                        console.print(f"[yellow]Worktree is locked, attempting to unlock and retry...[/yellow]")
+                        
+                        # Try to unlock the worktree
+                        unlock_result = subprocess.run([
+                            'git', 'worktree', 'unlock', str(worktree_path)
+                        ], cwd=str(self.project_path), capture_output=True, text=True)
+                        
+                        # Try to remove it
+                        remove_result = subprocess.run([
+                            'git', 'worktree', 'remove', str(worktree_path), '--force'
+                        ], cwd=str(self.project_path), capture_output=True, text=True)
+                        
+                        # Prune to clean up
+                        subprocess.run([
+                            'git', 'worktree', 'prune'
+                        ], cwd=str(self.project_path), capture_output=True)
+                        
+                        # Try one more time with -f -f as suggested
+                        console.print(f"[yellow]Retrying with force flags...[/yellow]")
+                        result = subprocess.run([
+                            'git', 'worktree', 'add', 
+                            '-f', '-f',  # Double force as suggested in error message
+                            str(worktree_path),
+                            current_branch
+                        ], cwd=str(self.project_path), capture_output=True, text=True)
+                        
+                        if result.returncode == 0:
+                            worktree_created = True
+                    
+                    if not worktree_created:
+                        console.print(f"[red]Failed to create worktree for {role_key} after all strategies[/red]")
+                        console.print(f"[red]Error: {result.stderr}[/red]")
+                        sys.exit(1)
                     
                 worktree_paths[role_key] = worktree_path
                 
@@ -1541,13 +1573,28 @@ Please provide a brief status update on your current work and any blockers."""
         worktrees_base = self.get_worktrees_base_dir(project_name)
         if worktrees_base.exists():
             console.print("\n[yellow]Cleaning up worktrees...[/yellow]")
-            # Remove all worktrees
+            
+            # First, try to properly remove each worktree through git
+            for worktree in worktrees_base.iterdir():
+                if worktree.is_dir():
+                    # Try to unlock first (in case it's locked)
+                    subprocess.run([
+                        'git', 'worktree', 'unlock', str(worktree)
+                    ], cwd=str(self.project_path), capture_output=True)
+                    
+                    # Try to remove through git
+                    subprocess.run([
+                        'git', 'worktree', 'remove', str(worktree), '--force'
+                    ], cwd=str(self.project_path), capture_output=True)
+            
+            # Prune any stale entries
+            subprocess.run(['git', 'worktree', 'prune'], 
+                         cwd=str(self.project_path), capture_output=True)
+            
+            # Finally, remove the physical directories if they still exist
             for worktree in worktrees_base.iterdir():
                 if worktree.is_dir():
                     subprocess.run(['rm', '-rf', str(worktree)], capture_output=True)
-            # Prune git worktree list
-            subprocess.run(['git', 'worktree', 'prune'], 
-                         cwd=str(self.project_path), capture_output=True)
             
             # Clean up any agent-specific branches
             result = subprocess.run([
