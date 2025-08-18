@@ -4155,28 +4155,9 @@ Remember: Context management is automatic - focus on creating good checkpoints t
         self.session_state_manager.save_session_state(session_state)
         console.print(f"[green]✓ Session state saved for resume capability[/green]")
         
-        # Send email notification for project completion
-        try:
-            duration = int(time.time() - self.start_time)
-            additional_info = {
-                'Project Size': self.implementation_spec.project_size.size,
-                'Team Type': getattr(self, 'team_type', 'auto'),
-                'Agents Deployed': len(roles_deployed),
-                'Registry Directory': str(registry_dir)
-            }
-            
-            self.email_notifier.send_project_completion_email(
-                project_name=self.implementation_spec.project.name,
-                spec_path=str(self.spec_path),
-                status='completed',
-                session_name=session_name,
-                duration_seconds=duration,
-                batch_mode=False,
-                additional_info=additional_info
-            )
-        except Exception as e:
-            # Don't fail the orchestration if email fails
-            logger.debug(f"Failed to send completion email: {e}")
+        # Email notification should only be sent when the project work is actually completed,
+        # not when the orchestration setup is done. The orchestrator agent will determine
+        # when the project is complete and trigger the notification at that time.
 
 
 @click.command()
