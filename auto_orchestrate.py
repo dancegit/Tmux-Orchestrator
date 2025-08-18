@@ -1288,7 +1288,13 @@ Please provide a brief status update on your current work and any blockers."""
             console.print(f"  {role}: {path.relative_to(self.tmux_orchestrator_path)}")
         
         # Setup fast lane coordination for eligible roles
-        self.setup_fast_lane_coordination(project_name, roles_to_deploy)
+        # Pass the actual directory name (with UUID if using unique registry)
+        if self.unique_registry_dir:
+            # Extract the directory name with UUID from the path
+            actual_project_dir = self.unique_registry_dir.name
+        else:
+            actual_project_dir = project_name
+        self.setup_fast_lane_coordination(actual_project_dir, roles_to_deploy)
         
         return worktree_paths
     
