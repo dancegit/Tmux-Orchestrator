@@ -188,25 +188,46 @@ class CheckinMonitor:
             logger.error(f"Error scheduling emergency check-in: {e}")
     
     def force_immediate_checkin(self, session_name: str, window: int, role: str):
-        """Force an immediate check-in by sending message directly"""
-        logger.warning(f"Forcing immediate check-in for {session_name}:{window} ({role})")
+        """Force an immediate check-in using intelligent briefing system"""
+        logger.warning(f"Forcing immediate intelligent briefing for {session_name}:{window} ({role})")
         
+        # Use intelligent briefing system for meaningful, context-rich messages
+        try:
+            briefing_script = self.tmux_orchestrator_path / 'intelligent_briefing.py'
+            if briefing_script.exists():
+                result = subprocess.run([
+                    'python3',
+                    str(briefing_script),
+                    session_name,
+                    role,
+                    str(window)
+                ], capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    logger.info(f"Intelligent briefing sent to {role}")
+                else:
+                    logger.error(f"Failed to send intelligent briefing: {result.stderr}")
+                    # Fallback to basic message
+                    self._send_basic_emergency_message(session_name, window, role)
+            else:
+                logger.warning("Intelligent briefing system not available, using basic message")
+                self._send_basic_emergency_message(session_name, window, role)
+                
+        except Exception as e:
+            logger.error(f"Error with intelligent briefing: {e}")
+            self._send_basic_emergency_message(session_name, window, role)
+    
+    def _send_basic_emergency_message(self, session_name: str, window: int, role: str):
+        """Fallback basic emergency message"""
         message = f"""URGENT: Emergency status check required!
 
-This is an automated intervention. The project monitoring system has detected potential issues:
-- No recent check-ins detected
-- Project may be stuck
-
-Please provide immediate status update:
+Project monitoring detected issues - need immediate response.
 1. What are you currently working on?
-2. Are you blocked on anything?
-3. What's your progress on assigned tasks?
-4. Do you need assistance?
+2. Are you blocked on anything? 
+3. What's your next step?
 
-If you're the Orchestrator, also run:
-cd {self.tmux_orchestrator_path} && python3 claude_control.py status detailed"""
+If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_control.py status detailed"""
         
-        # Send message using send-claude-message.sh
         send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
         if send_script.exists():
             try:
@@ -217,11 +238,11 @@ cd {self.tmux_orchestrator_path} && python3 claude_control.py status detailed"""
                 ], capture_output=True, text=True)
                 
                 if result.returncode == 0:
-                    logger.info(f"Forced check-in message sent to {role}")
+                    logger.info(f"Basic emergency message sent to {role}")
                 else:
-                    logger.error(f"Failed to send forced check-in: {result.stderr}")
+                    logger.error(f"Failed to send basic message: {result.stderr}")
             except Exception as e:
-                logger.error(f"Error sending forced check-in: {e}")
+                logger.error(f"Error sending basic message: {e}")
     
     def detect_recovery_signals(self, session_name: str) -> List[str]:
         """Detect signals that indicate project has recovered"""
