@@ -41,6 +41,15 @@ class SessionState:
     orchestrator_window: int = 0
     project_size: str = "medium"
     parent_branch: Optional[str] = None
+    completion_status: str = "pending"  # 'pending', 'completed', or 'failed'
+    completion_time: Optional[str] = None
+    phases_completed: List[str] = None  # Track completed implementation phases
+    spec_path: Optional[str] = None  # Path to spec file for notifications
+    
+    def __post_init__(self):
+        """Initialize mutable default values"""
+        if self.phases_completed is None:
+            self.phases_completed = []
     
 
 class SessionStateManager:
@@ -256,7 +265,8 @@ def create_initial_session_state(
     agents: List[tuple[str, int, str]],  # (window_name, window_index, role)
     worktree_paths: Dict[str, Path],
     project_size: str = "medium",
-    parent_branch: Optional[str] = None
+    parent_branch: Optional[str] = None,
+    spec_path: Optional[str] = None
 ) -> SessionState:
     """Create initial session state from orchestration setup"""
     
@@ -283,5 +293,6 @@ def create_initial_session_state(
         updated_at=datetime.now().isoformat(),
         agents=agent_states,
         project_size=project_size,
-        parent_branch=parent_branch
+        parent_branch=parent_branch,
+        spec_path=spec_path
     )
