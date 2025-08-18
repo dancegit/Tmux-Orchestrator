@@ -22,6 +22,7 @@ from typing import Dict, Any, Optional
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent))
 from session_state import SessionStateManager, SessionState
+from email_notifier import get_email_notifier
 
 # Setup logging
 logging.basicConfig(
@@ -275,18 +276,32 @@ class TmuxOrchestratorScheduler:
         self.conn.commit()
         logger.info(f"Updated project {project_id} to status: {status}")
     
-    def run_queue_daemon(self, poll_interval: int = 60):
+    def run_queue_daemon(self, poll_interval: int = 60, send_batch_summary: bool = True):
         """Daemon loop to process the project queue one at a time"""
         logger.info("Starting project queue daemon")
         # Import here to avoid circular dependency
         from concurrent_orchestration import FileLock
+        
+        # Initialize email notifier
+        email_notifier = get_email_notifier()
+        
+        # Track batch processing stats
+        batch_start_time = time.time()
+        completed_projects = []
+        failed_projects = []
         
         while True:
             try:
                 with FileLock(str(self.tmux_orchestrator_path / 'locks' / 'project_queue.lock'), timeout=30):
                     next_project = self.get_next_project()
                     if next_project:
+                        project_start_time = time.time()
                         self.update_project_status(next_project['id'], 'processing')
+                        
+                        # Extract project name from spec path
+                        spec_path = Path(next_project['spec_path'])
+                        project_name = spec_path.stem
+                        
                         try:
                             # Prepare project_path arg ('auto' if None)
                             proj_arg = next_project['project_path'] or 'auto'
@@ -301,13 +316,71 @@ class TmuxOrchestratorScheduler:
                             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
                             self.update_project_status(next_project['id'], 'completed')
                             logger.info(f"Completed project {next_project['id']}")
+                            
+                            # Track completion
+                            completed_projects.append(f"{project_name} (ID: {next_project['id']})")
+                            
+                            # Send individual project completion email
+                            # Note: auto_orchestrate.py already sends its own email, 
+                            # but we can send an additional batch notification here
+                            duration = int(time.time() - project_start_time)
+                            
                         except subprocess.CalledProcessError as e:
                             error_msg = f"Subprocess failed: {e.stderr}"
                             self.update_project_status(next_project['id'], 'failed', error_msg)
                             logger.error(error_msg)
+                            
+                            # Track failure
+                            failed_projects.append(f"{project_name} (ID: {next_project['id']})")
+                            
+                            # Send failure email
+                            try:
+                                email_notifier.send_project_completion_email(
+                                    project_name=project_name,
+                                    spec_path=next_project['spec_path'],
+                                    status='failed',
+                                    error_message=error_msg,
+                                    batch_mode=True
+                                )
+                            except Exception as email_err:
+                                logger.debug(f"Failed to send failure email: {email_err}")
+                                
                         except Exception as e:
                             self.update_project_status(next_project['id'], 'failed', str(e))
                             logger.error(f"Failed project {next_project['id']}: {e}")
+                            
+                            # Track failure
+                            failed_projects.append(f"{project_name} (ID: {next_project['id']})")
+                            
+                            # Send failure email
+                            try:
+                                email_notifier.send_project_completion_email(
+                                    project_name=project_name,
+                                    spec_path=next_project['spec_path'],
+                                    status='failed',
+                                    error_message=str(e),
+                                    batch_mode=True
+                                )
+                            except Exception as email_err:
+                                logger.debug(f"Failed to send failure email: {email_err}")
+                    else:
+                        # No more projects in queue
+                        if send_batch_summary and (completed_projects or failed_projects):
+                            # Send batch summary email
+                            try:
+                                total_duration = int(time.time() - batch_start_time)
+                                email_notifier.send_batch_summary_email(
+                                    completed_projects=completed_projects,
+                                    failed_projects=failed_projects,
+                                    total_duration_seconds=total_duration
+                                )
+                                # Reset batch tracking
+                                completed_projects = []
+                                failed_projects = []
+                                batch_start_time = time.time()
+                            except Exception as e:
+                                logger.debug(f"Failed to send batch summary email: {e}")
+                                
             except Exception as e:
                 logger.error(f"Daemon error: {e}")
             

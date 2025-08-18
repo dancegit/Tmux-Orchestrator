@@ -22,6 +22,7 @@ import os
 import time
 import re
 import uuid
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
@@ -45,7 +46,11 @@ from concurrent_orchestration import ConcurrentOrchestrationManager
 # Import dynamic team composition
 from dynamic_team import DynamicTeamComposer
 
+# Import email notification system
+from email_notifier import get_email_notifier
+
 console = Console()
+logger = logging.getLogger(__name__)
 
 def find_git_root(start_path: Path) -> Optional[Path]:
     """Find the nearest parent directory containing a .git folder"""
@@ -117,6 +122,12 @@ class AutoOrchestrator:
             
         self.tmux_orchestrator_path = Path(__file__).parent
         self.implementation_spec: Optional[ImplementationSpec] = None
+        
+        # Track start time for duration calculation
+        self.start_time = time.time()
+        
+        # Initialize email notifier
+        self.email_notifier = get_email_notifier()
         self.manual_size: Optional[str] = None
         self.additional_roles: List[str] = []
         self.force: bool = False
@@ -3974,6 +3985,29 @@ Remember: Context management is automatic - focus on creating good checkpoints t
         
         self.session_state_manager.save_session_state(session_state)
         console.print(f"[green]✓ Session state saved for resume capability[/green]")
+        
+        # Send email notification for project completion
+        try:
+            duration = int(time.time() - self.start_time)
+            additional_info = {
+                'Project Size': self.implementation_spec.project_size.size,
+                'Team Type': getattr(self, 'team_type', 'auto'),
+                'Agents Deployed': len(roles_deployed),
+                'Registry Directory': str(registry_dir)
+            }
+            
+            self.email_notifier.send_project_completion_email(
+                project_name=self.implementation_spec.project.name,
+                spec_path=str(self.spec_path),
+                status='completed',
+                session_name=session_name,
+                duration_seconds=duration,
+                batch_mode=False,
+                additional_info=additional_info
+            )
+        except Exception as e:
+            # Don't fail the orchestration if email fails
+            logger.debug(f"Failed to send completion email: {e}")
 
 
 @click.command()
