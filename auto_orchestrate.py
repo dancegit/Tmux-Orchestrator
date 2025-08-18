@@ -49,6 +49,8 @@ from dynamic_team import DynamicTeamComposer
 
 # Import email notification system
 from email_notifier import get_email_notifier
+# Import completion monitoring
+from completion_manager import CompletionManager
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -134,6 +136,8 @@ class AutoOrchestrator:
         self.force: bool = False
         self.plan_type: str = 'max20'  # Default to Max 20x plan
         self.session_state_manager = SessionStateManager(self.tmux_orchestrator_path)
+        # Initialize completion manager
+        self.completion_manager = CompletionManager(self.session_state_manager)
         self.concurrent_manager = ConcurrentOrchestrationManager(self.tmux_orchestrator_path)
         self.worktree_paths: Dict[str, Path] = {}
         self.unique_session_name: Optional[str] = None
@@ -1010,6 +1014,29 @@ CLAUDE_EOF
         
         console.print(f"\n[green]✓ Resume complete![/green]")
         console.print(f"To attach: [cyan]tmux attach -t {session_state.session_name}[/cyan]")
+        
+        # Restart completion monitoring if not already completed
+        if hasattr(session_state, 'completion_status') and session_state.completion_status == 'pending':
+            console.print(f"\n[cyan]Restarting project completion monitoring...[/cyan]")
+            
+            # Reconstruct worktree paths from agent states
+            worktree_paths = {}
+            for role, agent in session_state.agents.items():
+                if agent.worktree_path:
+                    worktree_paths[role] = Path(agent.worktree_path)
+            
+            # Start monitoring
+            self.completion_manager.monitor(
+                session_name=session_state.session_name,
+                project_name=session_state.project_name,
+                spec=self.implementation_spec,
+                worktree_paths=worktree_paths,
+                spec_path=session_state.spec_path or str(self.spec_path),
+                batch_mode=False
+            )
+            console.print(f"[green]✓ Completion monitoring restarted (checks every 5 minutes)[/green]")
+        elif hasattr(session_state, 'completion_status'):
+            console.print(f"\n[cyan]Project already marked as: {session_state.completion_status}[/cyan]")
         
         # Schedule credit-exhausted agents for auto-resume
         exhausted_agents = [a for a in session_state.agents.values() if a.is_exhausted]
@@ -4149,15 +4176,26 @@ Remember: Context management is automatic - focus on creating good checkpoints t
             agents=[(name, idx, role) for idx, (name, role) in enumerate(roles_deployed)],
             worktree_paths=self.worktree_paths,
             project_size=self.implementation_spec.project_size.size,
-            parent_branch=parent_branch
+            parent_branch=parent_branch,
+            spec_path=str(self.spec_path)
         )
         
         self.session_state_manager.save_session_state(session_state)
         console.print(f"[green]✓ Session state saved for resume capability[/green]")
         
-        # Email notification should only be sent when the project work is actually completed,
-        # not when the orchestration setup is done. The orchestrator agent will determine
-        # when the project is complete and trigger the notification at that time.
+        # Start completion monitoring in background
+        console.print(f"[cyan]Starting project completion monitoring...[/cyan]")
+        self.completion_manager.monitor(
+            session_name=session_name,
+            project_name=self.implementation_spec.project.name,
+            spec=self.implementation_spec,
+            worktree_paths=self.worktree_paths,
+            spec_path=str(self.spec_path),
+            batch_mode=False  # Will be True when called from batch processing
+        )
+        console.print(f"[green]✓ Completion monitoring active (checks every 5 minutes)[/green]")
+        
+        # Email notification will be sent by CompletionManager when the project work is actually completed
 
 
 @click.command()
