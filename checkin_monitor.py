@@ -27,7 +27,7 @@ class CheckinMonitor:
     def __init__(self, tmux_orchestrator_path: Path):
         self.tmux_orchestrator_path = tmux_orchestrator_path
         self.state_manager = SessionStateManager(tmux_orchestrator_path)
-        self.scheduler_db = self.tmux_orchestrator_path / 'scheduler.db'
+        self.scheduler_db = self.tmux_orchestrator_path / 'task_queue.db'
         
         # Thresholds for intervention
         self.stuck_threshold_hours = 2  # Project considered stuck after 2 hours
@@ -37,7 +37,7 @@ class CheckinMonitor:
         self.emergency_strategy = 'hybrid'  # 'one-time', 'recurring', 'hybrid'
         self.emergency_intervals = [0, 30, 60]  # Minutes: immediate, then 30min, then 60min
         self.max_emergencies = 3  # Max number of emergency attempts
-        self.recovery_signals_required = 2  # Min signals needed to confirm recovery
+        self.recovery_signals_required = 1  # Min signals needed to confirm recovery (reduced for faster backing off)
         self.emergency_tracker = {}  # Track per-session emergency count and last sent time
         
     def get_active_sessions(self) -> List[str]:
@@ -64,19 +64,28 @@ class CheckinMonitor:
             
             # Get all tasks for this session
             cursor.execute("""
-                SELECT id, role, window, next_run, interval_minutes, note
+                SELECT id, agent_role, window_index, next_run, interval_minutes, note
                 FROM tasks
-                WHERE session = ?
+                WHERE session_name = ?
                 ORDER BY next_run
             """, (session_name,))
             
             tasks = []
             for row in cursor.fetchall():
+                # Handle timestamp format - could be epoch or ISO format
+                try:
+                    if isinstance(row[3], (int, float)):
+                        next_run = datetime.fromtimestamp(row[3])
+                    else:
+                        next_run = datetime.fromisoformat(row[3])
+                except:
+                    next_run = datetime.now()
+                
                 tasks.append({
                     'id': row[0],
                     'role': row[1],
                     'window': row[2],
-                    'next_run': datetime.fromisoformat(row[3]),
+                    'next_run': next_run,
                     'interval': row[4],
                     'note': row[5]
                 })
@@ -249,23 +258,60 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
         signals = []
         
         try:
-            # Signal 1: Recent scheduled check-ins
+            # Signal 1: Recent scheduled check-ins (non-emergency)
             checkins = self.get_scheduled_checkins(session_name)
-            if checkins:
-                next_checkin = min(checkins, key=lambda x: x['next_run'])
+            normal_checkins = [c for c in checkins if 'EMERGENCY' not in c.get('note', '')]
+            if normal_checkins:
+                next_checkin = min(normal_checkins, key=lambda x: x['next_run'])
                 time_to_next = (next_checkin['next_run'] - datetime.now()).total_seconds() / 60
                 if time_to_next < self.checkin_warning_minutes:
                     signals.append('scheduled_checkins')
             
-            # Signal 2: Recent activity in orchestrator window
-            last_activity = self.get_last_activity(session_name, 0)
-            if last_activity and (datetime.now() - last_activity).total_seconds() < 900:  # 15 minutes
-                signals.append('recent_activity')
+            # Signal 2: Recent activity in ANY agent window (not just orchestrator)
+            try:
+                # Check orchestrator and a few key agent windows for activity
+                for window in [0, 1, 5]:  # orchestrator, PM, developer
+                    result = subprocess.run([
+                        'tmux', 'capture-pane', '-t', f'{session_name}:{window}', 
+                        '-p', '-S', '-10'
+                    ], capture_output=True, text=True)
+                    
+                    if result.returncode == 0 and result.stdout.strip():
+                        # Look for signs of recent AI activity
+                        output = result.stdout.lower()
+                        activity_indicators = [
+                            'human:', 'assistant:', '●', '✅', '🚨', 
+                            'analyzing', 'implementing', 'checking', 'working on',
+                            'i will', 'i\'ll', 'let me', 'starting', 'completed'
+                        ]
+                        if any(indicator in output for indicator in activity_indicators):
+                            signals.append('recent_activity')
+                            break
+            except:
+                pass
             
-            # Signal 3: Non-emergency check-ins scheduled recently
-            recent_checkins = [c for c in checkins if 'EMERGENCY' not in c.get('note', '')]
-            if recent_checkins:
-                signals.append('normal_checkins_scheduled')
+            # Signal 3: No emergency tasks currently scheduled
+            emergency_checkins = [c for c in checkins if 'EMERGENCY' in c.get('note', '')]
+            if not emergency_checkins:
+                signals.append('no_emergency_tasks')
+            
+            # Signal 4: Project might be completed (check for completion indicators)
+            try:
+                result = subprocess.run([
+                    'tmux', 'capture-pane', '-t', f'{session_name}:0', 
+                    '-p', '-S', '-20'
+                ], capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    output = result.stdout.lower()
+                    completion_indicators = [
+                        'project is complete', 'already complete', 'finished',
+                        'all done', 'completed successfully', 'project done'
+                    ]
+                    if any(indicator in output for indicator in completion_indicators):
+                        signals.append('project_completed')
+            except:
+                pass
             
         except Exception as e:
             logger.error(f"Error detecting recovery signals for {session_name}: {e}")
