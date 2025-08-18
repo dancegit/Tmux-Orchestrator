@@ -1021,8 +1021,108 @@ CLAUDE_EOF
             
         return True
         
+    def setup_single_agent_worktree(self, agent: AgentState, project_path: Path) -> bool:
+        """Create a worktree for a single agent if it doesn't exist"""
+        worktree_path = Path(agent.worktree_path)
+        
+        # Check if worktree already exists
+        if worktree_path.exists() and (worktree_path / '.git').exists():
+            console.print(f"[green]✓ Worktree already exists for {agent.role}[/green]")
+            return True
+        
+        console.print(f"[yellow]Creating missing worktree for {agent.role}...[/yellow]")
+        
+        # Ensure parent directory exists
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Use the same robust worktree creation strategies as setup_worktrees()
+        worktree_created = False
+        current_branch = "main"  # Default fallback
+        
+        # Get current branch
+        branch_result = subprocess.run([
+            'git', 'rev-parse', '--abbrev-ref', 'HEAD'
+        ], cwd=str(project_path), capture_output=True, text=True)
+        
+        if branch_result.returncode == 0:
+            current_branch = branch_result.stdout.strip()
+        
+        # Strategy 1: Try normal worktree with current branch
+        agent_branch = f"{current_branch}-{agent.role}"
+        result = subprocess.run([
+            'git', 'worktree', 'add', 
+            '-b', agent_branch,
+            str(worktree_path),
+            current_branch
+        ], cwd=str(project_path), capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            worktree_created = True
+        
+        # Strategy 2: Force with existing branch
+        if not worktree_created and "already exists" in result.stderr:
+            console.print(f"[yellow]Branch {agent_branch} exists, using force flag[/yellow]")
+            result = subprocess.run([
+                'git', 'worktree', 'add', '--force',
+                str(worktree_path),
+                agent_branch
+            ], cwd=str(project_path), capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                worktree_created = True
+        
+        # Strategy 3: Detached HEAD fallback
+        if not worktree_created:
+            console.print(f"[yellow]Creating detached worktree at HEAD[/yellow]")
+            
+            # Get current commit hash
+            commit_result = subprocess.run([
+                'git', 'rev-parse', 'HEAD'
+            ], cwd=str(project_path), capture_output=True, text=True)
+            
+            if commit_result.returncode == 0:
+                commit_hash = commit_result.stdout.strip()
+                result = subprocess.run([
+                    'git', 'worktree', 'add', 
+                    '--detach',
+                    str(worktree_path),
+                    commit_hash
+                ], cwd=str(project_path), capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    worktree_created = True
+        
+        if not worktree_created:
+            console.print(f"[red]Failed to create worktree for {agent.role}[/red]")
+            console.print(f"[red]Error: {result.stderr}[/red]")
+            return False
+        
+        # Copy .mcp.json if it exists
+        project_mcp = project_path / '.mcp.json'
+        if project_mcp.exists():
+            worktree_mcp = worktree_path / '.mcp.json'
+            try:
+                import shutil
+                shutil.copy2(project_mcp, worktree_mcp)
+                console.print(f"[green]✓ Copied .mcp.json to {agent.role}'s worktree[/green]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not copy .mcp.json to {agent.role}: {e}[/yellow]")
+        
+        # Setup MCP configuration
+        self.setup_mcp_for_worktree(worktree_path)
+        self.enable_mcp_servers_in_claude_config(worktree_path)
+        
+        console.print(f"[green]✓ Created worktree for {agent.role} at {worktree_path}[/green]")
+        return True
+
     def restart_agent(self, session_state: SessionState, agent: AgentState):
         """Restart a dead agent by recreating its window and briefing"""
+        # Ensure the agent has a valid worktree before proceeding
+        project_path = Path(session_state.project_path)
+        if not self.setup_single_agent_worktree(agent, project_path):
+            console.print(f"[red]Cannot restart {agent.role} - worktree creation failed[/red]")
+            return
+        
         # Kill the existing window if it exists
         subprocess.run([
             'tmux', 'kill-window', '-t', f'{session_state.session_name}:{agent.window_index}'
