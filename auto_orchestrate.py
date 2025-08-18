@@ -6,6 +6,7 @@
 #     "rich",
 #     "pydantic",
 #     "pyyaml",
+#     "python-dotenv",
 # ]
 # ///
 
