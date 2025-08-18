@@ -3,6 +3,8 @@
 # Usage: ./schedule_with_note.sh <minutes> "<note>" [target_window]
 #
 # This script now uses the Python-based scheduler for reliability
+# target_window can be "session:window_index" (backward-compatible) or "session:role" (e.g., "tmux-orc:developer")
+# Roles are resolved dynamically from session state to prevent mismatches
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -38,26 +40,85 @@ else
     RUN_TIME=$(date -v +${MINUTES}M +"%H:%M:%S")
 fi
 
+# Parse target and resolve window/role dynamically
+SESSION=$(echo "$TARGET" | cut -d: -f1)
+TARGET_PART=$(echo "$TARGET" | cut -d: -f2)
+
+# Assume role and window are unknown initially
+WINDOW=""
+ROLE=""
+
+# If target_part looks like a number, treat as window and infer role from state
+if [[ "$TARGET_PART" =~ ^[0-9]+$ ]]; then
+    WINDOW="$TARGET_PART"
+    # Infer role from session state (replaces hardcoded inference)
+    ROLE=$(python3 -c "
+import sys; sys.path.append('$SCRIPT_DIR');
+from pathlib import Path;
+from session_state import SessionStateManager;
+import json
+mgr = SessionStateManager(Path('$SCRIPT_DIR'));
+# Try to find the session state file by searching for session name
+registry_dir = Path('$SCRIPT_DIR') / 'registry' / 'projects'
+for proj_dir in registry_dir.iterdir():
+    if proj_dir.is_dir():
+        state_file = proj_dir / 'session_state.json'
+        if state_file.exists():
+            try:
+                data = json.loads(state_file.read_text())
+                if data.get('session_name') == '$SESSION':
+                    for r, agent in data.get('agents', {}).items():
+                        if agent.get('window_index') == $WINDOW:
+                            print(r)
+                            break
+                    break
+            except:
+                pass
+" 2>/dev/null)
+# Else, treat as role and resolve window from state
+else
+    ROLE="$TARGET_PART"
+    WINDOW=$(python3 -c "
+import sys; sys.path.append('$SCRIPT_DIR');
+from pathlib import Path;
+from session_state import SessionStateManager;
+import json
+mgr = SessionStateManager(Path('$SCRIPT_DIR'));
+# Try to find the session state file by searching for session name
+registry_dir = Path('$SCRIPT_DIR') / 'registry' / 'projects'
+for proj_dir in registry_dir.iterdir():
+    if proj_dir.is_dir():
+        state_file = proj_dir / 'session_state.json'
+        if state_file.exists():
+            try:
+                data = json.loads(state_file.read_text())
+                if data.get('session_name') == '$SESSION':
+                    agents = data.get('agents', {})
+                    # Try exact match first, then case-insensitive
+                    agent = agents.get('$ROLE') or agents.get('$ROLE'.lower())
+                    if agent:
+                        print(agent.get('window_index'))
+                    break
+            except:
+                pass
+" 2>/dev/null)
+fi
+
+# Fallback defaults if resolution fails
+if [ -z "$WINDOW" ]; then
+    WINDOW="0"  # Default to orchestrator window
+    echo "Warning: Could not resolve window for '$TARGET_PART' in '$SESSION'; defaulting to 0"
+fi
+if [ -z "$ROLE" ]; then
+    ROLE="orchestrator"
+    echo "Warning: Could not resolve role for window $WINDOW in '$SESSION'; defaulting to '$ROLE'"
+fi
+
 # Check if Python scheduler is available
 if [ -f "$SCRIPT_DIR/scheduler.py" ]; then
     # Use the new Python-based scheduler
-    # Parse the target to get session and window
-    SESSION=$(echo "$TARGET" | cut -d: -f1)
-    WINDOW=$(echo "$TARGET" | cut -d: -f2)
+    # Pass resolved ROLE and WINDOW (backward-compatible with existing --add args)
     
-    # Try to infer the agent role from the window name or use default
-    ROLE="orchestrator"
-    if [ "$WINDOW" -eq "1" ]; then
-        ROLE="project-manager"
-    elif [ "$WINDOW" -eq "2" ]; then
-        ROLE="developer"
-    elif [ "$WINDOW" -eq "3" ]; then
-        ROLE="tester"
-    elif [ "$WINDOW" -eq "4" ]; then
-        ROLE="testrunner"
-    fi
-    
-    # Add task to scheduler
     python3 "$SCRIPT_DIR/scheduler.py" --add "$SESSION" "$ROLE" "$WINDOW" "$MINUTES" "$NOTE"
     
     if [ $? -eq 0 ]; then
@@ -96,7 +157,10 @@ if [ "$LEGACY_MODE" = "1" ]; then
         CMD="cat '$NOTE_FILE'"
     fi
     
-    nohup bash -c "sleep $SECONDS && tmux send-keys -t $TARGET 'Time for orchestrator check! $CMD' && sleep 1 && tmux send-keys -t $TARGET Enter" > /dev/null 2>&1 &
+    # Use resolved WINDOW for target
+    RESOLVED_TARGET="$SESSION:$WINDOW"
+    
+    nohup bash -c "sleep $SECONDS && tmux send-keys -t $RESOLVED_TARGET 'Time for orchestrator check! $CMD' && sleep 1 && tmux send-keys -t $RESOLVED_TARGET Enter" > /dev/null 2>&1 &
     
     # Get the PID of the background process
     SCHEDULE_PID=$!
