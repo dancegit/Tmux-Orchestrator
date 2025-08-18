@@ -399,7 +399,7 @@ class AutoOrchestrator:
         # Create a prompt for Claude
         if supports_context_prime:
             # Include context priming in the same session
-            prompt = f"""/context-prime "Analyze the project at {self.project_path} to understand its structure, technologies, and conventions"
+            prompt = f"""/context-prime "first: run context prime like normal, then: Analyze the project at {self.project_path} to understand its structure, technologies, and conventions"
 
 After analyzing the project context above, now analyze the following specification and create a detailed implementation plan in JSON format."""
         else:
@@ -1853,7 +1853,7 @@ This file is automatically read by Claude Code when working in this directory.
             
             if role_key != 'orchestrator' and context_prime_file.exists():
                 send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
-                context_prime_msg = f'/context-prime "You are about to work on {spec.project.name} at {spec.project.path}. Understand the project structure, dependencies, and conventions."'
+                context_prime_msg = f'/context-prime "first: run context prime like normal, then: You are about to work on {spec.project.name} at {spec.project.path}. Understand the project structure, dependencies, and conventions."'
                 try:
                     subprocess.run([
                         str(send_script),
