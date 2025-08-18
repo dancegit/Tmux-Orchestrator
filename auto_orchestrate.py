@@ -1478,7 +1478,14 @@ Please provide a brief status update on your current work and any blockers."""
         # Display worktree summary
         console.print("\n[green]✓ Git worktrees created:[/green]")
         for role, path in worktree_paths.items():
-            console.print(f"  {role}: {path.relative_to(self.tmux_orchestrator_path)}")
+            # Show path relative to project parent directory for external worktrees
+            try:
+                # Try to show relative to project parent for cleaner display
+                relative_path = path.relative_to(self.project_path.parent)
+                console.print(f"  {role}: {relative_path}")
+            except ValueError:
+                # If that fails, just show the absolute path
+                console.print(f"  {role}: {path}")
         
         # Setup fast lane coordination for eligible roles
         # Pass the actual directory name (with UUID if using unique registry)
