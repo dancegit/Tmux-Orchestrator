@@ -667,7 +667,9 @@ CLAUDE_EOF
             if team_size >= 5 and self.plan_type == 'max5':
                 console.print(f"[red]Consider using fewer agents or upgrading to max20 plan for extended sessions[/red]")
         
-        return Confirm.ask("\n[bold]Proceed with automated setup?[/bold]", default=False)
+        # Auto-approve setup - no manual confirmation needed
+        console.print("\n[green]✓ Proceeding with automated setup...[/green]")
+        return True
     
     def get_plan_constraints(self) -> int:
         """Get maximum recommended team size based on subscription plan
@@ -1074,10 +1076,10 @@ Please provide a brief status update on your current work and any blockers."""
         
         # Create worktrees directory
         # Use unique registry directory if available
+        project_name = self.sanitize_project_name(spec.project.name)
         if self.unique_registry_dir:
             worktrees_base = self.unique_registry_dir / 'worktrees'
         else:
-            project_name = self.sanitize_project_name(spec.project.name)
             worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
         worktrees_base.mkdir(parents=True, exist_ok=True)
         
@@ -3791,10 +3793,10 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='Check status of existing session without making changes')
 @click.option('--rebrief-all', is_flag=True,
               help='When resuming, re-brief all agents with context')
-@click.option('--list', '-l', is_flag=True,
+@click.option('--list', '-l', 'list_orchestrations', is_flag=True,
               help='List all active orchestrations')
 def main(project: str, spec: str, size: str, team_type: str, roles: tuple, force: bool, plan: str, 
-         resume: bool, status_only: bool, rebrief_all: bool, list: bool):
+         resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
@@ -3812,7 +3814,7 @@ def main(project: str, spec: str, size: str, team_type: str, roles: tuple, force
     with --roles (e.g., --roles documentation_writer)
     """
     # Handle list option first
-    if list:
+    if list_orchestrations:
         # Create a temporary manager to list orchestrations
         tmux_orchestrator_path = Path(__file__).parent
         manager = ConcurrentOrchestrationManager(tmux_orchestrator_path)
