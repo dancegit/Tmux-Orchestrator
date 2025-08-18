@@ -21,8 +21,12 @@ fi
 
 echo "Setting up fast lane hooks for project: $PROJECT_NAME"
 
+# Extended list of roles that benefit from fast-lane coordination
+# Now includes system operations and other technical roles
+FAST_LANE_ROLES="developer tester testrunner devops sysadmin securityops networkops databaseops researcher code_reviewer project_manager"
+
 # Install post-commit hooks in relevant worktrees
-for worktree in developer tester testrunner; do
+for worktree in $FAST_LANE_ROLES; do
     WORKTREE_PATH="$WORKTREES_DIR/$worktree"
     if [[ -d "$WORKTREE_PATH" ]]; then
         # Handle worktree git directory structure
@@ -55,10 +59,16 @@ echo ""
 echo "🚀 Fast Lane Setup Complete!"
 echo ""
 echo "Features enabled:"
-echo "- Post-commit triggers for Developer → Tester → TestRunner"
+echo "- Post-commit triggers for ALL technical roles"
+echo "- PM-enhanced coordination for teams without Developer-Tester pairs"
 echo "- Automatic merge notifications via scm"
 echo "- Conflict escalation to PM"
 echo "- Activity logging to registry/logs/fast-lane/"
+echo ""
+echo "Coordination modes:"
+echo "- Traditional: Developer → Tester → TestRunner (if present)"
+echo "- PM-Hub: PM coordinates all technical roles (15-min cycles)"
+echo "- Extended: SysAdmin ↔ SecurityOps ↔ NetworkOps (for deployments)"
 echo ""
 echo "Agents can now use: ./scripts/fast_lane_sync.sh"
 echo "PM can disable with: export DISABLE_FAST_LANE=true"
