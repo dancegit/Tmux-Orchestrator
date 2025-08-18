@@ -32,7 +32,13 @@ class CheckinMonitor:
         # Thresholds for intervention
         self.stuck_threshold_hours = 2  # Project considered stuck after 2 hours
         self.checkin_warning_minutes = 45  # Warning if no check-in scheduled within 45 min
-        self.emergency_checkin_interval = 10  # Emergency check-in every 10 minutes
+        
+        # Emergency check-in strategy
+        self.emergency_strategy = 'hybrid'  # 'one-time', 'recurring', 'hybrid'
+        self.emergency_intervals = [0, 30, 60]  # Minutes: immediate, then 30min, then 60min
+        self.max_emergencies = 3  # Max number of emergency attempts
+        self.recovery_signals_required = 2  # Min signals needed to confirm recovery
+        self.emergency_tracker = {}  # Track per-session emergency count and last sent time
         
     def get_active_sessions(self) -> List[str]:
         """Get list of active tmux sessions"""
@@ -143,17 +149,32 @@ class CheckinMonitor:
                 health['issues'].append(f"{role} agent is not alive")
                 health['recommendations'].append(f"Restart {role} agent")
         
+        # Check for recovery if emergency was previously sent
+        if session_name in self.emergency_tracker:
+            recovery_signals = self.detect_recovery_signals(session_name)
+            if len(recovery_signals) >= self.recovery_signals_required:
+                health['status'] = 'recovered'
+                health['recovery_signals'] = recovery_signals
+                self.handle_recovery(session_name)
+            else:
+                health['recovery_signals'] = recovery_signals
+        
         return health
     
-    def schedule_emergency_checkin(self, session_name: str, window: int, role: str):
-        """Schedule an emergency check-in"""
-        logger.info(f"Scheduling emergency check-in for {session_name}:{window} ({role})")
+    def schedule_emergency_checkin(self, session_name: str, window: int, role: str, interval: int = None):
+        """Schedule an emergency check-in with dynamic interval"""
+        if interval is None:
+            # Get the appropriate interval based on emergency level
+            level = self.emergency_tracker.get(session_name, {}).get('count', 0)
+            interval = self.emergency_intervals[min(level, len(self.emergency_intervals) - 1)]
+        
+        logger.info(f"Scheduling emergency check-in for {session_name}:{window} ({role}) in {interval} minutes")
         
         # Use the schedule_with_note.sh script
         cmd = [
             str(self.tmux_orchestrator_path / 'schedule_with_note.sh'),
-            str(self.emergency_checkin_interval),
-            f"EMERGENCY CHECK-IN: Project may be stuck. Please report status immediately.",
+            str(interval),
+            f"EMERGENCY CHECK-IN (Level {self.emergency_tracker.get(session_name, {}).get('count', 0) + 1}): Project may be stuck. Please report status immediately.",
             f"{session_name}:{window}"
         ]
         
@@ -202,6 +223,96 @@ cd {self.tmux_orchestrator_path} && python3 claude_control.py status detailed"""
             except Exception as e:
                 logger.error(f"Error sending forced check-in: {e}")
     
+    def detect_recovery_signals(self, session_name: str) -> List[str]:
+        """Detect signals that indicate project has recovered"""
+        signals = []
+        
+        try:
+            # Signal 1: Recent scheduled check-ins
+            checkins = self.get_scheduled_checkins(session_name)
+            if checkins:
+                next_checkin = min(checkins, key=lambda x: x['next_run'])
+                time_to_next = (next_checkin['next_run'] - datetime.now()).total_seconds() / 60
+                if time_to_next < self.checkin_warning_minutes:
+                    signals.append('scheduled_checkins')
+            
+            # Signal 2: Recent activity in orchestrator window
+            last_activity = self.get_last_activity(session_name, 0)
+            if last_activity and (datetime.now() - last_activity).total_seconds() < 900:  # 15 minutes
+                signals.append('recent_activity')
+            
+            # Signal 3: Non-emergency check-ins scheduled recently
+            recent_checkins = [c for c in checkins if 'EMERGENCY' not in c.get('note', '')]
+            if recent_checkins:
+                signals.append('normal_checkins_scheduled')
+            
+        except Exception as e:
+            logger.error(f"Error detecting recovery signals for {session_name}: {e}")
+        
+        return signals
+    
+    def handle_recovery(self, session_name: str):
+        """Handle recovery - cancel emergencies and clean up tracking"""
+        logger.info(f"Project {session_name} has recovered! Cancelling emergency interventions.")
+        
+        # Remove from emergency tracker
+        if session_name in self.emergency_tracker:
+            del self.emergency_tracker[session_name]
+        
+        # TODO: Cancel pending emergency tasks in scheduler (would need scheduler.py enhancement)
+        # For now, we rely on the fact that new check-ins indicate recovery
+    
+    def handle_stuck_project(self, session_name: str, state: SessionState, health: Dict):
+        """Handle stuck project with intelligent escalation"""
+        if health['status'] not in ['warning', 'critical']:
+            return
+        
+        # Initialize tracking if needed
+        if session_name not in self.emergency_tracker:
+            self.emergency_tracker[session_name] = {
+                'count': 0,
+                'last_sent': None,
+                'first_detected': datetime.now().isoformat()
+            }
+        
+        tracker = self.emergency_tracker[session_name]
+        
+        # Check if we've exceeded max emergencies
+        if tracker['count'] >= self.max_emergencies:
+            logger.warning(f"Project {session_name} unresponsive after {self.max_emergencies} emergency attempts")
+            # TODO: Escalate to email notification or mark as failed
+            return
+        
+        # Determine if it's time for next emergency level
+        level = tracker['count']
+        interval = self.emergency_intervals[min(level, len(self.emergency_intervals) - 1)]
+        
+        # For immediate (level 0), send right away
+        # For others, check if enough time has passed since last emergency
+        should_send = False
+        if level == 0:
+            should_send = True
+        elif tracker['last_sent']:
+            last_sent = datetime.fromisoformat(tracker['last_sent'])
+            minutes_since = (datetime.now() - last_sent).total_seconds() / 60
+            # Send next level if it's been long enough
+            if minutes_since >= self.emergency_intervals[level - 1]:
+                should_send = True
+        
+        if should_send:
+            logger.warning(f"Initiating emergency level {level + 1} for {session_name}")
+            
+            if level == 0:
+                # First intervention: immediate wake-up message
+                self.force_immediate_checkin(session_name, 0, 'orchestrator')
+            else:
+                # Subsequent interventions: schedule future check-ins
+                self.schedule_emergency_checkin(session_name, 0, 'orchestrator', interval)
+            
+            # Update tracking
+            tracker['count'] += 1
+            tracker['last_sent'] = datetime.now().isoformat()
+    
     def monitor_all_projects(self):
         """Monitor all active projects and intervene as needed"""
         logger.info("Starting project health check...")
@@ -241,22 +352,11 @@ cd {self.tmux_orchestrator_path} && python3 claude_control.py status detailed"""
                     logger.warning(f"Issues: {health['issues']}")
                     logger.info(f"Recommendations: {health['recommendations']}")
                 
-                # Take action if needed
-                if health['status'] == 'critical':
-                    interventions_needed.append((session, state, health))
-        
-        # Perform interventions
-        for session, state, health in interventions_needed:
-            logger.warning(f"\nPerforming intervention for {session}")
-            
-            # First, check if orchestrator is responsive
-            orchestrator_window = 0
-            self.force_immediate_checkin(session, orchestrator_window, 'orchestrator')
-            
-            # Schedule emergency check-ins for all agents
-            for role, agent in state.agents.items():
-                if hasattr(agent, 'window_index'):
-                    self.schedule_emergency_checkin(session, agent.window_index, role)
+                # Handle stuck projects intelligently
+                if health['status'] in ['warning', 'critical']:
+                    self.handle_stuck_project(session, state, health)
+                    if health['status'] == 'critical':
+                        interventions_needed.append(session)
         
         return len(interventions_needed)
     
