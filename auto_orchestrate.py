@@ -47,6 +47,18 @@ from dynamic_team import DynamicTeamComposer
 
 console = Console()
 
+def find_git_root(start_path: Path) -> Optional[Path]:
+    """Find the nearest parent directory containing a .git folder"""
+    current = start_path.resolve()
+    max_depth = 10  # Prevent infinite traversal in deep hierarchies
+    depth = 0
+    while current != current.parent and depth < max_depth:
+        if (current / '.git').exists():
+            return current
+        current = current.parent
+        depth += 1
+    return None  # No git root found
+
 # Pydantic models for structured data
 class Phase(BaseModel):
     name: str
@@ -90,8 +102,19 @@ class ImplementationSpec(BaseModel):
 
 class AutoOrchestrator:
     def __init__(self, project_path: str, spec_path: str):
-        self.project_path = Path(project_path).resolve()
         self.spec_path = Path(spec_path).resolve()
+        
+        # Auto-detect project path if not provided or set to 'auto'
+        if not project_path or project_path.lower() == 'auto':
+            detected = find_git_root(self.spec_path.parent)
+            if detected:
+                self.project_path = detected
+                console.print(f"[green]✓ Detected project root: {detected}[/green]")
+            else:
+                raise ValueError("No .git directory found in parent paths. Specify --project explicitly.")
+        else:
+            self.project_path = Path(project_path).resolve()
+            
         self.tmux_orchestrator_path = Path(__file__).parent
         self.implementation_spec: Optional[ImplementationSpec] = None
         self.manual_size: Optional[str] = None
@@ -3954,10 +3977,12 @@ Remember: Context management is automatic - focus on creating good checkpoints t
 
 
 @click.command()
-@click.option('--project', '-p', required=True, type=click.Path(exists=True), 
-              help='Path to the GitHub project')
-@click.option('--spec', '-s', type=click.Path(exists=True),
-              help='Path to the specification markdown file (required unless using --resume)')
+@click.option('--project', '-p', type=str, default=None,
+              help='Path to the GitHub project (use "auto" for automatic detection)')
+@click.option('--spec', '-s', type=str, multiple=True,
+              help='Path to specification file(s). Multiple specs will be queued for batch processing')
+@click.option('--batch', is_flag=True, default=False, 
+              help='Force batch mode even for single spec')
 @click.option('--size', type=click.Choice(['auto', 'small', 'medium', 'large']), 
               default='auto', help='Project size (auto-detect by default)')
 @click.option('--team-type', type=click.Choice(['auto', 'code_project', 'system_deployment', 'data_pipeline', 'infrastructure_as_code']),
@@ -3976,7 +4001,7 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='When resuming, re-brief all agents with context')
 @click.option('--list', '-l', 'list_orchestrations', is_flag=True,
               help='List all active orchestrations')
-def main(project: str, spec: str, size: str, team_type: str, roles: tuple, force: bool, plan: str, 
+def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, team_type: str, roles: tuple, force: bool, plan: str, 
          resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
@@ -4030,14 +4055,49 @@ def main(project: str, spec: str, size: str, team_type: str, roles: tuple, force
         
         return
     
+    # Handle batch mode - enqueue multiple specs
+    if len(spec) > 1 or batch:
+        # Import scheduler
+        from scheduler import TmuxOrchestratorScheduler
+        
+        scheduler = TmuxOrchestratorScheduler()
+        
+        if not spec:
+            console.print("[red]Error: No spec files provided for batch mode[/red]")
+            return
+            
+        console.print(f"[cyan]Batch mode: Enqueuing {len(spec)} project(s)[/cyan]")
+        
+        for spec_path in spec:
+            # Validate spec exists
+            if not Path(spec_path).exists():
+                console.print(f"[red]Error: Spec file not found: {spec_path}[/red]")
+                continue
+                
+            project_id = scheduler.enqueue_project(spec_path, project)
+            console.print(f"[green]✓ Enqueued: {spec_path} (ID: {project_id})[/green]")
+        
+        console.print("\n[yellow]Projects enqueued for batch processing.[/yellow]")
+        console.print("[cyan]To start processing:[/cyan] uv run scheduler.py --queue-daemon")
+        console.print("[cyan]To view queue status:[/cyan] uv run scheduler.py --queue-list")
+        return
+    
+    # Single spec mode - require at least one spec for non-resume operations
+    if not resume and not spec:
+        console.print("[red]Error: --spec is required unless using --resume[/red]")
+        return
+    
     # Handle resume operation
     if resume:
         # For resume, we need to detect the project from the path
+        if not project:
+            console.print("[red]Error: --project is required when using --resume[/red]")
+            sys.exit(1)
         project_path = Path(project).resolve()
         project_name = project_path.name
         
         # Create orchestrator with dummy spec path for now
-        orchestrator = AutoOrchestrator(project, spec if spec else "dummy.md")
+        orchestrator = AutoOrchestrator(project, spec[0] if spec else "dummy.md")
         orchestrator.rebrief_all = rebrief_all
         orchestrator.team_type = team_type if team_type != 'auto' else None
         
@@ -4101,7 +4161,7 @@ def main(project: str, spec: str, size: str, team_type: str, roles: tuple, force
         console.print("[red]Error: --spec is required when not using --resume[/red]")
         sys.exit(1)
         
-    orchestrator = AutoOrchestrator(project, spec)
+    orchestrator = AutoOrchestrator(project or 'auto', spec[0])
     orchestrator.manual_size = size if size != 'auto' else None
     orchestrator.team_type = team_type if team_type != 'auto' else None
     orchestrator.additional_roles = list(roles) if roles else []
