@@ -881,11 +881,8 @@ CLAUDE_EOF
     
     def check_existing_worktrees(self, project_name: str, roles_to_deploy: List[Tuple[str, str]]) -> List[str]:
         """Check if worktrees already exist for this project"""
-        # Use unique registry directory if available
-        if self.unique_registry_dir:
-            worktrees_base = self.unique_registry_dir / 'worktrees'
-        else:
-            worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
+        # Use the new worktree location in the project repository
+        worktrees_base = self.get_worktrees_base_dir(project_name)
         existing_worktrees = []
         
         if worktrees_base.exists():
@@ -1274,14 +1271,13 @@ Please provide a brief status update on your current work and any blockers."""
             capture_output=True
         )
         
-        # Create worktrees directory
-        # Use unique registry directory if available
+        # Create external worktrees directory following Grok's best practices
+        # EXTERNAL LOCATION: Avoids nested worktree issues and git clean risks
         project_name = self.sanitize_project_name(spec.project.name)
-        if self.unique_registry_dir:
-            worktrees_base = self.unique_registry_dir / 'worktrees'
-        else:
-            worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
+        worktrees_base = self.get_worktrees_base_dir(project_name)
         worktrees_base.mkdir(parents=True, exist_ok=True)
+        
+        console.print(f"[cyan]Creating worktrees in external directory: {worktrees_base}[/cyan]")
         
         # Get current branch from project
         current_branch = self.get_current_git_branch()
@@ -1455,6 +1451,9 @@ Please provide a brief status update on your current work and any blockers."""
                     
                 worktree_paths[role_key] = worktree_path
                 
+                # Apply Grok's safety recommendations: lock worktree
+                self.setup_worktree_safety(worktree_path)
+                
                 # Copy .mcp.json file if it exists in the project
                 project_mcp = self.project_path / '.mcp.json'
                 if project_mcp.exists():
@@ -1530,11 +1529,8 @@ Please provide a brief status update on your current work and any blockers."""
     
     def cleanup_worktrees(self, project_name: str):
         """Clean up worktrees and any agent-specific branches"""
-        # Use unique registry directory if available
-        if self.unique_registry_dir:
-            worktrees_base = self.unique_registry_dir / 'worktrees'
-        else:
-            worktrees_base = self.tmux_orchestrator_path / 'registry' / 'projects' / project_name / 'worktrees'
+        # Use the new worktree location in the project repository
+        worktrees_base = self.get_worktrees_base_dir(project_name)
         if worktrees_base.exists():
             console.print("\n[yellow]Cleaning up worktrees...[/yellow]")
             # Remove all worktrees
@@ -1639,6 +1635,24 @@ This file is automatically read by Claude Code when working in this directory.
         # Remove leading/trailing hyphens
         sanitized = sanitized.strip('-')
         return sanitized
+    
+    def get_worktrees_base_dir(self, project_name: str) -> Path:
+        """Get the base directory for worktrees - EXTERNAL to project to avoid Git issues"""
+        # BEST PRACTICE: Following Grok's recommendation to place worktrees outside project
+        # This avoids nested worktree issues, git clean risks, and repository bloat
+        # Format: /path/to/project-name-worktrees/ (sibling to project directory)
+        project_dir_name = self.project_path.name
+        return self.project_path.parent / f"{project_dir_name}-tmux-worktrees"
+    
+    def setup_worktree_safety(self, worktree_path: Path):
+        """Configure worktree safety measures following Grok's recommendations"""
+        # Lock worktree to prevent accidental deletion from git worktree prune
+        try:
+            subprocess.run(['git', 'worktree', 'lock', str(worktree_path)], 
+                         cwd=str(self.project_path), capture_output=True, check=True)
+            console.print(f"[green]✓ Locked worktree {worktree_path.name} for safety[/green]")
+        except subprocess.CalledProcessError:
+            console.print(f"[yellow]⚠️  Could not lock worktree {worktree_path.name}[/yellow]")
     
     def setup_tmux_session(self, spec: ImplementationSpec):
         """Set up the tmux session with roles based on project size using git worktrees"""
