@@ -17,6 +17,7 @@ import logging
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, Any, Optional
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent))
@@ -58,6 +59,23 @@ class TmuxOrchestratorScheduler:
                 max_retries INTEGER DEFAULT 3
             )
         ''')
+        # New table for project queue
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS project_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                spec_path TEXT NOT NULL,
+                project_path TEXT,  -- Can be null if auto-detected
+                status TEXT DEFAULT 'queued',  -- queued, processing, completed, failed
+                enqueued_at REAL DEFAULT (strftime('%s', 'now')),
+                started_at REAL,
+                completed_at REAL,
+                priority INTEGER DEFAULT 0,  -- Higher = sooner
+                error_message TEXT
+            )
+        ''')
+        # Add indexes for performance
+        self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_status ON project_queue(status);')
+        self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_priority ON project_queue(priority, enqueued_at);')
         self.conn.commit()
         logger.info("Database initialized")
         
@@ -218,6 +236,83 @@ class TmuxOrchestratorScheduler:
         """, (cutoff,))
         self.conn.commit()
         
+    def enqueue_project(self, spec_path: str, project_path: Optional[str] = None, priority: int = 0):
+        """Enqueue a project for batch processing"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO project_queue (spec_path, project_path, priority)
+            VALUES (?, ?, ?)
+        """, (spec_path, project_path, priority))
+        self.conn.commit()
+        task_id = cursor.lastrowid
+        logger.info(f"Enqueued project {task_id} with spec {spec_path}")
+        return task_id
+
+    def get_next_project(self) -> Optional[Dict[str, Any]]:
+        """Get the next queued project, ordered by priority and enqueue time"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM project_queue
+            WHERE status = 'queued'
+            ORDER BY priority DESC, enqueued_at ASC
+            LIMIT 1
+        """)
+        row = cursor.fetchone()
+        if row:
+            return dict(zip([col[0] for col in cursor.description], row))
+        return None
+
+    def update_project_status(self, project_id: int, status: str, error_message: Optional[str] = None):
+        """Update the status of a queued project"""
+        now = time.time()
+        cursor = self.conn.cursor()
+        if status == 'processing':
+            cursor.execute("UPDATE project_queue SET status = ?, started_at = ? WHERE id = ?", (status, now, project_id))
+        elif status in ('completed', 'failed'):
+            cursor.execute("UPDATE project_queue SET status = ?, completed_at = ?, error_message = ? WHERE id = ?", (status, now, error_message, project_id))
+        else:
+            cursor.execute("UPDATE project_queue SET status = ? WHERE id = ?", (status, project_id))
+        self.conn.commit()
+        logger.info(f"Updated project {project_id} to status: {status}")
+    
+    def run_queue_daemon(self, poll_interval: int = 60):
+        """Daemon loop to process the project queue one at a time"""
+        logger.info("Starting project queue daemon")
+        # Import here to avoid circular dependency
+        from concurrent_orchestration import FileLock
+        
+        while True:
+            try:
+                with FileLock(str(self.tmux_orchestrator_path / 'locks' / 'project_queue.lock'), timeout=30):
+                    next_project = self.get_next_project()
+                    if next_project:
+                        self.update_project_status(next_project['id'], 'processing')
+                        try:
+                            # Prepare project_path arg ('auto' if None)
+                            proj_arg = next_project['project_path'] or 'auto'
+                            
+                            # Run auto_orchestrate.py as subprocess for the project
+                            cmd = [
+                                'uv', 'run', '--quiet', '--script',
+                                str(self.tmux_orchestrator_path / 'auto_orchestrate.py'),
+                                '--spec', next_project['spec_path'],
+                                '--project', proj_arg
+                            ]
+                            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                            self.update_project_status(next_project['id'], 'completed')
+                            logger.info(f"Completed project {next_project['id']}")
+                        except subprocess.CalledProcessError as e:
+                            error_msg = f"Subprocess failed: {e.stderr}"
+                            self.update_project_status(next_project['id'], 'failed', error_msg)
+                            logger.error(error_msg)
+                        except Exception as e:
+                            self.update_project_status(next_project['id'], 'failed', str(e))
+                            logger.error(f"Failed project {next_project['id']}: {e}")
+            except Exception as e:
+                logger.error(f"Daemon error: {e}")
+            
+            time.sleep(poll_interval)  # Poll interval
+        
     def run(self):
         """Main scheduler loop"""
         logger.info("Starting Tmux Orchestrator Scheduler")
@@ -260,6 +355,12 @@ def main():
     parser.add_argument('--list', action='store_true', help='List all tasks')
     parser.add_argument('--remove', type=int, metavar='ID', help='Remove a task')
     
+    # Project queue management
+    parser.add_argument('--queue-daemon', action='store_true', help='Start project queue daemon')
+    parser.add_argument('--queue-add', nargs=2, metavar=('SPEC', 'PROJECT'), help='Add project to queue')
+    parser.add_argument('--queue-list', action='store_true', help='List queued projects')
+    parser.add_argument('--queue-status', type=int, metavar='ID', help='Get status of project')
+    
     args = parser.parse_args()
     
     scheduler = TmuxOrchestratorScheduler()
@@ -282,6 +383,34 @@ def main():
     elif args.remove:
         scheduler.remove_task(args.remove)
         print(f"Task {args.remove} removed")
+    elif args.queue_daemon:
+        print("Starting project queue daemon...")
+        scheduler.run_queue_daemon()
+    elif args.queue_add:
+        spec_path, project_path = args.queue_add
+        project_id = scheduler.enqueue_project(spec_path, project_path if project_path != 'auto' else None)
+        print(f"Project {project_id} added to queue")
+    elif args.queue_list:
+        cursor = scheduler.conn.cursor()
+        cursor.execute("SELECT * FROM project_queue ORDER BY priority DESC, enqueued_at ASC")
+        projects = cursor.fetchall()
+        if projects:
+            print("ID | Spec | Project | Status | Priority | Enqueued At | Error")
+            print("-" * 80)
+            for proj in projects:
+                print(" | ".join(str(p) if p is not None else "-" for p in proj))
+        else:
+            print("No queued projects")
+    elif args.queue_status:
+        cursor = scheduler.conn.cursor()
+        cursor.execute("SELECT * FROM project_queue WHERE id = ?", (args.queue_status,))
+        project = cursor.fetchone()
+        if project:
+            columns = [col[0] for col in cursor.description]
+            for col, val in zip(columns, project):
+                print(f"{col}: {val}")
+        else:
+            print(f"Project {args.queue_status} not found")
     else:
         parser.print_help()
 
