@@ -14,6 +14,11 @@
             "date": 1755432209492,
             "name": "/home/clauderun/Tmux-Orchestrator/logs/mcp-puppeteer-2025-08-17.log",
             "hash": "dd5fee9bf5a4166a7c40c3b47ba866a1eff836ba4acbe9c606d1037fdc9f796b"
+        },
+        {
+            "date": 1755512451326,
+            "name": "/home/clauderun/Tmux-Orchestrator/logs/mcp-puppeteer-2025-08-18.log",
+            "hash": "f431932387402cff09fc28244c30b234456970fd4bc7f594c0b794b1a1814378"
         }
     ],
     "hashType": "sha256"
