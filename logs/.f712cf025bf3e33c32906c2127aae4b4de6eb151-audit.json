@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/home/per/gitrepos/Tmux-Orchestrator/logs/.f712cf025bf3e33c32906c2127aae4b4de6eb151-audit.json",
+    "files": [
+        {
+            "date": 1755511600243,
+            "name": "/home/per/gitrepos/Tmux-Orchestrator/logs/mcp-puppeteer-2025-08-18.log",
+            "hash": "874415729011ab21dcb9d2a2d2bca4e8829134fde4a7ae0f2703221822906b63"
+        }
+    ],
+    "hashType": "sha256"
+}

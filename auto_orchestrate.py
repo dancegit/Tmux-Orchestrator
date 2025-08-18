@@ -953,10 +953,17 @@ CLAUDE_EOF
                 agent.role, worktree_path
             )
             
+            # No additional wait needed - pre_initialize_claude_in_worktree now waits 10 seconds total
+            # for OAuth server cleanup to avoid port conflicts
+            
             # Kill and recreate window after MCP approval
             subprocess.run([
                 'tmux', 'kill-window', '-t', f'{session_state.session_name}:{agent.window_index}'
             ], capture_output=True)
+            
+            # Wait for OAuth port to be released after killing the window
+            oauth_port = int(os.environ.get('CLAUDE_OAUTH_PORT', '3000'))
+            self.wait_for_port_free(oauth_port, max_wait=10)
             
             subprocess.run([
                 'tmux', 'new-window', '-t', f'{session_state.session_name}:{agent.window_index}',
@@ -1530,16 +1537,17 @@ This file is automatically read by Claude Code when working in this directory.
                 # Pre-initialize Claude to approve MCP servers
                 self.pre_initialize_claude_in_worktree(session_name, window_idx, role_key, worktree_path)
                 
-                # Wait a bit longer to ensure /exit has completed
-                time.sleep(2)
+                # No additional wait needed - pre_initialize_claude_in_worktree now waits 10 seconds total
+                # for OAuth server cleanup
                 
                 # Kill the window (since it only has one pane)
                 kill_result = subprocess.run([
                     'tmux', 'kill-window', '-t', f'{session_name}:{window_idx}'
                 ], capture_output=True)
                 
-                # Wait to ensure window is fully killed
-                time.sleep(1)
+                # Wait for OAuth port to be released after killing the window
+                oauth_port = int(os.environ.get('CLAUDE_OAUTH_PORT', '3000'))
+                self.wait_for_port_free(oauth_port, max_wait=10)
                 
                 # Create a new window at the same index
                 # Using -a flag to insert at specific index
@@ -3526,6 +3534,50 @@ If confused, read in order:
 
 Remember: Context management is automatic - focus on creating good checkpoints to track progress!"""
 
+    def is_port_free(self, port: int = 3000) -> bool:
+        """Check if TCP port is free (works on Linux/macOS)."""
+        try:
+            # Try lsof first (most reliable)
+            result = subprocess.run(['lsof', '-i', f'TCP:{port}'], 
+                                  capture_output=True, text=True, timeout=2)
+            return not result.stdout.strip()  # Empty output means port is free
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            try:
+                # Fallback to ss for Linux systems without lsof
+                result = subprocess.run(['ss', '-tuln'], 
+                                      capture_output=True, text=True, timeout=2)
+                return f":{port}" not in result.stdout
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                try:
+                    # Final fallback to netstat
+                    result = subprocess.run(['netstat', '-an'], 
+                                          capture_output=True, text=True, timeout=2)
+                    return f":{port}" not in result.stdout
+                except Exception:
+                    # If all commands fail, assume port is free (optimistic)
+                    return True
+
+    def wait_for_port_free(self, port: int = 3000, max_wait: int = 60) -> bool:
+        """Wait for a port to become free with timeout."""
+        start_time = time.time()
+        last_check_time = 0
+        
+        while time.time() - start_time < max_wait:
+            if self.is_port_free(port):
+                if time.time() - start_time > 2:  # Only print if we actually waited
+                    console.print(f"[green]✓ OAuth port {port} is now free[/green]")
+                return True
+            
+            # Print status every 5 seconds
+            if time.time() - last_check_time > 5:
+                console.print(f"[yellow]Waiting for OAuth port {port} to free up... ({int(time.time() - start_time)}s)[/yellow]")
+                last_check_time = time.time()
+            
+            time.sleep(2)
+        
+        console.print(f"[red]Warning: OAuth port {port} did not become free after {max_wait}s[/red]")
+        return False
+
     def pre_initialize_claude_in_worktree(self, session_name: str, window_idx: int, role_key: str, worktree_path: Path):
         """Pre-initialize Claude to auto-approve MCP servers"""
         
@@ -3569,8 +3621,8 @@ Remember: Context management is automatic - focus on creating good checkpoints t
             '/exit', 'Enter'
         ])
         
-        # Wait longer for Claude to fully exit
-        time.sleep(3)
+        # Initial wait for Claude to process the exit command
+        time.sleep(2)
         
         # Send additional Enter in case there's a confirmation prompt
         subprocess.run([
@@ -3578,8 +3630,12 @@ Remember: Context management is automatic - focus on creating good checkpoints t
             'Enter'
         ])
         
-        # Wait a bit more
-        time.sleep(1)
+        # Wait for OAuth server port to be released
+        # Use adaptive polling instead of fixed wait times
+        oauth_port = int(os.environ.get('CLAUDE_OAUTH_PORT', '3000'))
+        if not self.wait_for_port_free(oauth_port, max_wait=30):
+            console.print(f"[yellow]Warning: OAuth port {oauth_port} may still be in use[/yellow]")
+            # Continue anyway - the port might be used by something else
         
         # Don't print completion since we'll kill the pane
         return True
