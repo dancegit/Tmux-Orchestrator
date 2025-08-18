@@ -578,6 +578,32 @@ CLAUDE_EOF
                 # Clean up temp file
                 os.unlink(prompt_file)
     
+    def _analyze_tasks_for_dev(self) -> bool:
+        """
+        Analyzes all tasks in the implementation plan to detect if development (coding) is needed.
+        Uses keyword/regex matching for indicators like file creation, implementation, or testing.
+        """
+        if not self.implementation_spec:
+            return False
+            
+        dev_indicators = [
+            r'implement', r'create.*\.py', r'write.*(test|code)', r'integrate', r'develop', r'build',
+            r'coding', r'function', r'class', r'module', r'api', r'endpoint'
+        ]
+        pattern = re.compile('|'.join(dev_indicators), re.IGNORECASE)
+        
+        # Check all tasks in all phases
+        for phase in self.implementation_spec.implementation_plan.phases:
+            for task in phase.tasks:
+                if pattern.search(task):
+                    return True
+        
+        # Also check project type
+        if self.implementation_spec.project.type in ['python', 'javascript', 'go', 'java']:
+            return True
+            
+        return False
+    
     def display_implementation_plan(self, spec: ImplementationSpec) -> bool:
         """Display the implementation plan and get user approval"""
         
@@ -657,6 +683,10 @@ CLAUDE_EOF
         roles_to_deploy = self.get_roles_for_project_size(spec)
         console.print(f"\n[bold]Roles to be deployed:[/bold] {', '.join([r[0] for r in roles_to_deploy])}")
         
+        # Show if development was detected
+        if self._analyze_tasks_for_dev():
+            console.print("[green]✓ Development tasks detected - Developer and Tester roles enforced[/green]")
+        
         # Token usage warning
         team_size = len(roles_to_deploy)
         if team_size >= 4:
@@ -731,6 +761,20 @@ CLAUDE_EOF
                         selected_roles.append(role_mapping[role_lower])
                 else:
                     console.print(f"[yellow]Warning: Unknown role '{role}' - skipping[/yellow]")
+            
+            # CRITICAL FIX: Even with custom roles, ensure Developer/Tester if coding detected
+            needs_dev = self._analyze_tasks_for_dev()
+            if needs_dev:
+                has_developer = any(role[1] == 'developer' for role in selected_roles)
+                has_tester = any(role[1] == 'tester' for role in selected_roles)
+                
+                if not has_developer:
+                    selected_roles.append(role_mapping['developer'])
+                    console.print(f"[yellow]⚠️  Detected coding tasks - Adding Developer role (required)[/yellow]")
+                
+                if not has_tester:
+                    selected_roles.append(role_mapping['tester'])
+                    console.print(f"[yellow]⚠️  Detected coding tasks - Adding Tester role (required)[/yellow]")
         else:
             # Use dynamic team composition
             console.print(f"\n[bold]Analyzing project for optimal team composition...[/bold]")
@@ -762,6 +806,21 @@ CLAUDE_EOF
             for role in roles_to_use:
                 if role in role_mapping:
                     selected_roles.append(role_mapping[role])
+        
+        # CRITICAL FIX: Detect if development is needed and enforce core roles
+        needs_dev = self._analyze_tasks_for_dev()
+        if needs_dev:
+            # Check if Developer and Tester are already in the team
+            has_developer = any(role[1] == 'developer' for role in selected_roles)
+            has_tester = any(role[1] == 'tester' for role in selected_roles)
+            
+            if not has_developer:
+                selected_roles.append(role_mapping['developer'])
+                console.print(f"[yellow]⚠️  Detected coding tasks - Adding Developer role (required)[/yellow]")
+            
+            if not has_tester:
+                selected_roles.append(role_mapping['tester'])
+                console.print(f"[yellow]⚠️  Detected coding tasks - Adding Tester role (required)[/yellow]")
         
         # Enforce plan constraints
         max_agents = self.get_plan_constraints()
