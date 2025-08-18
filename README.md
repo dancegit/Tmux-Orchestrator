@@ -167,6 +167,15 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # One command to go from spec to running AI team!
 ./auto_orchestrate.py --project /path/to/project --spec /path/to/spec.md
 
+# NEW: Automatic project detection - just provide the spec!
+./auto_orchestrate.py --spec /path/to/spec.md
+
+# NEW: Batch processing - queue multiple specs
+./auto_orchestrate.py --spec spec1.md --spec spec2.md --spec spec3.md
+
+# Start the queue daemon to process batched projects
+uv run scheduler.py --queue-daemon
+
 # Resume an interrupted orchestration
 ./auto_orchestrate.py --project /path/to/project --resume
 
@@ -227,6 +236,8 @@ Schedule yourself to check in every hour."
 ### 🚀 Auto-Orchestrate: Spec to Implementation
 The `auto_orchestrate.py` script provides fully automated setup:
 - **Zero Configuration**: Clone and run - automatic setup on first use
+- **Automatic Project Detection**: Finds git root automatically - just provide the spec file
+- **Batch Processing**: Queue multiple specs for sequential processing without conflicts
 - **Context-Aware**: Uses `/context-prime` to understand your project before planning
 - **Spec Analysis**: Claude analyzes your markdown specifications intelligently
 - **Dynamic Team Composition**: Automatically selects appropriate roles based on project type
@@ -446,7 +457,16 @@ echo "Current window: $(tmux display-message -p "#{session_name}:#{window_index}
 
 ### Multi-Project Orchestration
 ```bash
-# Start each project with its specification
+# NEW: Batch processing - queue all specs at once
+./auto_orchestrate.py --spec spec1.md --spec spec2.md --spec spec3.md
+
+# Start the queue daemon to process them sequentially
+uv run scheduler.py --queue-daemon
+
+# Check queue status
+uv run scheduler.py --queue-list
+
+# Or start each project individually (old method)
 ./auto_orchestrate.py --project ~/projects/project1 --spec spec1.md
 ./auto_orchestrate.py --project ~/projects/project2 --spec spec2.md
 ./auto_orchestrate.py --project ~/projects/project3 --spec spec3.md
@@ -475,6 +495,15 @@ The orchestrator can share insights between projects:
 ```bash
 # Basic usage - start a new project
 ./auto_orchestrate.py --project ~/projects/my-webapp --spec ~/specs/auth-system.md
+
+# NEW: Automatic project detection - no --project needed!
+./auto_orchestrate.py --spec ~/specs/auth-system.md
+
+# NEW: Batch processing multiple specs
+./auto_orchestrate.py --spec spec1.md --spec spec2.md --spec spec3.md
+
+# Force batch mode for single spec
+./auto_orchestrate.py --spec spec.md --batch
 
 # Resume after credit exhaustion
 ./auto_orchestrate.py --project ~/projects/my-webapp --resume
@@ -763,20 +792,31 @@ PROJECTS_DIR=~/my-projects ./setup.sh
 
 #### `scheduler.py` - Background Task Daemon
 ```bash
+# NEW: Project queue management
+# Start project queue daemon
+uv run scheduler.py --queue-daemon
+
+# Add project to queue
+uv run scheduler.py --queue-add spec.md /path/to/project
+
+# List queued projects
+uv run scheduler.py --queue-list
+
+# Check specific project status
+uv run scheduler.py --queue-status 1
+
+# Legacy task scheduling
 # Start scheduler daemon
-./scheduler.py start
+uv run scheduler.py --daemon
 
-# Stop scheduler
-./scheduler.py stop
+# Add a scheduled task
+uv run scheduler.py --add session-name developer 0 30 "Check-in message"
 
-# Check scheduler status
-./scheduler.py status
+# List all scheduled tasks
+uv run scheduler.py --list
 
-# Run in foreground for debugging
-./scheduler.py run --debug
-
-# Clear all pending tasks
-./scheduler.py clear --confirm
+# Remove a task
+uv run scheduler.py --remove 5
 ```
 
 #### `sync_coordinator.py` - Git Worktree Sync
@@ -879,9 +919,30 @@ EOF
 ./schedule_with_note.sh 310 "Resume after credit reset" "webapp-impl:0"
 ```
 
-### Workflow 4: Multi-Project Coordination
+### Workflow 4: Batch Processing Multiple Projects
 ```bash
-# 1. Start multiple projects (each with its own spec)
+# 1. Queue all project specs at once
+./auto_orchestrate.py \
+  --spec ~/specs/frontend-spec.md \
+  --spec ~/specs/backend-spec.md \
+  --spec ~/specs/mobile-spec.md
+
+# 2. Start the queue daemon (processes one at a time)
+uv run scheduler.py --queue-daemon &
+
+# 3. Monitor queue progress
+uv run scheduler.py --queue-list
+
+# 4. Check specific project status
+uv run scheduler.py --queue-status 2
+
+# 5. Monitor the currently processing project
+./monitoring_dashboard.py
+```
+
+### Workflow 5: Multi-Project Coordination (Legacy)
+```bash
+# 1. Start multiple projects individually
 ./auto_orchestrate.py --project ~/projects/frontend --spec frontend-spec.md
 ./auto_orchestrate.py --project ~/projects/backend --spec backend-spec.md
 ./auto_orchestrate.py --project ~/projects/mobile --spec mobile-spec.md
