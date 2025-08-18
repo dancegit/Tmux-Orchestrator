@@ -1948,11 +1948,52 @@ This means context exhaustion is NOT a crisis - it's a routine, self-managed eve
             dev_path = worktree_paths.get('developer', '/path/to/developer')
             test_path = worktree_paths.get('tester', '/path/to/tester')
             
+            # Check which technical roles are present for coordination
+            technical_roles_present = []
+            for _, role_key in (roles_deployed or []):
+                if role_key in ['developer', 'tester', 'testrunner', 'devops', 'sysadmin', 
+                               'securityops', 'networkops', 'databaseops', 'researcher', 'code_reviewer']:
+                    technical_roles_present.append(role_key)
+            
             return f"""{mandatory_reading}{context_note}{team_locations}You are the Project Manager for {spec.project.name}.
 {mcp_tools_info}
 
+🚨 **CRITICAL PM INTEGRATION RESPONSIBILITIES** 🚨
+As PM, you are the PRIMARY INTEGRATION HUB for the team:
+- **Every 15 minutes**: Check ALL agent branches for new commits
+- **Every 30 minutes**: Coordinate cross-agent merges
+- **Immediately**: Escalate any integration blockers to Orchestrator
+- **Proactively**: Notify agents of relevant changes from other agents
+
 Your responsibilities:
 {chr(10).join(f'- {r}' for r in role_config.responsibilities)}
+
+⚡ **RAPID INTEGRATION PROTOCOL** (Enhanced for all team configurations):
+Your team has: {', '.join(technical_roles_present) if technical_roles_present else 'limited technical roles'}
+You MUST actively coordinate ALL changes between agents:
+
+1. **15-Minute Integration Cycle**:
+   ```bash
+   # Check all agent branches for new work
+   git fetch --all
+   git log --oneline --graph --all --since="15 minutes ago"
+   
+   # If changes detected, immediately notify affected agents via Orchestrator
+   ```
+
+2. **Proactive Change Broadcasting**:
+   When ANY agent pushes changes:
+   - Identify which other agents need the changes
+   - Request Orchestrator to send merge instructions
+   - Track merge completion
+
+3. **Integration Branches Every 30 Minutes**:
+   ```bash
+   # Create integration branch
+   git checkout -b integration/$(date +%Y%m%d-%H%M)
+   # Merge all agent work in dependency order
+   # Push to origin for all agents to pull
+   ```
 
 🔍 **CODE REVIEW WORKFLOWS**:
 
@@ -3142,14 +3183,27 @@ Leverage these tools as appropriate for your role."""
     def setup_fast_lane_coordination(self, project_name: str, roles_to_deploy: List[Tuple[str, str]]):
         """Setup fast lane coordination for the project using the setup script"""
         
-        # Check if we have fast lane eligible roles (developer, tester, testrunner)
+        # Extended fast lane eligible roles - now includes more combinations
         fast_lane_roles = []
-        for window_name, role_key in roles_to_deploy:
-            if role_key in ['developer', 'tester', 'testrunner']:
-                fast_lane_roles.append(role_key)
+        technical_roles = []
+        has_pm = False
         
-        if len(fast_lane_roles) < 2:
-            console.print("[yellow]⚠️  Insufficient roles for fast lane (need developer+tester or tester+testrunner)[/yellow]")
+        for window_name, role_key in roles_to_deploy:
+            # Check for PM
+            if role_key == 'project_manager':
+                has_pm = True
+            # Extended list of roles that benefit from fast coordination
+            elif role_key in ['developer', 'tester', 'testrunner', 'devops', 'sysadmin', 
+                             'securityops', 'networkops', 'databaseops', 'researcher', 'code_reviewer']:
+                fast_lane_roles.append(role_key)
+                technical_roles.append(role_key)
+        
+        # If we have a PM but no traditional fast-lane roles, enable PM-based coordination
+        if has_pm and len(technical_roles) >= 1:
+            console.print("[cyan]🎯 Enabling PM-Enhanced Coordination for rapid integration[/cyan]")
+            # Continue with setup even without traditional fast-lane roles
+        elif len(fast_lane_roles) < 2:
+            console.print("[yellow]⚠️  Insufficient roles for fast lane (need 2+ technical roles or PM + 1 technical)[/yellow]")
             return
         
         # Run the fast lane setup script
@@ -3175,10 +3229,16 @@ Leverage these tools as appropriate for your role."""
                 for line in success_lines:
                     console.print(f"  {line}")
                 
-                # Show the benefits
+                # Show the benefits based on roles present
                 console.print("\n[cyan]Fast Lane Benefits:[/cyan]")
-                console.print("  • Developer → Tester sync: 5 minutes (was 45 min)")
-                console.print("  • Tester → TestRunner sync: 3 minutes (was 30 min)")
+                if 'developer' in fast_lane_roles and 'tester' in fast_lane_roles:
+                    console.print("  • Developer → Tester sync: 5 minutes (was 45 min)")
+                    console.print("  • Tester → TestRunner sync: 3 minutes (was 30 min)")
+                elif has_pm:
+                    console.print("  • PM-coordinated integration every 15 minutes")
+                    console.print("  • All technical roles synchronized via PM hub")
+                    console.print("  • Rapid change propagation across team")
+                
                 console.print("  • Event-driven triggers instead of polling")
                 console.print("  • Automatic conflict escalation to PM")
                 console.print("  • Full audit logging enabled")
