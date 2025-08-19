@@ -45,10 +45,19 @@ class TmuxOrchestratorScheduler:
         
         # Auto-subscribe default completion handler
         self.subscribe('task_complete', self._handle_task_completion)
+        self.subscribe('project_complete', self._on_project_complete)
         
         # Add authorization event types (for future use)
         self.event_subscribers.setdefault('authorization_request', [])
         self.event_subscribers.setdefault('authorization_response', [])
+        
+        # Start batch monitoring thread if enabled
+        self._monitoring_enabled = os.getenv('ENABLE_BATCH_MONITORING', 'true').lower() == 'true'
+        self._stop_monitoring = threading.Event()
+        if self._monitoring_enabled:
+            self.retry_thread = threading.Thread(target=self._monitor_batches, daemon=True)
+            self.retry_thread.start()
+            logger.info("Batch monitoring thread started")
         
     def setup_database(self):
         """Initialize SQLite database for persistent task storage"""
@@ -74,17 +83,35 @@ class TmuxOrchestratorScheduler:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 spec_path TEXT NOT NULL,
                 project_path TEXT,  -- Can be null if auto-detected
-                status TEXT DEFAULT 'queued',  -- queued, processing, completed, failed
+                status TEXT DEFAULT 'queued',  -- queued, processing, completed, failed, retried, permanently_failed, credit_paused
                 enqueued_at REAL DEFAULT (strftime('%s', 'now')),
                 started_at REAL,
                 completed_at REAL,
                 priority INTEGER DEFAULT 0,  -- Higher = sooner
-                error_message TEXT
+                error_message TEXT,
+                batch_id TEXT,  -- Groups related projects for batch processing
+                retry_count INTEGER DEFAULT 0,  -- Number of retry attempts
+                enhanced_spec_path TEXT,  -- Path to research-enhanced spec for retries
+                orchestrator_session TEXT,  -- Session running auto_orchestrate.py
+                main_session TEXT  -- Main project session created by orchestration
             )
         ''')
+        
+        # Add batch retry system columns to existing table
+        try:
+            self.conn.execute('ALTER TABLE project_queue ADD COLUMN batch_id TEXT;')
+            self.conn.execute('ALTER TABLE project_queue ADD COLUMN retry_count INTEGER DEFAULT 0;')
+            self.conn.execute('ALTER TABLE project_queue ADD COLUMN enhanced_spec_path TEXT;')
+            self.conn.execute('ALTER TABLE project_queue ADD COLUMN orchestrator_session TEXT;')
+            self.conn.execute('ALTER TABLE project_queue ADD COLUMN main_session TEXT;')
+        except sqlite3.OperationalError:
+            pass  # Columns already exist
+        
         # Add indexes for performance
         self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_status ON project_queue(status);')
         self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_priority ON project_queue(priority, enqueued_at);')
+        self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_batch ON project_queue(batch_id);')
+        self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_retry ON project_queue(retry_count);')
         self.conn.commit()
         logger.info("Database initialized")
         
@@ -494,6 +521,261 @@ class TmuxOrchestratorScheduler:
                 time.sleep(60)  # Wait a minute before retrying
                 
         self.conn.close()
+
+    # ========== BATCH RETRY SYSTEM METHODS ==========
+    
+    def enqueue_project(self, spec_path: str, project_path: str = None, batch_id: str = None, retry_count: int = 0):
+        """Add a project to the queue for batch processing"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO project_queue (spec_path, project_path, batch_id, retry_count)
+            VALUES (?, ?, ?, ?)
+        """, (spec_path, project_path, batch_id, retry_count))
+        self.conn.commit()
+        project_id = cursor.lastrowid
+        logger.info(f"Enqueued project {project_id}: {spec_path} (batch: {batch_id}, retry: {retry_count})")
+        return project_id
+
+    def update_project_status(self, project_id: int, status: str, error_message: str = None):
+        """Update project status in queue"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE project_queue 
+            SET status = ?, error_message = ?, completed_at = strftime('%s', 'now')
+            WHERE id = ?
+        """, (status, error_message, project_id))
+        self.conn.commit()
+        logger.info(f"Updated project {project_id} status to {status}")
+        
+    def get_next_project(self):
+        """Get next queued project"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, spec_path, project_path, batch_id, retry_count 
+            FROM project_queue 
+            WHERE status = 'queued' 
+            ORDER BY priority DESC, enqueued_at ASC 
+            LIMIT 1
+        """)
+        row = cursor.fetchone()
+        if row:
+            return {
+                'id': row[0],
+                'spec_path': row[1], 
+                'project_path': row[2],
+                'batch_id': row[3],
+                'retry_count': row[4]
+            }
+        return None
+        
+    def publish_event(self, event_name: str, data: Dict[str, Any]):
+        """Publish an event to all subscribers"""
+        self.trigger_event(event_name, data)
+        
+    def check_batch_completion(self, batch_id: str):
+        """Check if a batch is complete and trigger retry logic if needed"""
+        if not batch_id:
+            return
+            
+        if self._is_batch_complete(batch_id):
+            self._handle_batch_completion(batch_id)
+            
+    def _is_batch_complete(self, batch_id: str) -> bool:
+        """Check if all projects in batch are completed or failed"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM project_queue 
+            WHERE batch_id = ? AND status IN ('queued', 'processing')
+        """, (batch_id,))
+        return cursor.fetchone()[0] == 0
+        
+    def _handle_batch_completion(self, batch_id: str):
+        """Handle completed batch - check for failures and potentially retry"""
+        failed_projects = self._get_failed_projects(batch_id)
+        
+        if not failed_projects:
+            logger.info(f"Batch {batch_id} completed successfully with no failures")
+            return
+            
+        # Check if any failures are eligible for retry
+        retryable = [p for p in failed_projects if p['retry_count'] < 3]
+        
+        if not retryable:
+            logger.info(f"Batch {batch_id} failures exceed max retry count - escalating")
+            self._escalate_batch_failures(batch_id, failed_projects)
+            return
+            
+        logger.info(f"Batch {batch_id} completed with {len(failed_projects)} failures, {len(retryable)} retryable")
+        
+        # Run research agent if enabled
+        if os.getenv('ENABLE_RESEARCH_AGENT', 'true').lower() == 'true':
+            enhanced_projects = self._run_research_agent(retryable)
+        else:
+            enhanced_projects = retryable
+            
+        # Create new batch for retries
+        retry_count = max(p['retry_count'] for p in retryable) + 1
+        new_batch_id = f"{batch_id}-retry{retry_count}"
+        
+        for project in enhanced_projects:
+            spec_path = project.get('enhanced_spec_path', project['spec_path'])
+            self.enqueue_project(
+                spec_path=spec_path,
+                project_path=project['project_path'], 
+                batch_id=new_batch_id,
+                retry_count=project['retry_count'] + 1
+            )
+            
+        # Mark original failures as retried
+        self.conn.execute("""
+            UPDATE project_queue SET status = 'retried' 
+            WHERE batch_id = ? AND status = 'failed'
+        """, (batch_id,))
+        self.conn.commit()
+        
+        logger.info(f"Created retry batch {new_batch_id} with {len(enhanced_projects)} projects")
+        
+    def _get_failed_projects(self, batch_id: str) -> List[Dict]:
+        """Get all failed projects in a batch"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, spec_path, project_path, retry_count, error_message
+            FROM project_queue 
+            WHERE batch_id = ? AND status = 'failed'
+        """, (batch_id,))
+        
+        projects = []
+        for row in cursor.fetchall():
+            projects.append({
+                'id': row[0],
+                'spec_path': row[1],
+                'project_path': row[2], 
+                'retry_count': row[3],
+                'error_message': row[4]
+            })
+        return projects
+        
+    def _run_research_agent(self, failed_projects: List[Dict]) -> List[Dict]:
+        """Run research agent to analyze failures and enhance specs"""
+        try:
+            # Import here to avoid circular imports
+            import json
+            import uuid
+            
+            # Create research session data
+            research_data = {
+                'failed_projects': failed_projects,
+                'session_id': str(uuid.uuid4()),
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Call auto_orchestrate.py in research mode
+            cmd = [
+                'uv', 'run', '--quiet', '--script',
+                str(self.tmux_orchestrator_path / 'auto_orchestrate.py'),
+                '--research', json.dumps(research_data)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            
+            if result.returncode == 0:
+                # Parse enhanced project data from stdout
+                enhanced_data = json.loads(result.stdout)
+                logger.info("Research agent completed successfully")
+                return enhanced_data.get('enhanced_projects', failed_projects)
+            else:
+                logger.error(f"Research agent failed: {result.stderr}")
+                return failed_projects
+                
+        except Exception as e:
+            logger.error(f"Error running research agent: {e}")
+            return failed_projects
+            
+    def _escalate_batch_failures(self, batch_id: str, failed_projects: List[Dict]):
+        """Escalate batch failures that exceed retry limits"""
+        try:
+            # Mark as permanently failed
+            self.conn.execute("""
+                UPDATE project_queue SET status = 'permanently_failed'
+                WHERE batch_id = ? AND status = 'failed'
+            """, (batch_id,))
+            self.conn.commit()
+            
+            # Send notification email
+            email_notifier = get_email_notifier()
+            failure_summary = '\n'.join([
+                f"- {p['spec_path']}: {p['error_message']}" 
+                for p in failed_projects
+            ])
+            
+            email_notifier.send_email(
+                subject=f"Batch {batch_id} - Failures Exceed Retry Limits",
+                body=f"""
+Batch {batch_id} has {len(failed_projects)} projects that failed after maximum retries.
+
+Failed Projects:
+{failure_summary}
+
+These projects require manual review and intervention.
+                """.strip(),
+                is_html=False
+            )
+            
+            logger.info(f"Escalated {len(failed_projects)} permanently failed projects from batch {batch_id}")
+            
+        except Exception as e:
+            logger.error(f"Error escalating batch failures: {e}")
+            
+    def check_credits(self) -> bool:
+        """Check if sufficient credits available for research operations"""
+        # This is a placeholder - implement based on your credit system
+        # Return True for now to not block operations
+        return True
+        
+    def _monitor_batches(self):
+        """Background thread to monitor batch completion"""
+        logger.info("Starting batch monitoring loop")
+        
+        while not self._stop_monitoring.wait(300):  # Check every 5 minutes
+            try:
+                # Get all distinct batch_ids with incomplete projects
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    SELECT DISTINCT batch_id 
+                    FROM project_queue 
+                    WHERE batch_id IS NOT NULL 
+                    AND status IN ('queued', 'processing')
+                """)
+                
+                incomplete_batches = [row[0] for row in cursor.fetchall()]
+                
+                for batch_id in incomplete_batches:
+                    if self._is_batch_complete(batch_id):
+                        logger.info(f"Detected completion of batch {batch_id}")
+                        self._handle_batch_completion(batch_id)
+                        
+            except Exception as e:
+                logger.error(f"Error in batch monitoring: {e}")
+                
+        logger.info("Batch monitoring stopped")
+        
+    def _on_project_complete(self, event_data: Dict):
+        """Handle project completion events"""
+        batch_id = event_data.get('batch_id')
+        if batch_id:
+            logger.debug(f"Project completion event for batch {batch_id}")
+            # Trigger immediate check instead of waiting for monitoring cycle
+            threading.Thread(
+                target=self.check_batch_completion, 
+                args=(batch_id,),
+                daemon=True
+            ).start()
+            
+    def stop_monitoring(self):
+        """Stop the batch monitoring thread"""
+        if hasattr(self, '_stop_monitoring'):
+            self._stop_monitoring.set()
+            logger.info("Batch monitoring stop requested")
 
 # CLI interface for managing tasks
 def main():

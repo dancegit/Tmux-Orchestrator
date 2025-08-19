@@ -10,10 +10,12 @@ import time
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 import json
 
 from session_state import SessionStateManager, SessionState
+from cycle_detection import CycleDetector
+from git_coordinator import GitCoordinator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,6 +29,8 @@ class CheckinMonitor:
     def __init__(self, tmux_orchestrator_path: Path):
         self.tmux_orchestrator_path = tmux_orchestrator_path
         self.state_manager = SessionStateManager(tmux_orchestrator_path)
+        self.cycle_detector = CycleDetector(tmux_orchestrator_path)
+        self.git_coordinator = GitCoordinator(tmux_orchestrator_path)  # Initialize git coordinator
         self.scheduler_db = self.tmux_orchestrator_path / 'task_queue.db'
         
         # Thresholds for intervention
@@ -206,12 +210,79 @@ class CheckinMonitor:
     
     def check_project_health(self, session_name: str, state: SessionState) -> Dict:
         """Check overall health of a project"""
+        # Skip monitoring failed sessions to prevent resource waste and repeated timeout triggers
+        if state and hasattr(state, 'completion_status') and state.completion_status == "failed":
+            return {
+                'session_name': session_name,
+                'status': 'failed',
+                'issues': [f"Session already marked as failed ({state.failure_reason or 'unknown reason'}) - skipping monitoring"],
+                'recommendations': ["No action needed - session should be cleaned up"],
+                'skip_monitoring': True
+            }
+        
         health = {
             'session_name': session_name,
             'status': 'healthy',
             'issues': [],
             'recommendations': []
         }
+        
+        # NEW: Check for coordination conflicts first
+        project_name = session_name.split('-impl-')[0].replace('-', ' ').title()
+        conflicts = self.state_manager.get_status_conflicts(project_name)
+        if conflicts:
+            health['status'] = 'critical'
+            
+            # Attempt automatic resolution
+            resolutions = self.state_manager.resolve_conflicts_automatically(project_name)
+            
+            for i, conflict in enumerate(conflicts):
+                health['issues'].append(f"CONFLICT: {conflict['description']}")
+                
+                # Add resolution info if available
+                if i < len(resolutions) and resolutions[i]:
+                    resolution = resolutions[i]
+                    health['recommendations'].append(f"AUTO-RESOLVED: {resolution['message']}")
+                    
+                    # Notify affected agents
+                    for agent in resolution.get('agents_notified', []):
+                        self._send_conflict_resolution_notice(session_name, state, agent, resolution)
+                        
+                    logger.info(f"Auto-resolved {conflict['type']}: {resolution['action']}")
+                else:
+                    health['recommendations'].append(conflict['suggested_action'])
+                    
+            # Try git sync to resolve deployment conflicts
+            if self.git_coordinator.resolve_deployment_conflict(state):
+                health['recommendations'].append("Attempted git sync to resolve deployment conflict")
+                self.state_manager.save_session_state(state)  # Save updated agent states
+            
+            return health  # Skip other checks - conflict is highest priority
+        
+        # NEW: Git-aware health check - detect and resolve divergences
+        try:
+            if self.git_coordinator.detect_divergence(state):
+                health['status'] = 'warning'
+                health['issues'].append("Git worktrees have divergent commits - potential sync issue")
+                
+                # Attempt automatic sync from sysadmin/devops to developer/tester
+                sync_results = self.git_coordinator.sync_all_agents(
+                    state, 
+                    source_role='sysadmin',  # Prioritize SysAdmin for deployments
+                    target_roles=['developer', 'tester']  # Target affected roles
+                )
+                
+                if any(sync_results.values()):
+                    successful_syncs = [role for role, success in sync_results.items() if success]
+                    health['recommendations'].append(f"Auto-synced divergent branches: {', '.join(successful_syncs)}")
+                    self.state_manager.save_session_state(state)  # Save updated commit hashes
+                    logger.info(f"Auto-synced git divergence in {session_name}")
+                else:
+                    health['status'] = 'critical'
+                    health['recommendations'].append("Manual git sync required - check git logs for conflicts")
+        except Exception as e:
+            logger.warning(f"Git health check failed for {session_name}: {e}")
+            health['issues'].append(f"Git health check error: {str(e)}")
         
         # Check 1: Are there scheduled check-ins?
         checkins = self.get_scheduled_checkins(session_name)
@@ -265,14 +336,67 @@ class CheckinMonitor:
             else:
                 health['recovery_signals'] = recovery_signals
         
+        # NEW: Check for project timeout (4 hours)
+        if state and state.created_at and state.completion_status == "pending":
+            created = datetime.fromisoformat(state.created_at.replace('Z', '+00:00'))
+            duration = datetime.now() - created
+            hours_running = duration.total_seconds() / 3600
+            
+            if hours_running > 4:
+                # Check if there are pending batch specs
+                if self._has_pending_batch_specs():
+                    health['status'] = 'critical'
+                    health['issues'].append(f"Project timed out after {hours_running:.1f} hours with pending batch specs")
+                    
+                    # Trigger failure handler
+                    try:
+                        from project_failure_handler import ProjectFailureHandler
+                        handler = ProjectFailureHandler(self.tmux_orchestrator_path)
+                        if handler.handle_timeout_failure(state.project_name, state):
+                            health['recommendations'].append("Timeout failure handling completed - project terminated")
+                            # Mark project as handled to prevent further monitoring
+                            health['handled'] = True
+                        else:
+                            health['recommendations'].append("Timeout failure handling failed - manual intervention required")
+                    except Exception as e:
+                        logger.error(f"Failed to handle timeout for {session_name}: {e}")
+                        health['recommendations'].append(f"Timeout handler error: {str(e)}")
+                        
+                else:
+                    health['status'] = 'warning' if health['status'] == 'healthy' else health['status']
+                    health['issues'].append(f"Project running {hours_running:.1f} hours but no pending batch specs - continuing monitoring")
+        
         return health
     
     def schedule_emergency_checkin(self, session_name: str, window: int, role: str, interval: int = None):
-        """Schedule an emergency check-in with dynamic interval"""
+        """Schedule an emergency check-in with dynamic interval and cycle detection"""
         if interval is None:
             # Get the appropriate interval based on emergency level
             level = self.emergency_tracker.get(session_name, {}).get('count', 0)
             interval = self.emergency_intervals[min(level, len(self.emergency_intervals) - 1)]
+        
+        # Record scheduling event for cycle detection
+        note = f"EMERGENCY CHECK-IN (Level {self.emergency_tracker.get(session_name, {}).get('count', 0) + 1}): Project may be stuck. Please report status immediately."
+        cycle_detected = self.cycle_detector.record_scheduling_event(
+            session_name=session_name,
+            agent_role=role,
+            window=window,
+            event_type='emergency_scheduled',
+            interval_minutes=interval,
+            note=note,
+            triggered_by='stuck_project_detection'
+        )
+        
+        # If cycle detected, attempt to break it
+        if cycle_detected:
+            logger.warning(f"Cycle detected while scheduling emergency for {session_name}: {cycle_detected}")
+            cycle_break_result = self.cycle_detector.prevent_cycle(session_name, cycle_detected)
+            if cycle_break_result['success']:
+                logger.info(f"Successfully broke cycle: {cycle_break_result['message']}")
+                # Don't schedule emergency if cycle was broken - let the cycle breaking take effect
+                return
+            else:
+                logger.error(f"Failed to break cycle: {cycle_break_result}")
         
         logger.info(f"Scheduling emergency check-in for {session_name}:{window} ({role}) in {interval} minutes")
         
@@ -512,6 +636,11 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
                 # Check project health
                 health = self.check_project_health(session, state)
                 
+                # Skip further processing if marked for skipping
+                if health.get('skip_monitoring'):
+                    logger.debug(f"Skipping monitoring for {session} - {health['issues'][0]}")
+                    continue
+                
                 logger.info(f"\nProject: {project_name}")
                 logger.info(f"Session: {session}")
                 logger.info(f"Status: {health['status']}")
@@ -530,6 +659,22 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
                 self.check_authorization_timeouts(session, state)
         
         return len(interventions_needed)
+    
+    def _has_pending_batch_specs(self) -> bool:
+        """Check if there are pending specs in the batch queue using scheduler"""
+        try:
+            from scheduler import TmuxOrchestratorScheduler
+            scheduler = TmuxOrchestratorScheduler()
+            
+            # Count queued projects in the scheduler database
+            cursor = scheduler.conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM project_queue WHERE status = 'queued'")
+            count = cursor.fetchone()[0]
+            return count > 0
+            
+        except Exception as e:
+            logger.warning(f"Could not check batch queue: {e}")
+            return False  # Fail-safe: assume no queue to avoid false timeouts
     
     def check_authorization_timeouts(self, session_name: str, state: SessionState):
         """Check for agents waiting on authorizations that have timed out"""
@@ -566,6 +711,43 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
                         
                 except Exception as e:
                     logger.error(f"Error checking authorization timeout for {role}: {e}")
+    
+    def _send_conflict_resolution_notice(self, session_name: str, state: SessionState, agent_role: str, resolution: Dict[str, Any]):
+        """Send conflict resolution notice to specific agent"""
+        if agent_role not in state.agents:
+            logger.warning(f"Agent {agent_role} not found in session {session_name}")
+            return
+            
+        agent = state.agents[agent_role]
+        window = agent.window_index
+        
+        message = f"""🔧 CONFLICT RESOLUTION NOTICE:
+
+{resolution['message']}
+
+Resolution Type: {resolution.get('type', 'Unknown')}
+Action Taken: {resolution.get('action', 'Unknown')}
+
+Next Steps:
+{chr(10).join(f'• {step}' for step in resolution.get('next_steps', []))}
+
+This conflict has been automatically resolved. Please acknowledge and proceed accordingly."""
+        
+        send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
+        if send_script.exists():
+            try:
+                result = subprocess.run([
+                    str(send_script),
+                    f"{session_name}:{window}",
+                    message
+                ], capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    logger.info(f"Sent conflict resolution notice to {agent_role}")
+                else:
+                    logger.error(f"Failed to send conflict resolution notice: {result.stderr}")
+            except Exception as e:
+                logger.error(f"Error sending conflict resolution notice: {e}")
     
     def run_continuous_monitoring(self, interval_minutes: int = 2):
         """Run continuous monitoring"""

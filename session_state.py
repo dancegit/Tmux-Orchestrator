@@ -44,10 +44,14 @@ class SessionState:
     parent_branch: Optional[str] = None
     completion_status: str = "pending"  # 'pending', 'completed', or 'failed'
     completion_time: Optional[str] = None
+    failure_reason: Optional[str] = None  # NEW: e.g., "timeout_after_4_hours", "manual_termination"
     phases_completed: List[str] = None  # Track completed implementation phases
     spec_path: Optional[str] = None  # Path to spec file for notifications
     dependencies: Dict[str, List[str]] = None  # Role dependencies (e.g., {'pm': ['devops']})
     worktree_base_path: Optional[str] = None  # Custom base path for worktrees (overrides registry default)
+    status_reports: Dict[str, Dict[str, Any]] = None  # Add this for {role: {"topic": "deployment", "status": "COMPLETE", "details": "...", "timestamp": "..."}}
+    batch_id: Optional[str] = None  # Batch identifier for retry system
+    worktrees: Dict[str, str] = None  # Role to worktree path mapping for local git optimization
     
     def __post_init__(self):
         """Initialize mutable default values"""
@@ -55,6 +59,10 @@ class SessionState:
             self.phases_completed = []
         if self.dependencies is None:
             self.dependencies = {}
+        if self.status_reports is None:
+            self.status_reports = {}
+        if self.worktrees is None:
+            self.worktrees = {}
     
 
 class SessionStateManager:
@@ -63,6 +71,12 @@ class SessionStateManager:
     def __init__(self, tmux_orchestrator_path: Path):
         self.tmux_orchestrator_path = tmux_orchestrator_path
         self.registry_dir = tmux_orchestrator_path / 'registry'
+        # Initialize git coordinator for branch syncing
+        try:
+            from git_coordinator import GitCoordinator
+            self.git_coordinator = GitCoordinator(tmux_orchestrator_path)
+        except ImportError:
+            self.git_coordinator = None
         
     def get_state_file_path(self, project_name: str) -> Path:
         """Get the path to the session state file for a project"""
@@ -103,7 +117,12 @@ class SessionStateManager:
                 
             state_dict['agents'] = agents
             
-            return SessionState(**state_dict)
+            # NEW: Auto-sync on load if git coordinator available and divergent
+            state = SessionState(**state_dict)
+            if self.git_coordinator and self.sync_branches(state, force=False):
+                print(f"Auto-synced branches for {project_name} on load")
+            
+            return state
             
         except Exception as e:
             print(f"Error loading session state: {e}")
@@ -351,6 +370,350 @@ class SessionStateManager:
         state.updated_at = datetime.now().isoformat()
         return state
         
+    def update_status_report(self, project_name: str, role: str, topic: str, status: str, details: str = ""):
+        """Update status report for an agent"""
+        state = self.load_session_state(project_name)
+        if state:
+            state.status_reports[role.lower()] = {
+                "topic": topic.lower(),
+                "status": status.upper(),
+                "details": details,
+                "timestamp": datetime.now().isoformat()
+            }
+            self.save_session_state(state)
+            
+    def detect_deployment_conflict(self, project_name: str) -> bool:
+        """Detect specific SysAdmin vs Developer deployment status conflict"""
+        state = self.load_session_state(project_name)
+        if not state or not state.status_reports:
+            return False
+            
+        sysadmin_rep = state.status_reports.get('sysadmin', {})
+        developer_rep = state.status_reports.get('developer', {})
+        
+        # Check for conflicting deployment statuses
+        if (sysadmin_rep.get('topic') == 'deployment' and sysadmin_rep.get('status') == 'COMPLETE' and
+            developer_rep.get('topic') == 'deployment' and developer_rep.get('status') in ['FAILURE', 'FAILED', 'ERROR']):
+            return True
+            
+        return False
+        
+    def _detect_testing_conflict(self, state: SessionState) -> Optional[Dict[str, Any]]:
+        """Detect conflicts between Developer and Tester about test status"""
+        developer_rep = state.status_reports.get('developer', {})
+        tester_rep = state.status_reports.get('tester', {})
+        
+        # Developer says tests pass, Tester says they fail
+        if (developer_rep.get('topic') == 'testing' and developer_rep.get('status') in ['PASS', 'PASSING'] and
+            tester_rep.get('topic') == 'testing' and tester_rep.get('status') in ['FAIL', 'FAILING', 'FAILED']):
+            return {
+                "type": "testing_status",
+                "description": "Developer reports tests PASSING but Tester reports FAILING",
+                "agents": ["developer", "tester"],
+                "priority": "high",
+                "suggested_action": "Tester status takes priority - investigate test failures"
+            }
+            
+        # Developer says feature complete, Tester says not ready
+        if (developer_rep.get('topic') == 'feature' and developer_rep.get('status') == 'COMPLETE' and
+            tester_rep.get('topic') == 'feature' and tester_rep.get('status') in ['NOT_READY', 'INCOMPLETE', 'BLOCKED']):
+            return {
+                "type": "feature_readiness",
+                "description": "Developer reports feature COMPLETE but Tester reports NOT_READY",
+                "agents": ["developer", "tester"],
+                "priority": "medium",
+                "suggested_action": "Coordinate on feature completion criteria"
+            }
+        
+        return None
+        
+    def _detect_integration_conflicts(self, state: SessionState) -> List[Dict[str, Any]]:
+        """Detect conflicts where multiple agents report conflicting integration status"""
+        conflicts = []
+        
+        # Group reports by topic
+        topics = {}
+        for role, report in state.status_reports.items():
+            topic = report.get('topic')
+            if topic:
+                if topic not in topics:
+                    topics[topic] = []
+                topics[topic].append((role, report))
+        
+        # Check each topic for conflicting statuses
+        for topic, reports in topics.items():
+            if len(reports) >= 2:  # Need at least 2 reports to conflict
+                success_agents = []
+                failure_agents = []
+                
+                for role, report in reports:
+                    status = report.get('status', '').upper()
+                    if status in ['COMPLETE', 'SUCCESS', 'READY', 'PASS', 'PASSING']:
+                        success_agents.append(role)
+                    elif status in ['FAILURE', 'FAILED', 'ERROR', 'BLOCKED', 'NOT_READY', 'FAIL', 'FAILING']:
+                        failure_agents.append(role)
+                
+                # Conflict if some report success and others report failure
+                if success_agents and failure_agents:
+                    conflicts.append({
+                        "type": "integration_status",
+                        "description": f"Conflicting {topic} status: {', '.join(success_agents)} report success but {', '.join(failure_agents)} report failure",
+                        "agents": success_agents + failure_agents,
+                        "priority": "high",
+                        "suggested_action": f"Investigate {topic} status - coordinate between conflicting agents"
+                    })
+        
+        return conflicts
+        
+    def _detect_resource_conflicts(self, state: SessionState) -> List[Dict[str, Any]]:
+        """Detect conflicts where agents claim conflicting resource usage"""
+        conflicts = []
+        
+        # Look for port conflicts
+        port_usage = {}
+        for role, report in state.status_reports.items():
+            details = report.get('details', '').lower()
+            # Extract port numbers from details
+            import re
+            ports = re.findall(r'port\s+(\d+)', details)
+            for port in ports:
+                if port not in port_usage:
+                    port_usage[port] = []
+                port_usage[port].append(role)
+        
+        # Check for multiple agents claiming same port
+        for port, agents in port_usage.items():
+            if len(agents) > 1:
+                conflicts.append({
+                    "type": "resource_conflict",
+                    "description": f"Multiple agents claim port {port}: {', '.join(agents)}",
+                    "agents": agents,
+                    "priority": "medium", 
+                    "suggested_action": f"Resolve port {port} conflict - assign unique ports"
+                })
+        
+        return conflicts
+        
+    def _detect_timeline_conflicts(self, state: SessionState) -> List[Dict[str, Any]]:
+        """Detect impossible timeline dependencies between agents"""
+        conflicts = []
+        
+        # Check if a agent reports being blocked by another who reports completion
+        for role, report in state.status_reports.items():
+            details = report.get('details', '').lower()
+            
+            # Look for "waiting for X" or "blocked by Y" patterns
+            blocked_patterns = [
+                r'waiting for (\w+)',
+                r'blocked by (\w+)', 
+                r'depends on (\w+)',
+                r'need (\w+) to'
+            ]
+            
+            for pattern in blocked_patterns:
+                import re
+                matches = re.findall(pattern, details)
+                for dependency in matches:
+                    # Check if the dependency agent reports completion
+                    dep_report = state.status_reports.get(dependency, {})
+                    if dep_report.get('status', '').upper() in ['COMPLETE', 'SUCCESS', 'READY']:
+                        conflicts.append({
+                            "type": "timeline_conflict",
+                            "description": f"{role} reports waiting for {dependency} but {dependency} reports completion",
+                            "agents": [role, dependency],
+                            "priority": "medium",
+                            "suggested_action": f"Check if {role} has latest status from {dependency}"
+                        })
+        
+        return conflicts
+        
+    def get_status_conflicts(self, project_name: str) -> List[Dict[str, Any]]:
+        """Get all detected status conflicts for a project"""
+        state = self.load_session_state(project_name)
+        if not state or not state.status_reports:
+            return []
+            
+        conflicts = []
+        
+        # 1. Deployment conflicts (SysAdmin vs Developer)
+        if self.detect_deployment_conflict(project_name):
+            conflicts.append({
+                "type": "deployment_status",
+                "description": "SysAdmin reports deployment COMPLETE but Developer reports FAILURE",
+                "agents": ["sysadmin", "developer"],
+                "priority": "high",
+                "suggested_action": "Developer status takes priority - investigate deployment dependency issues"
+            })
+        
+        # 2. Testing conflicts (Developer vs Tester)
+        testing_conflict = self._detect_testing_conflict(state)
+        if testing_conflict:
+            conflicts.append(testing_conflict)
+            
+        # 3. Integration conflicts (Multiple agents claiming different states)
+        integration_conflicts = self._detect_integration_conflicts(state)
+        conflicts.extend(integration_conflicts)
+        
+        # 4. Resource conflicts (Multiple agents claiming same resources)
+        resource_conflicts = self._detect_resource_conflicts(state)
+        conflicts.extend(resource_conflicts)
+        
+        # 5. Timeline conflicts (Impossible dependencies)
+        timeline_conflicts = self._detect_timeline_conflicts(state)
+        conflicts.extend(timeline_conflicts)
+            
+        return conflicts
+        
+    def resolve_conflicts_automatically(self, project_name: str) -> List[Dict[str, Any]]:
+        """Attempt to automatically resolve conflicts using predefined protocols"""
+        conflicts = self.get_status_conflicts(project_name)
+        resolutions = []
+        
+        for conflict in conflicts:
+            resolution = self._attempt_conflict_resolution(project_name, conflict)
+            if resolution:
+                resolutions.append(resolution)
+                
+        return resolutions
+        
+    def _attempt_conflict_resolution(self, project_name: str, conflict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Attempt to resolve a specific conflict automatically"""
+        conflict_type = conflict.get('type')
+        agents = conflict.get('agents', [])
+        
+        # Resolution protocol for deployment conflicts
+        if conflict_type == 'deployment_status':
+            return self._resolve_deployment_conflict(project_name, agents)
+            
+        # Resolution protocol for testing conflicts  
+        elif conflict_type == 'testing_status':
+            return self._resolve_testing_conflict(project_name, agents)
+            
+        # Resolution protocol for integration conflicts
+        elif conflict_type == 'integration_status':
+            return self._resolve_integration_conflict(project_name, agents)
+            
+        # Resolution protocol for resource conflicts
+        elif conflict_type == 'resource_conflict':
+            return self._resolve_resource_conflict(project_name, agents, conflict)
+            
+        # Resolution protocol for timeline conflicts
+        elif conflict_type == 'timeline_conflict':
+            return self._resolve_timeline_conflict(project_name, agents)
+            
+        return None
+        
+    def _resolve_deployment_conflict(self, project_name: str, agents: List[str]) -> Dict[str, Any]:
+        """Resolve deployment conflicts by prioritizing Developer status"""
+        state = self.load_session_state(project_name)
+        if not state:
+            return None
+            
+        # Clear SysAdmin's conflicting report and notify about dependency issue
+        if 'sysadmin' in state.status_reports:
+            state.status_reports['sysadmin']['status'] = 'INVESTIGATING'
+            state.status_reports['sysadmin']['details'] += ' [AUTO-RESOLVED: Investigating dependency issue reported by Developer]'
+            state.status_reports['sysadmin']['timestamp'] = datetime.now().isoformat()
+            
+        # Mark Developer status as authoritative
+        if 'developer' in state.status_reports:
+            state.status_reports['developer']['details'] += ' [AUTO-RESOLVED: Status marked as authoritative]'
+            
+        self.save_session_state(state)
+        
+        return {
+            'type': 'deployment_conflict_resolution',
+            'action': 'prioritized_developer_status',
+            'message': 'Developer status takes priority. SysAdmin notified to investigate dependency issues.',
+            'agents_notified': ['sysadmin'],
+            'next_steps': ['Investigate shared_kernel dependency', 'Coordinate deployment strategy']
+        }
+        
+    def _resolve_testing_conflict(self, project_name: str, agents: List[str]) -> Dict[str, Any]:
+        """Resolve testing conflicts by prioritizing Tester status"""
+        state = self.load_session_state(project_name)
+        if not state:
+            return None
+            
+        # Update Developer to acknowledge test failures
+        if 'developer' in state.status_reports:
+            state.status_reports['developer']['status'] = 'FIXING'
+            state.status_reports['developer']['details'] += ' [AUTO-RESOLVED: Addressing test failures identified by Tester]'
+            
+        # Mark Tester status as authoritative
+        if 'tester' in state.status_reports:
+            state.status_reports['tester']['details'] += ' [AUTO-RESOLVED: Test status confirmed as authoritative]'
+            
+        self.save_session_state(state)
+        
+        return {
+            'type': 'testing_conflict_resolution', 
+            'action': 'prioritized_tester_status',
+            'message': 'Tester status takes priority. Developer notified to fix failing tests.',
+            'agents_notified': ['developer'],
+            'next_steps': ['Fix failing tests', 'Re-run test suite']
+        }
+        
+    def _resolve_integration_conflict(self, project_name: str, agents: List[str]) -> Dict[str, Any]:
+        """Resolve integration conflicts by escalating to Project Manager"""
+        return {
+            'type': 'integration_conflict_resolution',
+            'action': 'escalated_to_pm',
+            'message': 'Integration conflict escalated to Project Manager for coordination.',
+            'agents_notified': ['project_manager'],
+            'next_steps': ['PM to coordinate status alignment', 'Establish single source of truth']
+        }
+        
+    def _resolve_resource_conflict(self, project_name: str, agents: List[str], conflict: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve resource conflicts by assigning alternative resources"""
+        # Extract port number from conflict description
+        import re
+        description = conflict.get('description', '')
+        port_match = re.search(r'port (\d+)', description)
+        
+        if port_match:
+            conflicted_port = port_match.group(1)
+            # Suggest alternative ports
+            suggested_ports = self._suggest_alternative_ports(conflicted_port, agents)
+            
+            return {
+                'type': 'resource_conflict_resolution',
+                'action': 'assigned_alternative_resources',
+                'message': f'Port conflict resolved by assigning alternative ports: {suggested_ports}',
+                'agents_notified': agents,
+                'next_steps': [f'Update configuration to use assigned ports: {suggested_ports}']
+            }
+        
+        return {
+            'type': 'resource_conflict_resolution',
+            'action': 'manual_resolution_required',
+            'message': 'Resource conflict requires manual intervention.',
+            'agents_notified': ['orchestrator'],
+            'next_steps': ['Manually assign unique resources to each agent']
+        }
+        
+    def _resolve_timeline_conflict(self, project_name: str, agents: List[str]) -> Dict[str, Any]:
+        """Resolve timeline conflicts by requesting status synchronization"""
+        return {
+            'type': 'timeline_conflict_resolution',
+            'action': 'requested_status_sync',
+            'message': 'Timeline conflict detected. Agents requested to synchronize status.',
+            'agents_notified': agents,
+            'next_steps': ['Verify current status with all agents', 'Update dependencies if needed']
+        }
+        
+    def _suggest_alternative_ports(self, conflicted_port: str, agents: List[str]) -> Dict[str, str]:
+        """Suggest alternative ports for conflicting agents"""
+        base_port = int(conflicted_port)
+        suggestions = {}
+        
+        for i, agent in enumerate(agents):
+            # Suggest port base + agent index + 100 to avoid common conflicts
+            suggested_port = base_port + i + 100
+            suggestions[agent] = str(suggested_port)
+            
+        return suggestions
+
     def get_session_summary(self, state: SessionState) -> Dict[str, Any]:
         """Get a summary of the session state for display"""
         total_agents = len(state.agents)
@@ -449,6 +812,33 @@ class SessionStateManager:
                 subprocess.run(cmd, capture_output=True, text=True)
         except Exception as e:
             print(f"Error notifying {role}: {e}")
+    
+    def sync_branches(self, state: SessionState, source_role: str = 'sysadmin', force: bool = False) -> bool:
+        """Actively sync agent branches, optionally forcing on divergences."""
+        if not self.git_coordinator:
+            return False
+            
+        if force or self.git_coordinator.detect_divergence(state):
+            results = self.git_coordinator.sync_all_agents(state, source_role=source_role)
+            if any(results.values()):
+                self.save_session_state(state)  # Save updated commit hashes
+                return True
+        return False
+    
+    def resolve_deployment_conflicts(self, project_name: str) -> bool:
+        """Resolve deployment conflicts using git synchronization"""
+        if not self.git_coordinator:
+            return False
+            
+        state = self.load_session_state(project_name)
+        if not state:
+            return False
+            
+        # Try to resolve conflicts by syncing git
+        if self.git_coordinator.resolve_deployment_conflict(state):
+            self.save_session_state(state)
+            return True
+        return False
     
     def set_role_dependencies(self, project_name: str, dependencies: Dict[str, List[str]]) -> None:
         """Set role dependencies for a project"""
