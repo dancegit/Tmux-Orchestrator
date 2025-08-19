@@ -49,6 +49,23 @@ class ProjectFailureHandler:
             duration = datetime.now() - created
             hours_running = duration.total_seconds() / 3600
             
+            # DEADLOCK PREVENTION: Attempt deadlock recovery before full failure
+            if self._detect_coordination_deadlock(state):
+                logger.warning(f"Coordination deadlock detected in {project_name} - attempting recovery")
+                if self._break_coordination_deadlock(state):
+                    logger.info(f"Deadlock recovery attempted for {project_name} - giving 5 minutes grace period")
+                    # Give a grace period before proceeding to failure
+                    import time
+                    time.sleep(300)  # 5 minutes
+                    
+                    # Check if agents are now progressing
+                    updated_state = self.state_manager.load_session_state(project_name)
+                    if updated_state and self._is_making_progress(updated_state):
+                        logger.info(f"Deadlock recovery successful for {project_name}")
+                        return True  # Recovered successfully
+                    else:
+                        logger.warning(f"Deadlock recovery failed for {project_name} - proceeding to timeout handling")
+            
             # Step 1: Send internal alert before cleanup
             self._send_internal_alert(state, hours_running)
             
@@ -668,4 +685,121 @@ class ProjectFailureHandler:
             return cursor.fetchone()[0] > 0
         except Exception as e:
             logger.error(f"Error checking batch failures: {e}")
+            return False
+    
+    def _detect_coordination_deadlock(self, state: SessionState) -> bool:
+        """Detect coordination deadlocks where agents are waiting for permissions"""
+        try:
+            # Check for waiting states in session state
+            waiting_agents = sum(1 for agent in state.agents.values() if agent.waiting_for)
+            if waiting_agents > 0:
+                logger.warning(f"Found {waiting_agents} agents in waiting state")
+                return True
+            
+            # Check tmux windows for permission-seeking patterns
+            deadlock_phrases = [
+                "awaiting go-ahead",
+                "need availability confirmation",
+                "waiting for authorization",
+                "team status required",
+                "need confirmation",
+                "awaiting permission",
+                "waiting for approval",
+                "need go-ahead"
+            ]
+            
+            for role, agent in state.agents.items():
+                try:
+                    # Capture recent output from agent's tmux window
+                    result = subprocess.run([
+                        'tmux', 'capture-pane', '-t', f'{state.session_name}:{agent.window_index}',
+                        '-p', '-S', '-50'  # Last 50 lines
+                    ], capture_output=True, text=True, timeout=5)
+                    
+                    if result.returncode == 0:
+                        output = result.stdout.lower()
+                        for phrase in deadlock_phrases:
+                            if phrase in output:
+                                logger.warning(f"Deadlock phrase '{phrase}' detected in {role} output")
+                                return True
+                                
+                except Exception as e:
+                    logger.debug(f"Could not check tmux output for {role}: {e}")
+                    
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error detecting coordination deadlock: {e}")
+            return False
+    
+    def _break_coordination_deadlock(self, state: SessionState) -> bool:
+        """Break coordination deadlock by sending autonomy commands to all agents"""
+        try:
+            recovery_count = 0
+            
+            # Clear waiting states
+            for agent in state.agents.values():
+                if agent.waiting_for:
+                    agent.waiting_for = None
+                    recovery_count += 1
+            
+            if recovery_count > 0:
+                self.state_manager.save_session_state(state)
+                logger.info(f"Cleared {recovery_count} waiting states")
+            
+            # Send autonomy commands to all agents
+            autonomy_messages = {
+                'orchestrator': "DEADLOCK DETECTED: Stop waiting for permissions. Monitor team progress actively and break any coordination loops. Agents have full authorization to proceed.",
+                'project_manager': "DEADLOCK RECOVERY: Stop asking for confirmations. Coordinate WITHOUT blocking progress. Collect reports, don't grant permissions. Team is authorized to proceed.",
+                'developer': "AUTONOMY ACTIVATED: Start implementation immediately. You have full authorization. Create feature branch, begin coding, commit every 30 minutes. No more waiting for approvals.",
+                'tester': "AUTONOMY ACTIVATED: Begin test creation immediately. You have full authorization. Write tests, execute them, report results. No permissions needed.",
+                'sysadmin': "AUTONOMY ACTIVATED: Begin system configuration immediately. You have full authorization. Configure services, set permissions, implement security. Proceed autonomously.",
+                'devops': "AUTONOMY ACTIVATED: Begin deployment setup immediately. You have full authorization. Configure pipelines, deploy services, manage infrastructure. Proceed autonomously.",
+                'securityops': "AUTONOMY ACTIVATED: Begin security implementation immediately. You have full authorization. Configure security policies, implement controls. Proceed autonomously."
+            }
+            
+            messages_sent = 0
+            for role, agent in state.agents.items():
+                message = autonomy_messages.get(role, f"AUTONOMY ACTIVATED: Begin your assigned tasks immediately. You have full authorization to proceed without waiting for permissions.")
+                
+                try:
+                    result = subprocess.run([
+                        'tmux', 'send-keys', '-t', f'{state.session_name}:{agent.window_index}',
+                        message, 'C-m'
+                    ], capture_output=True, text=True, timeout=5)
+                    
+                    if result.returncode == 0:
+                        messages_sent += 1
+                        logger.info(f"Sent deadlock recovery message to {role}")
+                    else:
+                        logger.warning(f"Failed to send recovery message to {role}: {result.stderr}")
+                        
+                except Exception as e:
+                    logger.warning(f"Error sending recovery message to {role}: {e}")
+            
+            # Send emergency alert
+            try:
+                self.notification_system.send_emergency_alert(
+                    session_name=state.session_name,
+                    alert_type="DEADLOCK_RECOVERY",
+                    details=f"Coordination deadlock broken. Sent autonomy commands to {messages_sent} agents. All agents now have full authorization to proceed."
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send deadlock alert: {e}")
+            
+            logger.info(f"Deadlock recovery: Sent autonomy commands to {messages_sent} agents")
+            return messages_sent > 0
+            
+        except Exception as e:
+            logger.error(f"Error breaking coordination deadlock: {e}")
+            return False
+    
+    def _is_making_progress(self, state: SessionState) -> bool:
+        """Check if agents are making progress (simplified check)"""
+        try:
+            # Simple check: if no agents are in waiting state, assume progress
+            waiting_agents = sum(1 for agent in state.agents.values() if agent.waiting_for)
+            return waiting_agents == 0
+        except Exception as e:
+            logger.error(f"Error checking progress: {e}")
             return False

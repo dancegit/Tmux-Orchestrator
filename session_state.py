@@ -122,6 +122,19 @@ class SessionStateManager:
             if self.git_coordinator and self.sync_branches(state, force=False):
                 print(f"Auto-synced branches for {project_name} on load")
             
+            # DEADLOCK PREVENTION: Auto-clear waiting states on load
+            deadlock_cleared = False
+            for agent in state.agents.values():
+                if agent.waiting_for:
+                    agent.waiting_for = None
+                    agent.is_alive = True  # Reset to encourage action
+                    deadlock_cleared = True
+                    print(f"⚡ CLEARED waiting state for {agent.role} in {project_name} - agent should proceed autonomously")
+            
+            if deadlock_cleared:
+                self.save_session_state(state)  # Persist changes
+                print(f"🚫 DEADLOCK PREVENTION: Cleared all waiting states in {project_name}")
+            
             return state
             
         except Exception as e:

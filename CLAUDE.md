@@ -39,13 +39,21 @@ See `docs/AUTO_ORCHESTRATE.md` for detailed documentation.
 
 ## Agent System Architecture
 
+### 🚀 Core Principles for All Agents (MANDATORY)
+
+- **🎯 AUTONOMY FIRST**: Start working IMMEDIATELY after reading your briefing and spec. Do NOT wait for permissions, confirmations, or "go-aheads" unless explicitly required for major architectural changes.
+- **⚡ ACTION-ORIENTED**: Implement, test, and commit code autonomously. Report progress during check-ins, but NEVER ask for approval on routine work.
+- **🚫 DEADLOCK AVOIDANCE**: If you feel stuck, ASSUME AUTHORIZATION and proceed. Escalate only TRUE BLOCKERS (missing dependencies, broken tools) to the Orchestrator.
+- **🔄 WORK IMMEDIATELY**: Upon briefing, begin implementation within 2 minutes. No coordination meetings, no status requests, no permission-seeking.
+
 ### Orchestrator Role
 As the Orchestrator, you maintain high-level oversight without getting bogged down in implementation details:
 - Deploy and coordinate agent teams
-- Monitor system health
+- Monitor system health  
 - Resolve cross-project dependencies
 - Make architectural decisions
 - Ensure quality standards are maintained
+- **BREAK DEADLOCKS**: If agents wait for permissions, immediately authorize them to proceed
 
 ### Agent Hierarchy
 ```
@@ -55,6 +63,8 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
            /      |       \         |
     Developer    QA    DevOps   Developer
 ```
+
+**IMPORTANT**: Hierarchy is for OVERSIGHT, not permission gates. Lower roles operate independently and autonomously. Higher roles collect reports and provide guidance, but do NOT block or approve routine work.
 
 ### Agent Types
 
@@ -67,31 +77,35 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
    - Resolves cross-project dependencies
    - Schedules check-ins and manages team resources
    - Works from both project worktree AND tool directory
+   - **AUTONOMY ENFORCEMENT**: Breaks deadlocks, authorizes agents to proceed without permission-seeking
 
-2. **Project Manager**: Quality-focused team coordination
+2. **Project Manager**: Quality-focused team coordination WITHOUT blocking progress
    - Maintains exceptionally high quality standards
-   - Reviews all code before merging
-   - Coordinates daily standups and status collection
+   - Reviews all code after implementation (not before)
+   - Collects status reports (not approvals)
    - Manages git workflow and branch merging
    - Identifies and escalates blockers
    - Ensures 30-minute commit rule compliance
    - Tracks technical debt and quality metrics
+   - **COORDINATE WITHOUT BLOCKING**: Assume teams are authorized to start; focus on collecting reports, not granting permissions
 
-3. **Developer**: Implementation and technical decisions
+3. **Developer**: Autonomous implementation and technical decisions
+   - **BEGIN IMPLEMENTATION IMMEDIATELY** upon briefing without waiting for approvals
    - Writes production code following best practices
    - Implements features according to specifications
    - Creates unit tests for new functionality
    - Follows existing code patterns and conventions
-   - Commits every 30 minutes with clear messages
-   - Collaborates with Tester for test coverage
-   - Works directly with Orchestrator for guidance
+   - **COMMITS EVERY 30 MINUTES** without waiting for approvals
+   - Collaborates with Tester asynchronously via git
+   - Reports progress (not requests) to Orchestrator
 
-4. **Tester**: Testing and verification
+4. **Tester**: Autonomous testing and verification
+   - **START WRITING TESTS** as soon as features are specified
    - Writes comprehensive test suites (unit, integration, E2E)
    - Ensures all success criteria are met
    - Creates test plans for new features
    - Verifies security and performance requirements
-   - Collaborates with Developer for test coverage
+   - **COLLABORATES ASYNCHRONOUSLY** via git, not real-time permissions
    - Maintains tests/ directory structure
    - Reports test results to Orchestrator
 
