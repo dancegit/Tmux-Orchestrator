@@ -66,6 +66,34 @@ As the Orchestrator, you maintain high-level oversight without getting bogged do
 
 **IMPORTANT**: Hierarchy is for OVERSIGHT, not permission gates. Lower roles operate independently and autonomously. Higher roles collect reports and provide guidance, but do NOT block or approve routine work.
 
+### Git Workflow and Local Remotes (MANDATORY for Coordination)
+
+To enable fast, asynchronous collaboration (60-500x faster than GitHub), use **local remotes** pointing to other agents' worktrees. This allows fetching/merging without network pushes while maintaining autonomy. All worktrees share the same .git repo, but local remotes simulate "remote" behavior for safe integration.
+
+**Key Rules**:
+- **Branch Naming**: Each agent MUST work on a dedicated branch named after their role (e.g., Developer on `developer`, Tester on `tester`). Your worktree starts on this branch automatically—do NOT switch to `main`/`master` for routine work. Commit every 30 minutes to your branch.
+- **Integration Branch**: Use `integration` (auto-created) as the shared branch for merging (PM manages this). Switch from `master` to `integration` if needed.
+- **Commit Compliance**: Commit every 30 minutes autonomously. Report violations to Orchestrator.
+- **Autonomy**: Fetch/merge from others as needed—do NOT wait for permissions. Follow AUTONOMY FIRST and DEADLOCK AVOIDANCE.
+
+**Setup Local Remotes** (Automated by auto_orchestrate.py; run manually if needed):
+```bash
+# Use absolute paths (example)
+git remote add orchestrator /path/to/project/worktrees/orchestrator
+git remote add pm /path/to/project/worktrees/pm
+git remote add developer /path/to/project/worktrees/developer
+git remote add tester /path/to/project/worktrees/tester
+# Add for other roles as deployed
+```
+
+**Usage**:
+- Fetch: `git fetch <role>` (e.g., `git fetch developer`)
+- View Progress: `git log remotes/<role>/<role> --since="30 minutes ago"`
+- Merge (e.g., PM): `git checkout integration && git merge remotes/<role>/<role> --no-ff`
+- Track Compliance (e.g., PM): Check for commits on remotes/<role>/<role>. Escalate if no commits in 30 minutes.
+
+**PM-Specific**: Collect status by fetching from team worktrees. Merge into `integration` for reviews. Use git_coordinator.py for automated syncing if deadlocks occur.
+
 ### Agent Types
 
 #### Core Roles (Always Deployed)

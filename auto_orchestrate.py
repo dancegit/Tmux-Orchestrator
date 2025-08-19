@@ -474,6 +474,31 @@ class AutoOrchestrator:
                 if len(all_sessions) > 3:
                     remaining_count = len(all_sessions) - 3
                     console.print(f"   • ... and {remaining_count} more sessions")
+
+    def ensure_queue_daemon(self):
+        """Ensure queue daemon service is running"""
+        console.print("[cyan]Checking queue daemon...[/cyan]")
+        
+        # Check if systemd service is active
+        result = subprocess.run(['systemctl', 'is-active', '--quiet', 'tmux-orchestrator-queue'],
+                              capture_output=True)
+        
+        if result.returncode == 0:
+            console.print("[green]✓ Queue daemon service running[/green]")
+        else:
+            console.print("[yellow]Queue daemon not running - attempting to start...[/yellow]")
+            
+            # Try to start the service
+            start_result = subprocess.run(['sudo', 'systemctl', 'start', 'tmux-orchestrator-queue'],
+                                        capture_output=True, text=True)
+            
+            if start_result.returncode == 0:
+                console.print("[green]✓ Queue daemon started successfully[/green]")
+            else:
+                console.print("[yellow]Warning: Could not start queue daemon service[/yellow]")
+                console.print("[yellow]Projects may need to be run individually[/yellow]")
+                if start_result.stderr:
+                    console.print(f"[red]Error: {start_result.stderr.strip()}[/red]")
     
     def get_current_git_branch(self) -> Optional[str]:
         """Get the current git branch of the project"""
@@ -4216,6 +4241,9 @@ Remember: Context management is automatic - focus on creating good checkpoints t
         
         # Ensure tmux server is running
         self.ensure_tmux_server()
+        
+        # Ensure queue daemon is running
+        self.ensure_queue_daemon()
         
         # Validate inputs
         if not self.project_path.exists():

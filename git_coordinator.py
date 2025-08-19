@@ -52,9 +52,21 @@ class GitCoordinator:
         try:
             repo = Repo(agent.worktree_path)
             
-            # Fetch latest from remote
-            logger.info(f"Fetching latest changes for {agent.role}")
-            repo.git.fetch(remote)
+            # NEW: Prefer local remote if available (faster than 'origin')
+            source_remote = remote
+            # Check if source_branch matches a remote name (e.g., 'developer' remote for developer branch)
+            remote_names = [r.name for r in repo.remotes]
+            if source_branch in remote_names:
+                source_remote = source_branch
+                logger.info(f"Using local remote '{source_remote}' for faster sync")
+            # Also check normalized versions (e.g., project_manager -> project-manager)
+            elif source_branch.replace('_', '-') in remote_names:
+                source_remote = source_branch.replace('_', '-')
+                logger.info(f"Using local remote '{source_remote}' for faster sync")
+            
+            # Fetch latest from remote (now prefers local if possible)
+            logger.info(f"Fetching latest changes for {agent.role} from {source_remote}")
+            repo.git.fetch(source_remote)
             
             # Handle detached HEAD
             if repo.is_detached:
@@ -63,7 +75,7 @@ class GitCoordinator:
                 repo.git.checkout(target_branch)
             
             # Merge the source branch
-            merge_ref = f'{remote}/{source_branch}'
+            merge_ref = f'{source_remote}/{source_branch}'
             logger.info(f"Merging {merge_ref} into {agent.role}'s worktree")
             repo.git.merge(merge_ref, '--no-ff')
             
@@ -95,11 +107,29 @@ class GitCoordinator:
         source_branch = source_agent.current_branch or 'main'
         logger.info(f"Syncing from {source_role}'s branch: {source_branch}")
         
+        # NEW: Prefer local remote for source if it exists
+        try:
+            # Use base repo to check remotes (all worktrees share remotes)
+            repo = Repo(self.base_repo_path)
+            remote_names = [r.name for r in repo.remotes]
+            
+            # Check if source role has a local remote
+            normalized_source = source_role.lower().replace('_', '-')
+            if normalized_source in remote_names:
+                remote_to_use = normalized_source
+                logger.info(f"Using local remote '{remote_to_use}' for source {source_role}")
+            else:
+                remote_to_use = 'origin'
+                logger.info(f"No local remote for {source_role}, using 'origin'")
+        except Exception as e:
+            remote_to_use = 'origin'
+            logger.warning(f"Could not check remotes: {e}, defaulting to 'origin'")
+        
         # Determine target agents
         if target_roles is None:
             target_roles = [role for role in state.agents.keys() if role != source_role]
         
-        # Sync each target agent
+        # Sync each target agent (pass the preferred remote)
         for role in target_roles:
             if role == source_role:
                 continue  # Skip self
@@ -107,7 +137,7 @@ class GitCoordinator:
             agent = state.agents.get(role)
             if agent:
                 logger.info(f"Syncing {role} from {source_role}")
-                results[role] = self.sync_agent_branch(agent, source_branch=source_branch)
+                results[role] = self.sync_agent_branch(agent, source_branch=source_branch, remote=remote_to_use)
             else:
                 logger.warning(f"Target agent {role} not found")
                 results[role] = False

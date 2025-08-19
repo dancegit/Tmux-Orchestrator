@@ -416,8 +416,13 @@ class TmuxOrchestratorScheduler:
                                 'uv', 'run', '--quiet', '--script',
                                 str(self.tmux_orchestrator_path / 'auto_orchestrate.py'),
                                 '--spec', next_project['spec_path'],
-                                '--project', proj_arg
+                                '--project', proj_arg,
+                                '--batch'  # Enable batch mode for non-interactive operation
                             ]
+                            
+                            # Add --overwrite flag if this is a fresh start request
+                            if next_project.get('fresh_start', False):
+                                cmd.append('--overwrite')
                             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
                             self.update_project_status(next_project['id'], 'completed')
                             logger.info(f"Completed project {next_project['id']}")
