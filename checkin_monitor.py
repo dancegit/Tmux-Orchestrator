@@ -40,6 +40,11 @@ class CheckinMonitor:
         self.recovery_signals_required = 1  # Min signals needed to confirm recovery (reduced for faster backing off)
         self.emergency_tracker = {}  # Track per-session emergency count and last sent time
         
+        # Idle detection and nudging
+        self.idle_threshold_minutes = 10  # No activity in this time = idle (reduced for faster detection)
+        self.nudge_cooldown_minutes = 45  # Min time between nudges
+        self.nudge_tracker = {}  # {session_name: last_nudge_time isoformat}
+        
     def get_active_sessions(self) -> List[str]:
         """Get list of active tmux sessions"""
         try:
@@ -97,21 +102,107 @@ class CheckinMonitor:
             return []
     
     def get_last_activity(self, session_name: str, window: int) -> Optional[datetime]:
-        """Get last activity time for a window"""
+        """Get last activity time for a window (enhanced to return actual timestamp if possible)"""
         try:
-            # Capture the last line and check for activity
+            # Capture last 10 lines for better detection
             result = subprocess.run([
                 'tmux', 'capture-pane', '-t', f'{session_name}:{window}', 
-                '-p', '-S', '-1'
+                '-p', '-S', '-10'
             ], capture_output=True, text=True)
             
             if result.returncode == 0 and result.stdout.strip():
-                # For now, assume current time if there's output
-                # In practice, you'd parse timestamps from the output
-                return datetime.now()
-            return None
+                output = result.stdout.lower()
+                activity_indicators = [
+                    'human:', 'assistant:', '●', '✅', '🚨', 
+                    'analyzing', 'implementing', 'checking', 'working on',
+                    'i will', 'i\'ll', 'let me', 'starting', 'completed',
+                    'bash(', 'edit(', 'read(', 'write(', 'grep(',
+                    'scheduled check-in:', 'status update:'
+                ]
+                if any(indicator in output for indicator in activity_indicators):
+                    return datetime.now()  # Recent activity detected
+            return None  # No activity
         except:
             return None
+    
+    def is_team_idle(self, session_name: str, state: SessionState) -> bool:
+        """Check if ALL agents in the team are idle (no recent activity)"""
+        if not state or not state.agents:
+            return False
+        
+        now = datetime.now()
+        active_agents = 0
+        idle_agents = []
+        
+        for role, agent in state.agents.items():
+            window = agent.window_index if hasattr(agent, 'window_index') else None
+            if window is None:
+                continue  # Skip if no window
+                
+            last_active = self.get_last_activity(session_name, window)
+            if last_active and (now - last_active).total_seconds() / 60 < self.idle_threshold_minutes:
+                active_agents += 1
+            else:
+                idle_agents.append(f"{role} (window {window})")
+        
+        # Log idle status
+        if active_agents == 0 and len(state.agents) > 0:
+            logger.info(f"All agents idle in {session_name}: {', '.join(idle_agents)}")
+            return True
+        
+        return False
+    
+    def nudge_idle_project(self, session_name: str, health: Dict):
+        """Reschedule the earliest check-in to ASAP if team is idle"""
+        now = datetime.now()
+        
+        # Check cooldown
+        if session_name in self.nudge_tracker:
+            last_nudge = datetime.fromisoformat(self.nudge_tracker[session_name])
+            if (now - last_nudge).total_seconds() / 60 < self.nudge_cooldown_minutes:
+                logger.debug(f"Skipping nudge for {session_name} - cooldown active")
+                return  # Too soon
+        
+        # Get scheduled check-ins (non-emergency)
+        checkins = [c for c in self.get_scheduled_checkins(session_name) 
+                    if 'EMERGENCY' not in c.get('note', '') and 'IDLE NUDGE' not in c.get('note', '')]
+        if not checkins:
+            # No check-ins: Fall back to emergency
+            logger.warning(f"Idle project {session_name}: No check-ins, scheduling emergency nudge")
+            self.schedule_emergency_checkin(session_name, 0, 'orchestrator', 1)
+            self.nudge_tracker[session_name] = now.isoformat()
+            return
+        
+        # Find earliest
+        earliest = min(checkins, key=lambda x: x['next_run'])
+        time_to_earliest = (earliest['next_run'] - now).total_seconds() / 60
+        
+        if time_to_earliest < 5:  # Already soon, no need to nudge
+            logger.debug(f"Next check-in for {session_name} already in {time_to_earliest:.1f} minutes")
+            return
+        
+        # Reschedule to 1 minute from now
+        new_next_run = now + timedelta(minutes=1)
+        try:
+            conn = sqlite3.connect(str(self.scheduler_db))
+            cursor = conn.cursor()
+            
+            # Update with IDLE NUDGE note
+            new_note = f"IDLE NUDGE: Team appears idle, please check in ASAP (was: {earliest['note'] or 'Regular check-in'})"
+            cursor.execute("""
+                UPDATE tasks 
+                SET next_run = ?, note = ?
+                WHERE id = ?
+            """, (new_next_run.timestamp(), new_note, earliest['id']))
+            conn.commit()
+            conn.close()
+            
+            self.nudge_tracker[session_name] = now.isoformat()
+            logger.warning(f"Idle project {session_name}: Nudged task {earliest['id']} ({earliest['role']}) to run in 1 minute")
+            health['issues'].append("Team appears idle - nudged next check-in")
+            health['recommendations'].append("Monitor for response after nudge")
+        except Exception as e:
+            logger.error(f"Failed to nudge {session_name}: {e}")
     
     def check_project_health(self, session_name: str, state: SessionState) -> Dict:
         """Check overall health of a project"""
@@ -157,6 +248,12 @@ class CheckinMonitor:
                 health['status'] = 'warning' if health['status'] == 'healthy' else health['status']
                 health['issues'].append(f"{role} agent is not alive")
                 health['recommendations'].append(f"Restart {role} agent")
+        
+        # Check for idle team before recovery check
+        if health['status'] != 'critical' and self.is_team_idle(session_name, state):
+            health['status'] = 'warning' if health['status'] == 'healthy' else health['status']
+            health['issues'].append("All team members appear idle (no recent activity)")
+            self.nudge_idle_project(session_name, health)
         
         # Check for recovery if emergency was previously sent
         if session_name in self.emergency_tracker:
