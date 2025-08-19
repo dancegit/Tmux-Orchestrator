@@ -198,6 +198,9 @@ sudo ./systemd/uninstall-systemd-service.sh $USER
 # NEW: Automatic project detection - just provide the spec!
 ./auto_orchestrate.py --spec /path/to/spec.md
 
+# NEW: Create new git projects from specs (creates repo as sibling to spec location)
+./auto_orchestrate.py --new-project --spec /path/to/spec.md
+
 # NEW: Batch processing - queue multiple specs
 ./auto_orchestrate.py --spec spec1.md --spec spec2.md --spec spec3.md
 
@@ -265,6 +268,7 @@ Schedule yourself to check in every hour."
 The `auto_orchestrate.py` script provides fully automated setup:
 - **Zero Configuration**: Clone and run - automatic setup on first use
 - **Automatic Project Detection**: Finds git root automatically - just provide the spec file
+- **New Project Creation**: `--new-project` flag creates new git repositories from specs
 - **Batch Processing**: Queue multiple specs for sequential processing without conflicts
 - **Context-Aware**: Uses `/context-prime` to understand your project before planning
 - **Spec Analysis**: Claude analyzes your markdown specifications intelligently
@@ -272,6 +276,49 @@ The `auto_orchestrate.py` script provides fully automated setup:
 - **Git Worktree Isolation**: Each agent works in isolated git worktree to prevent conflicts
 - **Resume Capability**: Intelligently resume interrupted orchestrations
 - **Credit Management**: Automatic handling of Claude Code usage limits with pause/resume
+
+#### 🆕 New Project Creation (`--new-project` flag)
+The `--new-project` flag enables creating new git repositories directly from specification files:
+
+**How it works:**
+1. **Project Location**: Creates new project as sibling directory to the spec file's git root
+2. **Git Initialization**: Creates new repository with initial commit containing the spec
+3. **Worktree Placement**: Places agent worktrees parallel to project (not in registry)
+4. **Batch Support**: Can process multiple specs to create multiple projects
+5. **Pattern Matching**: Supports glob patterns and directory processing
+
+**Examples:**
+```bash
+# Create single project from spec
+./auto_orchestrate.py --new-project --spec feature-spec.md
+# Result: Creates "feature-spec" directory next to the spec file
+
+# Batch create projects from multiple specs
+./auto_orchestrate.py --new-project --spec spec1.md --spec spec2.md
+
+# Process entire directory of specs
+./auto_orchestrate.py --new-project --spec /path/to/specs/
+
+# Use patterns to select specific specs
+./auto_orchestrate.py --new-project --spec "features/user-*.md"
+
+# Force overwrite existing projects
+./auto_orchestrate.py --new-project --force --spec existing-project.md
+```
+
+**Directory Structure Example:**
+```
+parent-directory/
+├── existing-repo/          # Original git repository containing spec
+│   └── feature-spec.md     # Your specification file
+└── feature-spec/           # NEW: Created project directory
+    ├── .git/               # New git repository
+    ├── feature-spec.md     # Copy of spec file
+    └── feature-spec_worktrees/  # Agent worktrees (parallel to project)
+        ├── orchestrator/
+        ├── developer/
+        └── tester/
+```
 
 ### 🎯 Dynamic Team System
 - **Automatic Role Selection**: Detects project type and deploys appropriate specialists
@@ -527,7 +574,22 @@ The orchestrator can share insights between projects:
 # NEW: Automatic project detection - no --project needed!
 ./auto_orchestrate.py --spec ~/specs/auth-system.md
 
-# NEW: Batch processing multiple specs
+# NEW: Create new git projects from specs (--new-project flag)
+./auto_orchestrate.py --new-project --spec ~/specs/auth-system.md
+
+# NEW: Batch creation of multiple projects
+./auto_orchestrate.py --new-project --spec spec1.md --spec spec2.md --spec spec3.md
+
+# NEW: Process entire directories of specs
+./auto_orchestrate.py --new-project --spec ~/specs/
+
+# NEW: Use glob patterns for selective project creation
+./auto_orchestrate.py --new-project --spec "~/specs/feature-*.md"
+
+# NEW: Force overwrite existing projects
+./auto_orchestrate.py --new-project --force --spec existing-feature.md
+
+# NEW: Batch processing multiple specs (existing projects)
 ./auto_orchestrate.py --spec spec1.md --spec spec2.md --spec spec3.md
 
 # Force batch mode for single spec

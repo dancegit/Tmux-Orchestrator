@@ -4351,6 +4351,21 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
         
         return
     
+    # AUTOMATIC BATCH MODE: Check for ongoing orchestrations and force batch mode
+    if not resume and not batch and spec:
+        tmux_orchestrator_path = Path(__file__).parent
+        manager = ConcurrentOrchestrationManager(tmux_orchestrator_path)
+        active_orchestrations = [orch for orch in manager.list_active_orchestrations() if orch.get('active')]
+        
+        if active_orchestrations:
+            console.print(f"\n[yellow]⚠️  Detected {len(active_orchestrations)} active orchestration(s):[/yellow]")
+            for orch in active_orchestrations:
+                console.print(f"[yellow]  • {orch['project_name']} ({orch['session_name']})[/yellow]")
+            
+            console.print(f"\n[blue]🎯 Auto-enabling batch mode to prevent conflicts[/blue]")
+            console.print(f"[blue]Your spec(s) will be queued for sequential processing[/blue]")
+            batch = True  # Force batch mode
+    
     # Handle new-project mode - create new projects for specs
     if new_project:
         if not spec:
@@ -4358,6 +4373,17 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
             return
         if project:
             console.print("[yellow]Warning: --project ignored when --new-project is used[/yellow]")
+        
+        # AUTOMATIC BATCH MODE: Check for ongoing orchestrations in new-project mode too
+        if not batch:
+            tmux_orchestrator_path = Path(__file__).parent
+            manager = ConcurrentOrchestrationManager(tmux_orchestrator_path)
+            active_orchestrations = [orch for orch in manager.list_active_orchestrations() if orch.get('active')]
+            
+            if active_orchestrations:
+                console.print(f"\n[yellow]⚠️  Detected {len(active_orchestrations)} active orchestration(s) during new-project creation[/yellow]")
+                console.print(f"[blue]🎯 Auto-enabling batch mode for new projects to prevent conflicts[/blue]")
+                batch = True  # Force batch mode for new projects too
         
         # Expand spec patterns (globs, directories)
         try:

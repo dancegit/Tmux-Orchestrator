@@ -35,14 +35,14 @@ class CheckinMonitor:
         
         # Emergency check-in strategy
         self.emergency_strategy = 'hybrid'  # 'one-time', 'recurring', 'hybrid'
-        self.emergency_intervals = [0, 10, 30]  # Minutes: immediate, then 10min, then 30min (adjusted for 5-min monitoring)
+        self.emergency_intervals = [0, 5, 15]  # Minutes: immediate, then 5min, then 15min (optimized for 2-min monitoring)
         self.max_emergencies = 3  # Max number of emergency attempts
         self.recovery_signals_required = 1  # Min signals needed to confirm recovery (reduced for faster backing off)
         self.emergency_tracker = {}  # Track per-session emergency count and last sent time
         
-        # Idle detection and nudging (optimized for 5-minute monitoring)
-        self.idle_threshold_minutes = 10  # No activity in this time = idle (increased to reduce false positives)
-        self.nudge_cooldown_minutes = 10  # Min time between nudges (allows nudge every 2 monitoring cycles)
+        # Idle detection and nudging (optimized for 2-minute monitoring)  
+        self.idle_threshold_minutes = 5  # No activity in this time = idle (reduced for faster throughput)
+        self.nudge_cooldown_minutes = 6  # Min time between nudges (allows nudge every 3 monitoring cycles)
         self.nudge_tracker = {}  # {session_name: last_nudge_time isoformat}
         
     def get_active_sessions(self) -> List[str]:
@@ -567,7 +567,7 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
                 except Exception as e:
                     logger.error(f"Error checking authorization timeout for {role}: {e}")
     
-    def run_continuous_monitoring(self, interval_minutes: int = 5):
+    def run_continuous_monitoring(self, interval_minutes: int = 2):
         """Run continuous monitoring"""
         logger.info(f"Starting continuous check-in monitoring (interval: {interval_minutes} minutes)")
         
@@ -595,7 +595,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Monitor Tmux Orchestrator check-ins')
     parser.add_argument('--once', action='store_true', help='Run once instead of continuous monitoring')
-    parser.add_argument('--interval', type=int, default=5, help='Monitoring interval in minutes (default: 5)')
+    parser.add_argument('--interval', type=int, default=2, help='Monitoring interval in minutes (default: 2)')
     parser.add_argument('--force-checkin', nargs=2, metavar=('SESSION', 'WINDOW'), 
                        help='Force immediate check-in for specific window')
     
