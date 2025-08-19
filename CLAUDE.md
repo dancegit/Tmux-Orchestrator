@@ -1384,12 +1384,38 @@ tmux send-keys -t [session]:0 Enter
 
 ## Communication Protocols
 
-### Hub-and-Spoke Model
-With the simplified structure, the Orchestrator acts as the central hub:
+### Hub-and-Spoke Model (ENHANCED)
+The Orchestrator acts as the central hub with **automatic enforcement**:
 - All agents report directly to Orchestrator
 - Orchestrator coordinates all cross-functional communication
 - Direct agent-to-agent communication only for immediate needs (test handoffs)
-- Clear, focused communication reduces complexity
+- **NEW**: Automatic hub-spoke enforcement prevents silent completions
+
+#### 🚨 Automatic Communication Enforcement
+Since the DevOps silent completion incident, the system now enforces hub-spoke:
+
+1. **Event Hook System**: Task completions automatically trigger Orchestrator notification
+2. **Message Routing**: Critical messages (complete, deploy, fail) auto-route to Orchestrator
+3. **Dependency Tracking**: Agents get notified when their dependencies complete
+4. **Audit Trail**: All communications logged for compliance monitoring
+
+#### Enhanced Communication Scripts
+
+**Hub-Spoke Enforced Messaging**:
+```bash
+# Use for critical updates - automatically notifies Orchestrator
+./send-claude-message-hubspoke.sh session:role "Deployment complete"
+
+# Report task completion - updates state and notifies hub
+./report-completion.sh devops "Modal deployment complete - EVENT_ROUTER_ENABLED=true"
+```
+
+**How It Works**:
+- Detects critical keywords (complete, deploy, fail, error, block)
+- Appends "Report to Orchestrator" instruction to agent messages
+- Sends copy to Orchestrator for critical updates
+- Updates session state to track completions
+- Triggers dependency notifications automatically
 
 ### Role Communication Matrix
 
@@ -1693,6 +1719,34 @@ PMs should implement:
 3. **Acknowledge Receipt**: Simple "ACK" for tasks
 4. **Escalate Quickly**: Don't stay blocked >10 min
 5. **One Topic Per Message**: Keep focused
+6. **Report Completions**: Use `./report-completion.sh` for all task completions
+7. **Critical Updates**: Use hub-spoke script for deployment/failure messages
+
+### Preventing Communication Breakdowns
+
+**For Agents**:
+- ALWAYS report task completion to Orchestrator
+- Use `./report-completion.sh role "completion message"` after major tasks
+- Don't assume other agents know what you've done
+- Include specific details (e.g., "EVENT_ROUTER_ENABLED=true")
+
+**For Orchestrators**:
+- Monitor for silent completions using checkin_monitor.py
+- Set up dependencies: `set_role_dependencies(project, {'pm': ['devops']})`
+- Use enhanced messaging scripts for critical communications
+- Check session state regularly for agent status
+
+**Example - Proper Deployment Reporting**:
+```bash
+# DevOps completes deployment
+./report-completion.sh devops "Modal deployment complete - EVENT_ROUTER_ENABLED=true"
+
+# This automatically:
+# 1. Updates session state
+# 2. Notifies Orchestrator
+# 3. Triggers PM notification if PM depends on DevOps
+# 4. Logs completion for audit
+```
 
 ## Critical Self-Scheduling Protocol
 

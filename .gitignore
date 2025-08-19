@@ -1,4 +1,4 @@
-
+*.pid
 *.db
 .mcp.json
 # Local configuration
