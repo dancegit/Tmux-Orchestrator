@@ -763,10 +763,18 @@ class ProjectFailureHandler:
                 message = autonomy_messages.get(role, f"AUTONOMY ACTIVATED: Begin your assigned tasks immediately. You have full authorization to proceed without waiting for permissions.")
                 
                 try:
+                    # Send message and Enter key separately to ensure delivery
                     result = subprocess.run([
                         'tmux', 'send-keys', '-t', f'{state.session_name}:{agent.window_index}',
-                        message, 'C-m'
+                        message
                     ], capture_output=True, text=True, timeout=5)
+                    
+                    if result.returncode == 0:
+                        # Send Enter key separately to ensure processing
+                        subprocess.run([
+                            'tmux', 'send-keys', '-t', f'{state.session_name}:{agent.window_index}',
+                            'C-m'
+                        ], capture_output=True, text=True, timeout=5)
                     
                     if result.returncode == 0:
                         messages_sent += 1
