@@ -47,6 +47,7 @@ class SessionState:
     phases_completed: List[str] = None  # Track completed implementation phases
     spec_path: Optional[str] = None  # Path to spec file for notifications
     dependencies: Dict[str, List[str]] = None  # Role dependencies (e.g., {'pm': ['devops']})
+    worktree_base_path: Optional[str] = None  # Custom base path for worktrees (overrides registry default)
     
     def __post_init__(self):
         """Initialize mutable default values"""
@@ -348,7 +349,8 @@ def create_initial_session_state(
     worktree_paths: Dict[str, Path],
     project_size: str = "medium",
     parent_branch: Optional[str] = None,
-    spec_path: Optional[str] = None
+    spec_path: Optional[str] = None,
+    worktree_base_path: Optional[str] = None
 ) -> SessionState:
     """Create initial session state from orchestration setup"""
     
@@ -376,5 +378,6 @@ def create_initial_session_state(
         agents=agent_states,
         project_size=project_size,
         parent_branch=parent_branch,
-        spec_path=spec_path
+        spec_path=spec_path,
+        worktree_base_path=worktree_base_path
     )

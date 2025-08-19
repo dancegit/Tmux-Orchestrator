@@ -28,6 +28,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import tempfile
+import shutil
+import glob
+from collections import OrderedDict
 
 import click
 from rich.console import Console
@@ -66,6 +69,70 @@ def find_git_root(start_path: Path) -> Optional[Path]:
         current = current.parent
         depth += 1
     return None  # No git root found
+
+def setup_new_project(spec_path: Path, force: bool = False) -> Tuple[str, str]:
+    """Create and initialize a new git project based on the spec file. Returns (new_project_path, new_spec_path)."""
+    if spec_path.suffix.lower() != '.md':
+        raise ValueError("Spec file must be a .md file")
+    
+    # Find git root of spec's parent
+    git_root = find_git_root(spec_path.parent)
+    if not git_root:
+        raise ValueError(f"No git repository found containing {spec_path}")
+    
+    # Derive new project name from spec stem (e.g., 'new_feature')
+    new_project_name = spec_path.stem.lower().replace(' ', '-')
+    new_project_path = git_root.parent / new_project_name
+    
+    # Check if exists and handle overwrite
+    if new_project_path.exists():
+        if force:
+            shutil.rmtree(new_project_path)
+            console.print(f"[yellow]Removed existing project: {new_project_path}[/yellow]")
+        else:
+            raise RuntimeError(f"{new_project_path} already exists. Use --force to overwrite or choose a different spec name.")
+    
+    new_project_path.mkdir(parents=True, exist_ok=True)
+    
+    # Copy spec
+    dest_spec = new_project_path / spec_path.name
+    shutil.copy(spec_path, dest_spec)
+    console.print(f"[green]Copied spec to {dest_spec}[/green]")
+    
+    # Git init and initial commit (required for worktrees)
+    try:
+        subprocess.run(['git', 'init', str(new_project_path)], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(new_project_path), 'add', spec_path.name], check=True)
+        subprocess.run(['git', '-C', str(new_project_path), 'commit', '-m', 'Initial commit: Add specification file'], check=True)
+        console.print(f"[green]Initialized new git repo at {new_project_path}[/green]")
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.decode() if e.stderr else str(e)
+        raise RuntimeError(f"Git initialization failed: {error_msg}")
+    
+    return str(new_project_path), str(dest_spec)
+
+def expand_specs(spec_args: List[str]) -> List[Path]:
+    """Expand spec arguments, including globs and directories, to a list of unique .md files."""
+    expanded = []
+    for arg in spec_args:
+        path = Path(arg)
+        if path.is_dir():
+            # If directory, glob *.md inside it
+            expanded.extend([Path(p) for p in glob.glob(str(path / '*.md'))])
+        elif '*' in arg or '?' in arg:  # Treat as glob pattern
+            expanded.extend([Path(p) for p in glob.glob(arg)])
+        else:
+            expanded.append(path)
+    
+    # Deduplicate while preserving order
+    unique_specs = list(OrderedDict.fromkeys(expanded))
+    
+    # Validate
+    invalid = [p for p in unique_specs if not p.exists() or p.suffix.lower() != '.md']
+    if invalid:
+        raise ValueError(f"Invalid specs (must be existing .md files): {invalid}")
+    
+    return unique_specs
 
 # Pydantic models for structured data
 class Phase(BaseModel):
@@ -1720,6 +1787,10 @@ This file is automatically read by Claude Code when working in this directory.
     
     def get_worktrees_base_dir(self, project_name: str) -> Path:
         """Get the base directory for worktrees - EXTERNAL to project to avoid Git issues"""
+        # Check if custom worktree base path is set (for --new-project mode)
+        if hasattr(self, 'custom_worktree_base') and self.custom_worktree_base:
+            return Path(self.custom_worktree_base)
+        
         # BEST PRACTICE: Following Grok's recommendation to place worktrees outside project
         # This avoids nested worktree issues, git clean risks, and repository bloat
         # Format: /path/to/project-name-worktrees/ (sibling to project directory)
@@ -4177,7 +4248,8 @@ Remember: Context management is automatic - focus on creating good checkpoints t
             worktree_paths=self.worktree_paths,
             project_size=self.implementation_spec.project_size.size,
             parent_branch=parent_branch,
-            spec_path=str(self.spec_path)
+            spec_path=str(self.spec_path),
+            worktree_base_path=getattr(self, 'custom_worktree_base', None)
         )
         
         self.session_state_manager.save_session_state(session_state)
@@ -4223,8 +4295,10 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='When resuming, re-brief all agents with context')
 @click.option('--list', '-l', 'list_orchestrations', is_flag=True,
               help='List all active orchestrations')
+@click.option('--new-project', is_flag=True,
+              help='Create new git repositories for each spec file as siblings to the spec location')
 def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, team_type: str, roles: tuple, force: bool, plan: str, 
-         resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool):
+         resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool, new_project: bool):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
@@ -4276,6 +4350,90 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
             console.print("[yellow]No active orchestrations found[/yellow]")
         
         return
+    
+    # Handle new-project mode - create new projects for specs
+    if new_project:
+        if not spec:
+            console.print("[red]Error: --new-project requires at least one --spec[/red]")
+            return
+        if project:
+            console.print("[yellow]Warning: --project ignored when --new-project is used[/yellow]")
+        
+        # Expand spec patterns (globs, directories)
+        try:
+            spec_paths = expand_specs(list(spec))
+        except ValueError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            return
+        
+        if not spec_paths:
+            console.print("[red]Error: No valid .md specs found[/red]")
+            return
+        
+        console.print(f"[blue]Creating new projects for {len(spec_paths)} spec(s)...[/blue]")
+        
+        created_projects = []
+        failed_projects = []
+        
+        for idx, spec_path in enumerate(spec_paths, 1):
+            try:
+                console.print(f"[blue]Processing spec {idx}/{len(spec_paths)}: {spec_path}[/blue]")
+                
+                # Create new project for this spec
+                new_project_path, new_spec_path = setup_new_project(spec_path, force)
+                
+                # Store for batch processing if multiple specs
+                created_projects.append({
+                    'project_path': new_project_path,
+                    'spec_path': new_spec_path,
+                    'original_spec': str(spec_path)
+                })
+                
+                console.print(f"[green]✓ Created project: {new_project_path}[/green]")
+                
+            except Exception as e:
+                console.print(f"[red]Error creating project for {spec_path}: {str(e)}[/red]")
+                logger.error(f"New project creation failed: {e}", exc_info=True)
+                failed_projects.append(str(spec_path))
+                continue
+        
+        if not created_projects:
+            console.print("[red]No projects were created successfully[/red]")
+            return
+        
+        console.print(f"[green]Successfully created {len(created_projects)} project(s)[/green]")
+        if failed_projects:
+            console.print(f"[yellow]Failed to create {len(failed_projects)} project(s): {', '.join(failed_projects)}[/yellow]")
+        
+        # If multiple projects or batch mode, use scheduler for sequential processing
+        if len(created_projects) > 1 or batch:
+            from scheduler import TmuxOrchestratorScheduler
+            scheduler = TmuxOrchestratorScheduler()
+            
+            console.print(f"[cyan]Enqueuing {len(created_projects)} projects for batch orchestration...[/cyan]")
+            
+            for project_info in created_projects:
+                project_id = scheduler.enqueue_project(
+                    project_info['spec_path'], 
+                    project_info['project_path']
+                )
+                console.print(f"[green]✓ Enqueued: {project_info['project_path']} (ID: {project_id})[/green]")
+            
+            console.print("\n[yellow]Projects enqueued for batch processing.[/yellow]")
+            console.print("[cyan]To start processing:[/cyan] uv run scheduler.py --queue-daemon")
+            console.print("[cyan]To view queue status:[/cyan] uv run scheduler.py --queue-list")
+            return
+        
+        else:
+            # Single project - process immediately
+            project_info = created_projects[0]
+            console.print(f"[blue]Starting immediate orchestration for {Path(project_info['project_path']).name}...[/blue]")
+            
+            # Override spec and project for immediate processing
+            spec = (project_info['spec_path'],)
+            project = project_info['project_path']
+            
+            # Continue with normal single-project orchestration below
     
     # Handle batch mode - enqueue multiple specs
     if len(spec) > 1 or batch:
@@ -4389,6 +4547,13 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
     orchestrator.additional_roles = list(roles) if roles else []
     orchestrator.force = force
     orchestrator.plan_type = plan if plan != 'auto' else 'max20'  # Default to max20
+    
+    # Set custom worktree path for new projects (from --new-project processing above)
+    if new_project and project:
+        project_name = Path(project).name
+        custom_worktree_base = str(Path(project).parent / f"{project_name}_worktrees")
+        orchestrator.custom_worktree_base = custom_worktree_base
+        console.print(f"[blue]Using custom worktree location: {custom_worktree_base}[/blue]")
     orchestrator.run()
 
 
