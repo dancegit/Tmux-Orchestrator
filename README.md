@@ -115,11 +115,37 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Monitor everything
 ./monitoring_dashboard.py
 
-# Send message to agent
-./send-claude-message.sh session:window "message"
+# Send message to agent (with hub-spoke enforcement)
+./send-claude-message-hubspoke.sh session:window "message"
+
+# Report task completion
+./report-completion.sh role "completion message"
 
 # Check performance
 ./performance_tuner.py
+```
+
+### 🛡️ Hub-Spoke Communication Enforcement
+The system now automatically enforces hub-spoke communication to prevent agents from completing tasks silently:
+- Critical messages (complete, deploy, fail) auto-route to Orchestrator
+- Task completions trigger automatic status reports
+- Dependencies are tracked and resolved automatically
+- All communications are logged for compliance
+
+### 🔧 Systemd Service (Optional)
+For production deployments, run the scheduler as a systemd service:
+```bash
+# Install service (run once)
+sudo ./systemd/install-systemd-service.sh $USER
+
+# Check status
+sudo systemctl status tmux-orchestrator-scheduler@$USER
+
+# View logs
+sudo journalctl -u tmux-orchestrator-scheduler@$USER -f
+
+# Uninstall
+sudo ./systemd/uninstall-systemd-service.sh $USER
 ```
 
 ## 🚀 Main Scripts Overview
@@ -129,7 +155,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
 | **`auto_orchestrate.py`** | Automated setup from specifications | Starting new projects with a spec file |
-| **`send-claude-message.sh`** | Send messages to Claude agents | Communicating with any agent |
+| **`send-claude-message.sh`** | Send messages to Claude agents | Basic agent communication |
+| **`send-claude-message-hubspoke.sh`** | Hub-spoke enforced messaging | Critical updates & completions |
+| **`report-completion.sh`** | Report task completions | After completing major tasks |
 | **`schedule_with_note.sh`** | Schedule agent check-ins | Setting up recurring tasks |
 | **`monitoring_dashboard.py`** | Real-time web dashboard | Monitoring system health |
 
