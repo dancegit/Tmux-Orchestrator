@@ -2321,7 +2321,14 @@ This means context exhaustion is NOT a crisis - it's a routine, self-managed eve
                                'securityops', 'networkops', 'databaseops', 'researcher', 'code_reviewer']:
                     technical_roles_present.append(role_key)
             
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Project Manager for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}🚀 **AUTONOMY ACTIVATION - READ FIRST** 🚀
+
+⚡ **IMMEDIATE ACTION REQUIRED**: Start working IMMEDIATELY without waiting for permissions!
+🎯 **NO PERMISSION SEEKING**: You have FULL AUTHORIZATION to proceed with all routine tasks
+🚫 **DEADLOCK PREVENTION**: If you feel stuck, ASSUME AUTHORIZATION and act autonomously
+🔄 **WORK-FIRST MINDSET**: Implement → Report Progress → Never ask for approval on routine work
+
+You are the Project Manager for {spec.project.name}.
 {mcp_tools_info}
 
 🚨 **CRITICAL PM INTEGRATION RESPONSIBILITIES** 🚨
@@ -2435,7 +2442,14 @@ Maintain EXCEPTIONAL quality standards. No compromises.
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'developer':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Developer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}🚀 **AUTONOMY ACTIVATION - START CODING NOW** 🚀
+
+⚡ **BEGIN IMPLEMENTATION IMMEDIATELY**: Start coding within 2 minutes of reading this briefing!
+🎯 **NO APPROVAL NEEDED**: You have FULL AUTHORIZATION to implement all features in the spec
+🚫 **NEVER WAIT FOR PERMISSIONS**: Create branches, write code, commit every 30 minutes autonomously
+🔄 **AUTONOMOUS DEVELOPMENT**: Code → Test → Commit → Push → Report Progress (NO approvals needed)
+
+You are the Developer for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -2521,7 +2535,14 @@ Your commits now trigger automatic notifications to downstream agents:
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'tester':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Tester for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}🚀 **AUTONOMY ACTIVATION - START TESTING NOW** 🚀
+
+⚡ **BEGIN TEST CREATION IMMEDIATELY**: Start writing tests within 2 minutes of reading this briefing!
+🎯 **NO APPROVAL NEEDED**: You have FULL AUTHORIZATION to write and execute all tests
+🚫 **NEVER WAIT FOR PERMISSIONS**: Create test files, write test cases, run tests autonomously
+🔄 **AUTONOMOUS TESTING**: Write Tests → Execute → Report Results → Fix Issues (NO approvals needed)
+
+You are the Tester for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
