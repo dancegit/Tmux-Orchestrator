@@ -41,7 +41,7 @@ class CheckinMonitor:
         self.emergency_tracker = {}  # Track per-session emergency count and last sent time
         
         # Idle detection and nudging
-        self.idle_threshold_minutes = 10  # No activity in this time = idle (reduced for faster detection)
+        self.idle_threshold_minutes = 5  # No activity in this time = idle (reduced for faster detection)
         self.nudge_cooldown_minutes = 45  # Min time between nudges
         self.nudge_tracker = {}  # {session_name: last_nudge_time isoformat}
         
