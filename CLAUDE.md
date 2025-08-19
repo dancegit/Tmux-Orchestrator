@@ -1748,6 +1748,51 @@ PMs should implement:
 # 4. Logs completion for audit
 ```
 
+### Authorization and Approval Protocols
+
+**Authorization workflows prevent bottlenecks** like Developer waiting for PM approval while PM is unaware.
+
+#### Requesting Authorization
+When you need approval from another role, use the explicit authorization request:
+```bash
+# Developer requests deployment authorization from PM
+./request-authorization.sh developer "Deploy event_router.py to Modal production" "pm"
+
+# This creates a tracked request with:
+# - Unique request ID for tracking
+# - Automatic routing to target AND Orchestrator
+# - 30-minute timeout with escalation
+# - Session state tracking (waiting_for)
+```
+
+#### Responding to Authorization Requests
+When you receive an authorization request, respond promptly:
+```bash
+# Approve format
+"Approved [REQUEST_ID]"
+
+# Deny format  
+"Denied [REQUEST_ID] - Reason: [explanation]"
+```
+
+#### Authorization Rules
+1. **Use Explicit Requests**: Don't just mention "waiting for approval" - use the script
+2. **Include Context**: Provide clear details about what you're requesting
+3. **Respond Within 30 Minutes**: After timeout, request escalates to Orchestrator
+4. **Track Request IDs**: Use the ID for clear request-response matching
+
+#### Common Authorization Scenarios
+- **Developer → PM**: Deployment authorization, merge approvals
+- **PM → Orchestrator**: Major architecture decisions, priority changes
+- **Any Role → SecurityOps**: Security exception requests
+- **Any Role → SysAdmin**: System access or configuration changes
+
+#### Timeout and Escalation
+If no response within 30 minutes:
+1. System automatically escalates to Orchestrator
+2. Orchestrator will coordinate resolution
+3. Original request remains valid until explicitly approved/denied
+
 ## Critical Self-Scheduling Protocol
 
 ### 🚨 MANDATORY STARTUP CHECK FOR ALL ORCHESTRATORS

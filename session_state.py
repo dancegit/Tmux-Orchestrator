@@ -26,6 +26,7 @@ class AgentState:
     credit_reset_time: Optional[str] = None
     current_branch: Optional[str] = None
     commit_hash: Optional[str] = None
+    waiting_for: Optional[Dict[str, Any]] = None  # Track authorization waits
 
 
 @dataclass
