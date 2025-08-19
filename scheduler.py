@@ -17,7 +17,7 @@ import logging
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Callable
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent))
@@ -40,7 +40,11 @@ class TmuxOrchestratorScheduler:
         self.db_path = db_path
         self.tmux_orchestrator_path = tmux_orchestrator_path or Path(__file__).parent
         self.session_state_manager = SessionStateManager(self.tmux_orchestrator_path)
+        self.event_subscribers: Dict[str, List[Callable]] = {}  # Event hook system
         self.setup_database()
+        
+        # Auto-subscribe default completion handler
+        self.subscribe('task_complete', self._handle_task_completion)
         
     def setup_database(self):
         """Initialize SQLite database for persistent task storage"""
@@ -107,6 +111,70 @@ class TmuxOrchestratorScheduler:
         except Exception as e:
             logger.error(f"Error checking credit status: {e}")
         return {'exhausted': False, 'reset_time': None, 'alive': True}
+    
+    def subscribe(self, event: str, callback: Callable):
+        """Subscribe a callback to an event"""
+        self.event_subscribers.setdefault(event, []).append(callback)
+        logger.info(f"Subscribed {callback.__name__} to event '{event}'")
+    
+    def complete_task(self, task_id: int, session_name: str, agent_role: str, completion_message: str = ""):
+        """Mark task as complete and trigger completion hooks"""
+        now = time.time()
+        self.conn.execute("UPDATE tasks SET last_run = ? WHERE id = ?", (now, task_id))
+        self.conn.commit()
+        
+        # Extract project name from session name
+        project_name = session_name.split('-impl')[0].replace('-', ' ').title()
+        
+        # Update session state
+        state = self.session_state_manager.load_session_state(project_name)
+        if state and agent_role.lower() in state.agents:
+            agent = state.agents[agent_role.lower()]
+            agent.last_check_in_time = datetime.now().isoformat()
+            self.session_state_manager.save_session_state(state)
+            logger.info(f"Updated session state for {agent_role}")
+        
+        # Trigger event subscribers
+        for callback in self.event_subscribers.get('task_complete', []):
+            try:
+                callback(task_id, session_name, agent_role, completion_message)
+            except Exception as e:
+                logger.error(f"Error in event callback {callback.__name__}: {e}")
+    
+    def _handle_task_completion(self, task_id: int, session_name: str, agent_role: str, completion_message: str):
+        """Default handler: Force agent to report to Orchestrator via tmux injection"""
+        try:
+            # Find agent's window from state
+            project_name = session_name.split('-impl')[0].replace('-', ' ').title()
+            state = self.session_state_manager.load_session_state(project_name)
+            
+            if not state or agent_role.lower() not in state.agents:
+                logger.warning(f"Cannot find agent {agent_role} in state")
+                return
+                
+            window_index = state.agents[agent_role.lower()].window_index
+            
+            # Construct report message for hub-and-spoke enforcement
+            if not completion_message:
+                completion_message = f"Task {task_id} completed successfully"
+            
+            report_prompt = f"IMPORTANT: Report to Orchestrator (window 0) - {completion_message}"
+            
+            # Inject into agent's tmux window to prompt Claude to report
+            cmd = ['tmux', 'send-keys', '-t', f'{session_name}:{window_index}', report_prompt, 'C-m']
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                logger.info(f"Injected completion report prompt to {session_name}:{window_index} ({agent_role})")
+                
+                # Also schedule an immediate check-in for Orchestrator
+                orchestrator_note = f"Agent {agent_role} completed: {completion_message}"
+                self.enqueue_task(session_name, 'orchestrator', 0, 0, orchestrator_note)
+            else:
+                logger.error(f"Failed to inject completion message: {result.stderr}")
+                
+        except Exception as e:
+            logger.error(f"Error in completion handler: {e}")
         
     def run_task(self, task_id, session_name, agent_role, window_index, note):
         """Execute a scheduled task"""
@@ -153,10 +221,8 @@ class TmuxOrchestratorScheduler:
             
             if result.returncode == 0:
                 logger.info(f"Successfully executed task {task_id} for {agent_role}")
-                # Update last_run time
-                self.conn.execute("UPDATE tasks SET last_run = ? WHERE id = ?", 
-                                (time.time(), task_id))
-                self.conn.commit()
+                # Trigger completion event with the note as completion message
+                self.complete_task(task_id, session_name, agent_role, note)
                 return True
             else:
                 logger.error(f"Failed to execute task {task_id}: {result.stderr}")
