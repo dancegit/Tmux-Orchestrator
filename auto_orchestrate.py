@@ -7,6 +7,7 @@
 #     "pydantic",
 #     "pyyaml",
 #     "python-dotenv",
+#     "gitpython",
 # ]
 # ///
 
@@ -57,6 +58,14 @@ from completion_manager import CompletionManager
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+# Import git for local remote setup
+try:
+    from git import Repo, GitCommandError
+except ImportError:
+    Repo = None
+    GitCommandError = None
+    logger.warning("GitPython not available - local remote setup will be skipped")
 
 def find_git_root(start_path: Path) -> Optional[Path]:
     """Find the nearest parent directory containing a .git folder"""
@@ -176,8 +185,12 @@ class ImplementationSpec(BaseModel):
 
 
 class AutoOrchestrator:
-    def __init__(self, project_path: str, spec_path: str):
+    def __init__(self, project_path: str, spec_path: str, batch_mode: bool = False, overwrite: bool = False):
         self.spec_path = Path(spec_path).resolve()
+        
+        # Batch mode settings
+        self.batch_mode = batch_mode or (not sys.stdin.isatty())  # Auto-detect non-interactive
+        self.overwrite = overwrite
         
         # Auto-detect project path if not provided or set to 'auto'
         if not project_path or project_path.lower() == 'auto':
@@ -313,6 +326,103 @@ class AutoOrchestrator:
                 console.print(f"  • {warning}")
         
         console.print("\n[green]✓ All required dependencies are installed[/green]")
+    
+    def setup_git_locals(self):
+        """Automatically set up local remotes, role-specific branches, and integration branch for all agents."""
+        if not Repo:
+            console.print("[yellow]GitPython not available - skipping local remote setup[/yellow]")
+            return
+            
+        if not self.implementation_spec:
+            console.print("[yellow]No implementation spec available - skipping local remote setup[/yellow]")
+            return
+            
+        try:
+            repo = Repo(str(self.project_path))
+            
+            # Get roles that have been deployed
+            roles_to_setup = []
+            if hasattr(self, 'worktree_paths') and self.worktree_paths:
+                # Use actual deployed roles from worktree_paths
+                roles_to_setup = list(self.worktree_paths.keys())
+            else:
+                # Fallback to roles from spec
+                roles_to_setup = list(self.implementation_spec.roles.keys())
+            
+            console.print(f"[cyan]Setting up local remotes for {len(roles_to_setup)} roles...[/cyan]")
+            
+            for role in roles_to_setup:
+                remote_name = role.lower().replace('_', '-')  # Normalize role name
+                
+                # Use actual worktree path if available, otherwise fallback to default structure
+                if hasattr(self, 'worktree_paths') and self.worktree_paths and role in self.worktree_paths:
+                    worktree_path = Path(self.worktree_paths[role])
+                else:
+                    # Fallback to default structure
+                    worktree_dir = self.project_path / 'worktrees'
+                    worktree_dir.mkdir(exist_ok=True)
+                    worktree_path = worktree_dir / remote_name
+                    
+                branch_name = remote_name  # Role-specific branch
+                
+                # Only process if worktree exists
+                if worktree_path.exists():
+                    # Ensure worktree is on correct branch
+                    try:
+                        wt_repo = Repo(str(worktree_path))
+                        if not wt_repo.head.is_detached and wt_repo.active_branch.name != branch_name:
+                            # Try to create branch if it doesn't exist
+                            if branch_name not in [b.name for b in wt_repo.branches]:
+                                wt_repo.git.checkout('-b', branch_name)
+                                console.print(f"[green]Created branch {branch_name} for {role}[/green]")
+                            else:
+                                wt_repo.git.checkout(branch_name)
+                                console.print(f"[yellow]Switched {role} to branch {branch_name}[/yellow]")
+                    except Exception as e:
+                        console.print(f"[yellow]Could not ensure branch for {role}: {e}[/yellow]")
+                    
+                    # Add/update local remote
+                    try:
+                        repo.git.remote('add', remote_name, str(worktree_path))
+                        console.print(f"[green]Added local remote '{remote_name}' → {worktree_path}[/green]")
+                    except GitCommandError as e:
+                        if 'already exists' in str(e):
+                            repo.git.remote('set-url', remote_name, str(worktree_path))
+                            console.print(f"[yellow]Updated remote '{remote_name}' → {worktree_path}[/yellow]")
+                        else:
+                            console.print(f"[red]Failed to add remote {remote_name}: {e}[/red]")
+                else:
+                    console.print(f"[yellow]Worktree not found for {role} at {worktree_path}[/yellow]")
+            
+            # Create integration branch if not exists
+            integration_branch = 'integration'
+            if hasattr(self.implementation_spec, 'git_workflow') and self.implementation_spec.git_workflow:
+                integration_branch = self.implementation_spec.git_workflow.parent_branch or 'integration'
+                
+            if integration_branch not in [head.name for head in repo.heads]:
+                # Determine base branch
+                base_branch = 'main' if 'main' in [head.name for head in repo.heads] else 'master'
+                repo.git.branch(integration_branch, base_branch)
+                console.print(f"[green]Created integration branch: {integration_branch} (based on {base_branch})[/green]")
+            else:
+                console.print(f"[cyan]Integration branch '{integration_branch}' already exists[/cyan]")
+            
+            # Initial fetch for all local remotes
+            console.print("[cyan]Fetching from all local remotes...[/cyan]")
+            for role in roles_to_setup:
+                remote_name = role.lower().replace('_', '-')
+                if remote_name in [r.name for r in repo.remotes]:
+                    try:
+                        repo.git.fetch(remote_name)
+                        console.print(f"[green]Fetched from {remote_name}[/green]")
+                    except Exception as e:
+                        console.print(f"[yellow]Could not fetch from {remote_name}: {e}[/yellow]")
+                        
+            console.print("[green]✓ Local remotes setup complete[/green]")
+            
+        except Exception as e:
+            console.print(f"[red]Error setting up local remotes: {e}[/red]")
+            logger.error(f"Failed to setup git locals: {e}")
     
     def ensure_tmux_server(self):
         """Ensure tmux is ready to use"""
@@ -1829,6 +1939,9 @@ This file is automatically read by Claude Code when working in this directory.
         
         # Store worktree paths for later use
         self.worktree_paths = worktree_paths
+        
+        # Set up local remotes for fast coordination
+        self.setup_git_locals()
         
         with Progress(
             SpinnerColumn(),
@@ -4172,12 +4285,45 @@ Remember: Context management is automatic - focus on creating good checkpoints t
         existing_worktrees = self.check_existing_worktrees(project_name, roles_to_deploy)
         
         if existing_session or existing_worktrees:
-            if self.force:
-                # Force mode - automatically overwrite
-                console.print("\n[yellow]⚠️  Force mode: Overwriting existing orchestration[/yellow]")
+            if self.force or (self.batch_mode and self.overwrite):
+                # Force mode or batch mode with overwrite - automatically overwrite
+                if self.batch_mode:
+                    console.print("\n[yellow]⚠️  Batch mode with --overwrite: Overwriting existing orchestration[/yellow]")
+                else:
+                    console.print("\n[yellow]⚠️  Force mode: Overwriting existing orchestration[/yellow]")
                 if existing_session:
                     console.print(f"[yellow]Killing existing session '{session_name}'...[/yellow]")
                     subprocess.run(['tmux', 'kill-session', '-t', session_name], capture_output=True)
+            elif self.batch_mode:
+                # Batch mode without overwrite - default to resume
+                console.print("\n[cyan]📋 Batch mode: Detected existing orchestration[/cyan]")
+                
+                if existing_session:
+                    console.print(f"[cyan]• Tmux session '{session_name}' already exists[/cyan]")
+                    
+                if existing_worktrees:
+                    console.print(f"[cyan]• Found existing worktrees for: {', '.join(existing_worktrees)}[/cyan]")
+                
+                console.print("[green]✓ Batch mode default: Resuming existing session[/green]")
+                
+                # Try to resume
+                if existing_session:
+                    session_state = self.detect_existing_orchestration(
+                        self.implementation_spec.project.name
+                    )
+                    
+                    if session_state:
+                        # Use smart resume
+                        if self.resume_orchestration(session_state, resume_mode='full'):
+                            sys.exit(0)
+                        else:
+                            console.print("[yellow]Resume failed. Creating new session...[/yellow]")
+                    else:
+                        # No state but session exists - just continue
+                        console.print(f"[green]Session '{session_name}' exists, continuing...[/green]")
+                        sys.exit(0)
+                else:
+                    console.print("[yellow]No existing session to resume. Creating new session...[/yellow]")
             else:
                 # Interactive mode - prompt user
                 console.print("\n[yellow]⚠️  Existing orchestration detected![/yellow]")
@@ -4306,6 +4452,8 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='Additional roles to include (e.g., --roles researcher --roles documentation_writer)')
 @click.option('--force', '-f', is_flag=True,
               help='Force overwrite existing session/worktrees without prompting')
+@click.option('--overwrite', is_flag=True,
+              help='In batch mode, overwrite existing sessions instead of resuming (default: resume)')
 @click.option('--plan', type=click.Choice(['auto', 'pro', 'max5', 'max20', 'console']), 
               default='auto', help='Claude subscription plan (affects team size limits)')
 @click.option('--resume', '-r', is_flag=True,
@@ -4326,7 +4474,7 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='Continue last incomplete batch with intelligent retries')
 @click.option('--git-mode', type=click.Choice(['local', 'github']), default='local',
               help='Git workflow mode: local (worktree optimization) or github (legacy)')
-def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, team_type: str, roles: tuple, force: bool, plan: str, 
+def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, team_type: str, roles: tuple, force: bool, overwrite: bool, plan: str, 
          resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool, new_project: bool,
          research: Optional[str], restore: Optional[str], continue_batch: bool, git_mode: str):
     """Automatically set up a Tmux Orchestrator environment from a specification.
@@ -4544,7 +4692,7 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
         project_name = project_path.name
         
         # Create orchestrator with dummy spec path for now
-        orchestrator = AutoOrchestrator(project, spec[0] if spec else "dummy.md")
+        orchestrator = AutoOrchestrator(project, spec[0] if spec else "dummy.md", batch_mode=batch, overwrite=overwrite)
         orchestrator.rebrief_all = rebrief_all
         orchestrator.team_type = team_type if team_type != 'auto' else None
         
@@ -4608,7 +4756,7 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
         console.print("[red]Error: --spec is required when not using --resume[/red]")
         sys.exit(1)
         
-    orchestrator = AutoOrchestrator(project or 'auto', spec[0])
+    orchestrator = AutoOrchestrator(project or 'auto', spec[0], batch_mode=batch, overwrite=overwrite)
     orchestrator.manual_size = size if size != 'auto' else None
     orchestrator.team_type = team_type if team_type != 'auto' else None
     orchestrator.additional_roles = list(roles) if roles else []
