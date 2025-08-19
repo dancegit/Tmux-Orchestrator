@@ -46,6 +46,10 @@ class TmuxOrchestratorScheduler:
         # Auto-subscribe default completion handler
         self.subscribe('task_complete', self._handle_task_completion)
         
+        # Add authorization event types (for future use)
+        self.event_subscribers.setdefault('authorization_request', [])
+        self.event_subscribers.setdefault('authorization_response', [])
+        
     def setup_database(self):
         """Initialize SQLite database for persistent task storage"""
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -175,6 +179,14 @@ class TmuxOrchestratorScheduler:
                 
         except Exception as e:
             logger.error(f"Error in completion handler: {e}")
+    
+    def trigger_event(self, event_name: str, data: Dict[str, Any]):
+        """Trigger an event with data for all subscribers"""
+        for subscriber in self.event_subscribers.get(event_name, []):
+            try:
+                subscriber(data)
+            except Exception as e:
+                logger.error(f"Error in event subscriber for {event_name}: {e}")
         
     def run_task(self, task_id, session_name, agent_role, window_index, note):
         """Execute a scheduled task"""

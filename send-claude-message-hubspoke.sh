@@ -87,6 +87,13 @@ IMPORTANT: Report this status to Orchestrator (window 0) immediately for coordin
         ENFORCED_MESSAGE="$MESSAGE
 
 Note: Consider updating Orchestrator if this represents significant progress."
+    
+    elif echo "$MESSAGE" | grep -qiE "(awaiting|waiting for|pending|requesting|approval|authorization|review)"; then
+        # Authorization request - needs special handling
+        ENFORCED_MESSAGE="$MESSAGE
+
+AUTHORIZATION_REQUEST: This request has been CC'd to Orchestrator for tracking. The target should respond with 'Approved' or 'Denied' within 30 minutes."
+        SEND_TO_ORCHESTRATOR=true
     fi
 fi
 

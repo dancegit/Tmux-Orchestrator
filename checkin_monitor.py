@@ -525,8 +525,47 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
                     self.handle_stuck_project(session, state, health)
                     if health['status'] == 'critical':
                         interventions_needed.append(session)
+                
+                # Check for authorization timeouts
+                self.check_authorization_timeouts(session, state)
         
         return len(interventions_needed)
+    
+    def check_authorization_timeouts(self, session_name: str, state: SessionState):
+        """Check for agents waiting on authorizations that have timed out"""
+        now = datetime.now()
+        
+        for role, agent in state.agents.items():
+            if agent.waiting_for and isinstance(agent.waiting_for, dict):
+                try:
+                    since = datetime.fromisoformat(agent.waiting_for.get('since', ''))
+                    timeout_minutes = agent.waiting_for.get('timeout_minutes', 30)
+                    
+                    if (now - since).total_seconds() / 60 > timeout_minutes:
+                        # Timeout exceeded - escalate to Orchestrator
+                        target_role = agent.waiting_for.get('role', 'unknown')
+                        request_id = agent.waiting_for.get('request_id', 'unknown')
+                        request = agent.waiting_for.get('request', 'unspecified request')
+                        
+                        escalation_msg = f"AUTHORIZATION TIMEOUT: {role} has been waiting for {target_role} authorization for over {timeout_minutes} minutes. Request ID: {request_id}. Request: {request}"
+                        
+                        # Send escalation to Orchestrator
+                        send_script = self.tmux_orchestrator_path / "send-claude-message.sh"
+                        if send_script.exists():
+                            subprocess.run([
+                                str(send_script),
+                                f"{session_name}:0",
+                                escalation_msg
+                            ], capture_output=True)
+                        
+                        logger.warning(f"Escalated authorization timeout for {role} waiting on {target_role}")
+                        
+                        # Clear the waiting_for to prevent repeated escalations
+                        agent.waiting_for['escalated'] = True
+                        self.state_manager.save_session_state(state)
+                        
+                except Exception as e:
+                    logger.error(f"Error checking authorization timeout for {role}: {e}")
     
     def run_continuous_monitoring(self, interval_minutes: int = 5):
         """Run continuous monitoring"""
