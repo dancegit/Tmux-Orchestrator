@@ -86,11 +86,12 @@ class SessionStateManager:
         state_file.write_text(json.dumps(state_dict, indent=2))
         
     def load_session_state(self, project_name: str) -> Optional[SessionState]:
-        """Load session state from disk"""
+        """Load session state from disk with fallback creation"""
         state_file = self.get_state_file_path(project_name)
         
         if not state_file.exists():
-            return None
+            # Try to create minimal state if this looks like an active project
+            return self._create_fallback_state(project_name)
             
         try:
             state_dict = json.loads(state_file.read_text())
@@ -106,7 +107,124 @@ class SessionStateManager:
             
         except Exception as e:
             print(f"Error loading session state: {e}")
+            # Try fallback creation
+            return self._create_fallback_state(project_name)
+    
+    def _create_fallback_state(self, project_name: str) -> Optional[SessionState]:
+        """Create minimal fallback state by detecting active tmux session"""
+        try:
+            # Try to find the session name from project name
+            session_name = f"{project_name.lower().replace(' ', '-')}-impl"
+            
+            # Check if tmux session exists
+            result = subprocess.run(
+                ['tmux', 'list-sessions', '-f', f"#{{{session_name}}}"],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode != 0:
+                # Try alternate session names
+                for suffix in ['-a9601f5d', '', '-impl-a9601f5d']:
+                    alt_session = f"{project_name.lower().replace(' ', '-')}{suffix}"
+                    result = subprocess.run(
+                        ['tmux', 'has-session', '-t', alt_session],
+                        capture_output=True
+                    )
+                    if result.returncode == 0:
+                        session_name = alt_session
+                        break
+                else:
+                    return None
+            
+            # Get window list to detect agents
+            result = subprocess.run(
+                ['tmux', 'list-windows', '-t', session_name, '-F', '#{window_index}:#{window_name}'],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode != 0:
+                return None
+            
+            # Create minimal agent states from windows
+            agents = {}
+            lines = result.stdout.strip().split('\n')
+            
+            for line in lines:
+                if ':' in line:
+                    window_index, window_name = line.split(':', 1)
+                    try:
+                        index = int(window_index)
+                        # Map common window names to roles
+                        role = self._map_window_to_role(window_name)
+                        if role:
+                            agents[role] = AgentState(
+                                role=role,
+                                window_index=index,
+                                window_name=window_name,
+                                worktree_path="",  # Will be updated later
+                                last_briefing_time=datetime.now().isoformat(),
+                                is_alive=True,
+                                is_exhausted=False
+                            )
+                    except ValueError:
+                        continue
+            
+            if not agents:
+                return None
+            
+            # Create minimal session state
+            fallback_state = SessionState(
+                session_name=session_name,
+                project_path="",  # Will be detected later
+                project_name=project_name,
+                implementation_spec_path="",
+                created_at=datetime.now().isoformat(),
+                updated_at=datetime.now().isoformat(),
+                agents=agents,
+                completion_status="pending"
+            )
+            
+            # Save the fallback state
+            self.save_session_state(fallback_state)
+            print(f"Created fallback state for {project_name} with {len(agents)} agents")
+            
+            return fallback_state
+            
+        except Exception as e:
+            print(f"Failed to create fallback state for {project_name}: {e}")
             return None
+    
+    def _map_window_to_role(self, window_name: str) -> Optional[str]:
+        """Map tmux window names to agent roles"""
+        name_lower = window_name.lower()
+        
+        # Common mappings
+        role_mappings = {
+            'orchestrator': 'orchestrator',
+            'project-manager': 'project_manager', 
+            'pm': 'project_manager',
+            'developer': 'developer', 
+            'dev': 'developer',
+            'tester': 'tester',
+            'test': 'tester',
+            'testrunner': 'testrunner',
+            'test-runner': 'testrunner',
+            'researcher': 'researcher',
+            'devops': 'devops',
+            'sysadmin': 'sysadmin',
+            'securityops': 'securityops',
+            'networkops': 'networkops',
+            'monitoringops': 'monitoringops',
+            'databaseops': 'databaseops'
+        }
+        
+        for pattern, role in role_mappings.items():
+            if pattern in name_lower:
+                return role
+        
+        return None
             
     def check_agent_alive(self, session_name: str, window_index: int) -> bool:
         """Check if an agent is alive and responsive"""

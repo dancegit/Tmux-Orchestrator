@@ -35,7 +35,7 @@ Time: $TIMESTAMP
 Request: $REQUEST_MESSAGE
 
 This request has been routed to $TARGET_ROLE and CC'd to Orchestrator for tracking.
-Please respond with 'Approved [$REQUEST_ID]' or 'Denied [$REQUEST_ID] [reason]' within 30 minutes."
+Please respond with 'Approved [$REQUEST_ID]' or 'Denied [$REQUEST_ID] [reason]' within 15 minutes."
 
 # Update session state with waiting_for information
 python3 << EOF
@@ -57,7 +57,7 @@ try:
             'request': '$REQUEST_MESSAGE',
             'since': datetime.now().isoformat(),
             'request_id': '$REQUEST_ID',
-            'timeout_minutes': 30
+            'timeout_minutes': 15
         }
     })
     print("Session state updated with authorization request")
@@ -89,4 +89,4 @@ echo "[$TIMESTAMP] $REQUEST_ID: $ROLE -> $TARGET_ROLE: $REQUEST_MESSAGE" >> "$LO
 
 echo "Authorization request sent successfully!"
 echo "Request ID: $REQUEST_ID"
-echo "Target will be notified to respond within 30 minutes."
+echo "Target will be notified to respond within 15 minutes."
