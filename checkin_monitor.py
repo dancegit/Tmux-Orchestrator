@@ -35,14 +35,14 @@ class CheckinMonitor:
         
         # Emergency check-in strategy
         self.emergency_strategy = 'hybrid'  # 'one-time', 'recurring', 'hybrid'
-        self.emergency_intervals = [0, 30, 60]  # Minutes: immediate, then 30min, then 60min
+        self.emergency_intervals = [0, 10, 30]  # Minutes: immediate, then 10min, then 30min (adjusted for 5-min monitoring)
         self.max_emergencies = 3  # Max number of emergency attempts
         self.recovery_signals_required = 1  # Min signals needed to confirm recovery (reduced for faster backing off)
         self.emergency_tracker = {}  # Track per-session emergency count and last sent time
         
-        # Idle detection and nudging
-        self.idle_threshold_minutes = 5  # No activity in this time = idle (reduced for faster detection)
-        self.nudge_cooldown_minutes = 30  # Min time between nudges (matches monitoring interval to limit re-nudging)
+        # Idle detection and nudging (optimized for 5-minute monitoring)
+        self.idle_threshold_minutes = 10  # No activity in this time = idle (increased to reduce false positives)
+        self.nudge_cooldown_minutes = 10  # Min time between nudges (allows nudge every 2 monitoring cycles)
         self.nudge_tracker = {}  # {session_name: last_nudge_time isoformat}
         
     def get_active_sessions(self) -> List[str]:
@@ -486,6 +486,10 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
         # Filter for orchestrator sessions
         orchestrator_sessions = [s for s in active_sessions if 'impl' in s and s != 'tmux-orchestrator-server']
         
+        # Safeguard for too many sessions
+        if len(orchestrator_sessions) > 20:
+            logger.warning(f"Too many sessions ({len(orchestrator_sessions)}), consider increasing monitoring interval to avoid overload")
+        
         interventions_needed = []
         
         for session in orchestrator_sessions:
@@ -524,7 +528,7 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
         
         return len(interventions_needed)
     
-    def run_continuous_monitoring(self, interval_minutes: int = 30):
+    def run_continuous_monitoring(self, interval_minutes: int = 5):
         """Run continuous monitoring"""
         logger.info(f"Starting continuous check-in monitoring (interval: {interval_minutes} minutes)")
         
@@ -534,7 +538,7 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
                 if interventions > 0:
                     logger.info(f"Performed {interventions} interventions")
                 else:
-                    logger.info("All projects healthy")
+                    logger.debug("All projects healthy")  # Reduced to DEBUG to minimize log noise
                 
                 # Sleep until next check
                 time.sleep(interval_minutes * 60)
@@ -552,7 +556,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Monitor Tmux Orchestrator check-ins')
     parser.add_argument('--once', action='store_true', help='Run once instead of continuous monitoring')
-    parser.add_argument('--interval', type=int, default=30, help='Monitoring interval in minutes (default: 30)')
+    parser.add_argument('--interval', type=int, default=5, help='Monitoring interval in minutes (default: 5)')
     parser.add_argument('--force-checkin', nargs=2, metavar=('SESSION', 'WINDOW'), 
                        help='Force immediate check-in for specific window')
     
