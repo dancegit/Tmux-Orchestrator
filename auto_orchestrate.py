@@ -4297,8 +4297,17 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='List all active orchestrations')
 @click.option('--new-project', is_flag=True,
               help='Create new git repositories for each spec file as siblings to the spec location')
+@click.option('--research', type=str, 
+              help='Run research agent on failed projects (JSON data)')
+@click.option('--restore', type=str,
+              help='Restore and retry failed projects from batch_id')
+@click.option('--continue', 'continue_batch', is_flag=True,
+              help='Continue last incomplete batch with intelligent retries')
+@click.option('--git-mode', type=click.Choice(['local', 'github']), default='local',
+              help='Git workflow mode: local (worktree optimization) or github (legacy)')
 def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, team_type: str, roles: tuple, force: bool, plan: str, 
-         resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool, new_project: bool):
+         resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool, new_project: bool,
+         research: Optional[str], restore: Optional[str], continue_batch: bool, git_mode: str):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
@@ -4350,6 +4359,14 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
             console.print("[yellow]No active orchestrations found[/yellow]")
         
         return
+    
+    # Handle research agent mode
+    if research:
+        return run_research_agent(research)
+    
+    # Handle restore/continue operations
+    if restore or continue_batch:
+        return handle_batch_retry(restore, continue_batch)
     
     # AUTOMATIC BATCH MODE: Check for ongoing orchestrations and force batch mode
     if not resume and not batch and spec:
@@ -4465,6 +4482,7 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
     if len(spec) > 1 or batch:
         # Import scheduler
         from scheduler import TmuxOrchestratorScheduler
+        import uuid
         
         scheduler = TmuxOrchestratorScheduler()
         
@@ -4472,7 +4490,9 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
             console.print("[red]Error: No spec files provided for batch mode[/red]")
             return
             
-        console.print(f"[cyan]Batch mode: Enqueuing {len(spec)} project(s)[/cyan]")
+        # Generate batch ID for this batch
+        batch_id = str(uuid.uuid4())
+        console.print(f"[cyan]Batch mode: Enqueuing {len(spec)} project(s) with batch ID: {batch_id}[/cyan]")
         
         for spec_path in spec:
             # Validate spec exists
@@ -4480,8 +4500,8 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
                 console.print(f"[red]Error: Spec file not found: {spec_path}[/red]")
                 continue
                 
-            project_id = scheduler.enqueue_project(spec_path, project)
-            console.print(f"[green]✓ Enqueued: {spec_path} (ID: {project_id})[/green]")
+            project_id = scheduler.enqueue_project(spec_path, project, batch_id)
+            console.print(f"[green]✓ Enqueued: {spec_path} (ID: {project_id}, Batch: {batch_id})[/green]")
         
         console.print("\n[yellow]Projects enqueued for batch processing.[/yellow]")
         console.print("[cyan]To start processing:[/cyan] uv run scheduler.py --queue-daemon")
@@ -4581,6 +4601,511 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
         orchestrator.custom_worktree_base = custom_worktree_base
         console.print(f"[blue]Using custom worktree location: {custom_worktree_base}[/blue]")
     orchestrator.run()
+
+
+def setup_local_worktrees(project_path: Path, agents: List[str], git_mode: str = 'local') -> Dict[str, str]:
+    """Create worktrees and local remotes for agents if in local mode"""
+    if git_mode != 'local':
+        return {}
+    
+    try:
+        worktrees_dir = project_path / 'worktrees'
+        worktrees_dir.mkdir(exist_ok=True)
+        worktrees = {}
+        
+        console.print(f"[blue]🌳 Setting up local worktrees for {len(agents)} agents...[/blue]")
+        
+        # Create worktrees for each agent
+        for agent in agents:
+            wt_path = worktrees_dir / agent
+            if not wt_path.exists():
+                # Create worktree (from main or current branch)
+                result = subprocess.run([
+                    'git', 'worktree', 'add', str(wt_path), 'main'
+                ], cwd=project_path, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    # Try with current branch if main doesn't exist
+                    current_branch = subprocess.run([
+                        'git', 'rev-parse', '--abbrev-ref', 'HEAD'
+                    ], cwd=project_path, capture_output=True, text=True).stdout.strip()
+                    
+                    subprocess.run([
+                        'git', 'worktree', 'add', str(wt_path), current_branch
+                    ], cwd=project_path, check=True)
+                
+                console.print(f"[green]✓ Created worktree for {agent}[/green]")
+            else:
+                console.print(f"[yellow]⚠ Worktree exists for {agent}[/yellow]")
+                
+            worktrees[agent] = str(wt_path)
+        
+        # Add local remotes in each worktree
+        for agent in agents:
+            wt_path = Path(worktrees[agent])
+            
+            for other_agent in agents:
+                if other_agent != agent:
+                    other_path = Path(worktrees[other_agent])
+                    remote_path = other_path / '.git'
+                    
+                    # Check if remote already exists
+                    check_remote = subprocess.run([
+                        'git', 'remote', 'get-url', other_agent
+                    ], cwd=wt_path, capture_output=True)
+                    
+                    if check_remote.returncode != 0:
+                        # Add remote
+                        subprocess.run([
+                            'git', 'remote', 'add', other_agent, str(remote_path)
+                        ], cwd=wt_path, check=True)
+            
+            # Initial fetch of all remotes
+            subprocess.run(['git', 'fetch', '--all'], cwd=wt_path, capture_output=True)
+        
+        console.print(f"[green]✅ Local worktree setup complete - {len(agents)} agents configured[/green]")
+        return worktrees
+        
+    except Exception as e:
+        console.print(f"[yellow]⚠ Local worktree setup failed, falling back to GitHub mode: {e}[/yellow]")
+        return {}
+
+
+def create_pm_coordination_scripts(project_path: Path, worktrees: Dict[str, str]):
+    """Create PM coordination scripts for local git operations"""
+    if not worktrees:
+        return
+        
+    tools_dir = project_path / 'tools'
+    tools_dir.mkdir(exist_ok=True)
+    
+    # Create pm_fetch_all.py script
+    fetch_all_script = tools_dir / 'pm_fetch_all.py'
+    fetch_all_content = f'''#!/usr/bin/env python3
+"""PM coordination script - fetch all agent changes"""
+import subprocess
+import sys
+from pathlib import Path
+
+def main():
+    pm_worktree = Path("{worktrees.get('project_manager', worktrees.get('pm', ''))}")
+    if not pm_worktree.exists():
+        print("PM worktree not found")
+        return 1
+    
+    agents = {list(worktrees.keys())}
+    success_count = 0
+    
+    for agent in agents:
+        if agent in ['project_manager', 'pm']:
+            continue
+            
+        try:
+            result = subprocess.run(['git', 'fetch', agent], 
+                                  cwd=pm_worktree, capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"✓ Fetched from {{agent}}")
+                success_count += 1
+            else:
+                print(f"⚠ Failed to fetch from {{agent}}: {{result.stderr}}")
+        except Exception as e:
+            print(f"✗ Error fetching from {{agent}}: {{e}}")
+    
+    print(f"Fetched from {{success_count}}/{len(agents)-1} agents")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+    
+    fetch_all_script.write_text(fetch_all_content)
+    fetch_all_script.chmod(0o755)
+    
+    # Create pm_status.py script
+    status_script = tools_dir / 'pm_status.py'
+    status_content = f'''#!/usr/bin/env python3
+"""PM coordination script - check git status across worktrees"""
+import subprocess
+from pathlib import Path
+
+def main():
+    worktrees = {worktrees}
+    
+    for agent, path in worktrees.items():
+        wt_path = Path(path)
+        if not wt_path.exists():
+            continue
+            
+        print(f"\\n=== {{agent.upper()}} ===")
+        
+        # Get current branch
+        try:
+            branch = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], 
+                                  cwd=wt_path, capture_output=True, text=True).stdout.strip()
+            print(f"Branch: {{branch}}")
+        except:
+            print("Branch: unknown")
+        
+        # Get status
+        try:
+            status = subprocess.run(['git', 'status', '--porcelain'], 
+                                  cwd=wt_path, capture_output=True, text=True).stdout
+            if status:
+                print("Modified files:")
+                for line in status.strip().split('\\n'):
+                    print(f"  {{line}}")
+            else:
+                print("Working tree clean")
+        except:
+            print("Status: unavailable")
+        
+        # Get recent commits
+        try:
+            commits = subprocess.run(['git', 'log', '--oneline', '-3'], 
+                                   cwd=wt_path, capture_output=True, text=True).stdout
+            if commits:
+                print("Recent commits:")
+                for line in commits.strip().split('\\n'):
+                    print(f"  {{line}}")
+        except:
+            pass
+
+if __name__ == "__main__":
+    main()
+'''
+    
+    status_script.write_text(status_content)
+    status_script.chmod(0o755)
+    
+    console.print(f"[green]✅ Created PM coordination scripts in {tools_dir}[/green]")
+
+
+def run_research_agent(research_data_json: str):
+    """Run research agent to analyze failed projects and provide enhancement recommendations"""
+    import json
+    from pathlib import Path
+    
+    try:
+        # Parse input data
+        research_data = json.loads(research_data_json)
+        failed_projects = research_data.get('failed_projects', [])
+        session_id = research_data.get('session_id', 'unknown')
+        
+        console.print(f"[blue]🔬 Research Agent analyzing {len(failed_projects)} failed projects...[/blue]")
+        
+        # Collect failure data for analysis
+        analysis_data = collect_failure_data(failed_projects)
+        
+        # Run pattern analysis
+        patterns = analyze_failure_patterns(analysis_data)
+        
+        # Generate recommendations using Grok MCP
+        recommendations = generate_recommendations_with_grok(patterns, analysis_data)
+        
+        # Create enhanced specs
+        enhanced_projects = create_enhanced_specs(failed_projects, recommendations)
+        
+        # Output results as JSON for scheduler
+        result = {
+            'session_id': session_id,
+            'enhanced_projects': enhanced_projects,
+            'analysis_summary': {
+                'patterns_found': len(patterns),
+                'recommendations_generated': len(recommendations),
+                'projects_enhanced': len(enhanced_projects)
+            }
+        }
+        
+        print(json.dumps(result))
+        console.print(f"[green]✅ Research analysis complete - {len(enhanced_projects)} projects enhanced[/green]")
+        
+    except Exception as e:
+        console.print(f"[red]❌ Research agent failed: {e}[/red]")
+        # Return original data as fallback
+        fallback_result = {
+            'session_id': research_data.get('session_id', 'unknown'),
+            'enhanced_projects': research_data.get('failed_projects', []),
+            'error': str(e)
+        }
+        print(json.dumps(fallback_result))
+        return 1
+
+
+def collect_failure_data(failed_projects: List[Dict]) -> Dict:
+    """Collect comprehensive failure data for analysis"""
+    analysis_data = {
+        'error_messages': [],
+        'retry_counts': [],
+        'spec_paths': [],
+        'failure_reports': [],
+        'common_patterns': []
+    }
+    
+    for project in failed_projects:
+        analysis_data['error_messages'].append(project.get('error_message', ''))
+        analysis_data['retry_counts'].append(project.get('retry_count', 0))
+        analysis_data['spec_paths'].append(project.get('spec_path', ''))
+        
+        # Try to load failure reports if available
+        try:
+            # Look for failure reports in project directories
+            project_path = Path(project.get('project_path', ''))
+            if project_path.exists():
+                report_files = list(project_path.glob('failure_report_*.md'))
+                for report_file in report_files[-1:]:  # Get most recent
+                    analysis_data['failure_reports'].append(report_file.read_text())
+        except Exception:
+            pass  # Skip if can't read reports
+    
+    return analysis_data
+
+
+def analyze_failure_patterns(analysis_data: Dict) -> List[Dict]:
+    """Analyze failure data to identify patterns"""
+    patterns = []
+    
+    # Analyze error messages for common patterns
+    error_messages = [msg for msg in analysis_data['error_messages'] if msg]
+    
+    # Pattern 1: Timeout failures
+    timeout_count = sum(1 for msg in error_messages if 'timeout' in msg.lower())
+    if timeout_count > 0:
+        patterns.append({
+            'type': 'timeout',
+            'count': timeout_count,
+            'severity': 'high' if timeout_count > len(error_messages) * 0.5 else 'medium',
+            'description': f'{timeout_count}/{len(error_messages)} projects failed due to timeouts'
+        })
+    
+    # Pattern 2: Credit exhaustion  
+    credit_count = sum(1 for msg in error_messages if 'credit' in msg.lower())
+    if credit_count > 0:
+        patterns.append({
+            'type': 'credit_exhaustion',
+            'count': credit_count, 
+            'severity': 'medium',
+            'description': f'{credit_count}/{len(error_messages)} projects failed due to credit issues'
+        })
+    
+    # Pattern 3: High retry counts
+    avg_retries = sum(analysis_data['retry_counts']) / len(analysis_data['retry_counts']) if analysis_data['retry_counts'] else 0
+    if avg_retries > 1:
+        patterns.append({
+            'type': 'high_retry_rate',
+            'count': len([r for r in analysis_data['retry_counts'] if r > 1]),
+            'severity': 'high',
+            'description': f'Average retry count: {avg_retries:.1f} - indicates systematic issues'
+        })
+    
+    return patterns
+
+
+def generate_recommendations_with_grok(patterns: List[Dict], analysis_data: Dict) -> List[Dict]:
+    """Generate actionable recommendations using Grok MCP"""
+    recommendations = []
+    
+    try:
+        # Import MCP tools
+        import sys
+        sys.path.append(str(Path(__file__).parent))
+        
+        # Prepare context for Grok
+        context = {
+            'patterns': patterns,
+            'total_failures': len(analysis_data['error_messages']),
+            'error_samples': analysis_data['error_messages'][:5],  # First 5 errors
+            'failure_reports': analysis_data['failure_reports'][:2]  # First 2 reports
+        }
+        
+        # Use Grok MCP to analyze patterns and generate recommendations
+        grok_prompt = f"""
+        Analyze these project failure patterns and provide specific, actionable recommendations:
+        
+        Patterns Found:
+        {json.dumps(patterns, indent=2)}
+        
+        Sample Error Messages:
+        {chr(10).join(context['error_samples'])}
+        
+        Please provide:
+        1. Root cause analysis for each pattern
+        2. Specific code fixes or configuration changes  
+        3. Agent instruction modifications
+        4. Preventive measures for future runs
+        
+        Format as JSON with 'recommendations' array containing objects with:
+        - pattern_type: matching pattern type
+        - priority: high/medium/low
+        - action_type: code_fix/agent_instruction/configuration/monitoring
+        - description: what to do
+        - implementation: specific code/instructions
+        """
+        
+        # Call Grok MCP
+        try:
+            import subprocess
+            result = subprocess.run([
+                'claude', '--mcp', 'grok_ask', 
+                '--question', grok_prompt,
+                '--model', 'grok-4-0709'
+            ], capture_output=True, text=True, timeout=120)
+            
+            if result.returncode == 0:
+                response = result.stdout
+            else:
+                raise Exception(f"Grok MCP call failed: {result.stderr}")
+        except Exception as grok_error:
+            console.print(f"[yellow]Grok MCP unavailable, using basic recommendations: {grok_error}[/yellow]")
+            return create_basic_recommendations(patterns)
+        
+        # Parse Grok response
+        try:
+            grok_data = json.loads(response)
+            recommendations.extend(grok_data.get('recommendations', []))
+        except json.JSONDecodeError:
+            # Fallback: create basic recommendations from patterns
+            recommendations = create_basic_recommendations(patterns)
+            
+    except Exception as e:
+        console.print(f"[yellow]Warning: Grok analysis failed, using basic recommendations: {e}[/yellow]")
+        recommendations = create_basic_recommendations(patterns)
+    
+    return recommendations
+
+
+def create_basic_recommendations(patterns: List[Dict]) -> List[Dict]:
+    """Create basic recommendations when Grok is unavailable"""
+    recommendations = []
+    
+    for pattern in patterns:
+        if pattern['type'] == 'timeout':
+            recommendations.append({
+                'pattern_type': 'timeout',
+                'priority': 'high',
+                'action_type': 'agent_instruction',
+                'description': 'Add timeout handling and progress checkpoints',
+                'implementation': '''
+### Enhanced Instructions (Retry)
+- **Timeout Prevention**: Commit progress every 30 minutes minimum
+- **Progress Tracking**: Report status updates every 15 minutes  
+- **Checkpoint Creation**: Save work before starting major tasks
+- **Early Warning**: Alert if task exceeds 75% of expected time
+'''
+            })
+        elif pattern['type'] == 'credit_exhaustion':
+            recommendations.append({
+                'pattern_type': 'credit_exhaustion', 
+                'priority': 'medium',
+                'action_type': 'monitoring',
+                'description': 'Add credit monitoring and conservative usage',
+                'implementation': '''
+### Enhanced Instructions (Retry)
+- **Credit Awareness**: Check credit levels before major operations
+- **Conservative Mode**: Use simpler approaches when credits are low
+- **Progress Optimization**: Focus on highest-impact tasks first
+- **Team Coordination**: Share credit usage status between agents
+'''
+            })
+        elif pattern['type'] == 'high_retry_rate':
+            recommendations.append({
+                'pattern_type': 'high_retry_rate',
+                'priority': 'high', 
+                'action_type': 'agent_instruction',
+                'description': 'Add debugging and systematic error handling',
+                'implementation': '''
+### Enhanced Instructions (Retry)
+- **Debug Mode**: Enable detailed logging for all operations
+- **Error Analysis**: Investigate root causes before proceeding
+- **Incremental Progress**: Break large tasks into smaller steps
+- **Team Review**: Add project manager review before major changes
+'''
+            })
+    
+    return recommendations
+
+
+def create_enhanced_specs(failed_projects: List[Dict], recommendations: List[Dict]) -> List[Dict]:
+    """Create enhanced specification files with research insights"""
+    enhanced_projects = []
+    
+    for project in failed_projects:
+        try:
+            spec_path = Path(project['spec_path'])
+            if not spec_path.exists():
+                enhanced_projects.append(project)  # Return unchanged if spec missing
+                continue
+                
+            # Read original spec
+            original_content = spec_path.read_text()
+            
+            # Generate enhanced spec content
+            enhancement_header = "# Research Agent Analysis (Retry)\n\n"
+            enhancement_header += "## Failure Patterns Detected\n\n"
+            
+            # Add relevant recommendations
+            for rec in recommendations:
+                if rec.get('priority') in ['high', 'medium']:
+                    enhancement_header += f"### {rec.get('description', 'Recommendation')}\n\n"
+                    enhancement_header += f"**Priority**: {rec.get('priority', 'medium').title()}\n\n"
+                    implementation = rec.get('implementation', '')
+                    if implementation:
+                        enhancement_header += f"{implementation}\n\n"
+            
+            enhancement_header += "---\n\n# Original Specification\n\n"
+            enhanced_content = enhancement_header + original_content
+            
+            # Create enhanced spec file
+            enhanced_spec_path = spec_path.with_suffix('.enhanced.md')
+            enhanced_spec_path.write_text(enhanced_content)
+            
+            # Update project with enhanced spec path
+            enhanced_project = project.copy()
+            enhanced_project['enhanced_spec_path'] = str(enhanced_spec_path)
+            enhanced_projects.append(enhanced_project)
+            
+        except Exception as e:
+            console.print(f"[yellow]Warning: Failed to enhance {project.get('spec_path', 'unknown')}: {e}[/yellow]")
+            enhanced_projects.append(project)  # Return unchanged on error
+    
+    return enhanced_projects
+
+
+def handle_batch_retry(restore_batch_id: Optional[str], continue_last: bool):
+    """Handle --restore and --continue operations"""
+    try:
+        from scheduler import TmuxOrchestratorScheduler
+        
+        scheduler = TmuxOrchestratorScheduler()
+        
+        if restore_batch_id:
+            console.print(f"[blue]🔄 Restoring failed projects from batch {restore_batch_id}...[/blue]")
+            scheduler._handle_batch_completion(restore_batch_id)
+            console.print(f"[green]✅ Batch {restore_batch_id} retry initiated[/green]")
+            
+        elif continue_last:
+            console.print("[blue]🔄 Continuing last incomplete batch...[/blue]")
+            
+            # Find last incomplete batch
+            cursor = scheduler.conn.cursor()
+            cursor.execute("""
+                SELECT batch_id FROM project_queue 
+                WHERE status IN ('queued', 'processing', 'failed') 
+                ORDER BY enqueued_at DESC 
+                LIMIT 1
+            """)
+            
+            row = cursor.fetchone()
+            if row:
+                batch_id = row[0]
+                console.print(f"[blue]Found incomplete batch: {batch_id}[/blue]")
+                scheduler._handle_batch_completion(batch_id)
+                console.print(f"[green]✅ Batch {batch_id} retry initiated[/green]")
+            else:
+                console.print("[yellow]No incomplete batches found[/yellow]")
+                
+    except Exception as e:
+        console.print(f"[red]❌ Batch retry failed: {e}[/red]")
+        return 1
 
 
 if __name__ == '__main__':

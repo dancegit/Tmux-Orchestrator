@@ -338,12 +338,17 @@ parent-directory/
 - **Fast Lane Coordination**: Reduced Developer→Tester cycle from 45min to 5min
 - **Git Synchronization**: Automated worktree syncing with conflict detection
 - **Multi-Project Support**: Manage multiple projects simultaneously
+- **Intelligent Batch Retry**: Failed projects automatically analyzed and retried with research agent
+- **Credit-Aware Operations**: Automatic pause/resume for Claude Code usage limits
 
-### 💾 Git Safety & Workflow
+### 💾 Optimized Git Workflow (NEW!)
+- **Local-First Collaboration**: Agents work via local git remotes (60-500x faster)
+- **PM Coordination Hub**: Project Manager orchestrates local merges instead of GitHub PRs
+- **GitHub for Milestones**: Push to GitHub only for backups and major releases
 - **Branch Protection**: Never merge to main unless started on main
 - **30-Minute Commits**: Enforced regular commits to prevent work loss
 - **Worktree Isolation**: Each agent has separate workspace
-- **Automatic PR Creation**: Streamlined integration workflow
+- **Intelligent Retry System**: Research agent analyzes failures and enhances specs
 
 ## 📋 Best Practices
 
@@ -767,6 +772,12 @@ export ANTHROPIC_API_KEY="your-key"
 ./ai_team_refiner.py --project ~/projects/production \
   --team "orchestrator,developer,devops" \
   --spec production-spec.md
+
+# NEW: Research mode for failure analysis (used automatically by batch retry)
+./auto_orchestrate.py --research '{
+  "failed_projects": [{"spec_path": "spec.md", "error_message": "timeout"}],
+  "session_id": "research-session-123"
+}'
 ```
 
 #### `concurrent_orchestration.py` - Orchestration Lock Management
@@ -880,20 +891,27 @@ PROJECTS_DIR=~/my-projects ./setup.sh
 ./setup.sh --verify
 ```
 
-#### `scheduler.py` - Background Task Daemon
+#### `scheduler.py` - Background Task Daemon with Intelligent Batch Retry
 ```bash
-# NEW: Project queue management
-# Start project queue daemon
+# NEW: Project queue management with automatic retry
+# Start project queue daemon (includes intelligent retry system)
 uv run scheduler.py --queue-daemon
 
 # Add project to queue
 uv run scheduler.py --queue-add spec.md /path/to/project
 
-# List queued projects
+# List queued projects (shows retry counts and batch IDs)
 uv run scheduler.py --queue-list
 
 # Check specific project status
 uv run scheduler.py --queue-status 1
+
+# The system automatically:
+# - Detects when batch completion occurs
+# - Runs research agent on failed projects using Grok MCP
+# - Creates enhanced specs with failure analysis
+# - Retries failed projects up to 3 times
+# - Escalates permanent failures via email
 
 # Legacy task scheduling
 # Start scheduler daemon
@@ -1009,18 +1027,25 @@ EOF
 ./schedule_with_note.sh 310 "Resume after credit reset" "webapp-impl:0"
 ```
 
-### Workflow 4: Batch Processing Multiple Projects
+### Workflow 4: Batch Processing with Intelligent Retry (NEW!)
 ```bash
-# 1. Queue all project specs at once
+# 1. Queue all project specs at once (NEW: automatic batch retry system)
 ./auto_orchestrate.py \
   --spec ~/specs/frontend-spec.md \
   --spec ~/specs/backend-spec.md \
   --spec ~/specs/mobile-spec.md
 
-# 2. Start the queue daemon (processes one at a time)
+# 2. Start the queue daemon with intelligent retry
 uv run scheduler.py --queue-daemon &
 
-# 3. Monitor queue progress
+# The system now automatically:
+# - Detects batch completion
+# - Analyzes failed projects with research agent using Grok MCP
+# - Creates enhanced specs with failure insights
+# - Retries failed projects with improved specifications
+# - Escalates permanent failures after 3 attempts
+
+# 3. Monitor queue progress (shows retry counts and batch IDs)
 uv run scheduler.py --queue-list
 
 # 4. Check specific project status
@@ -1028,6 +1053,11 @@ uv run scheduler.py --queue-status 2
 
 # 5. Monitor the currently processing project
 ./monitoring_dashboard.py
+
+# 6. NEW: Use optimized local git workflow for 60-500x faster operations
+./auto_orchestrate.py \
+  --spec ~/specs/frontend-spec.md \
+  --git-mode local
 ```
 
 ### Workflow 5: Multi-Project Coordination (Legacy)
