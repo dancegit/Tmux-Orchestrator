@@ -42,7 +42,7 @@ class CheckinMonitor:
         
         # Idle detection and nudging
         self.idle_threshold_minutes = 5  # No activity in this time = idle (reduced for faster detection)
-        self.nudge_cooldown_minutes = 45  # Min time between nudges
+        self.nudge_cooldown_minutes = 10  # Min time between nudges (reduced for more responsive nudging)
         self.nudge_tracker = {}  # {session_name: last_nudge_time isoformat}
         
     def get_active_sessions(self) -> List[str]:
