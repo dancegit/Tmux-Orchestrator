@@ -16,15 +16,21 @@ from pathlib import Path
 from datetime import datetime
 
 def get_active_tmux_sessions():
-    """Get all active tmux sessions"""
+    """Get all active tmux sessions - DEPRECATED: Use tmux_utils.get_active_sessions() instead"""
+    # Import here to avoid circular imports
     try:
-        result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], 
-                              capture_output=True, text=True)
-        if result.returncode == 0:
-            return [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
-        return []
-    except Exception:
-        return []
+        from tmux_utils import get_active_sessions
+        return get_active_sessions()
+    except ImportError:
+        # Fallback to local implementation
+        try:
+            result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                return [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+            return []
+        except Exception:
+            return []
 
 def format_timestamp(timestamp):
     """Format unix timestamp to readable date"""
@@ -77,12 +83,14 @@ Options:
   --reset <id>    Reset project to queued status
   --fresh <id>    Mark project for fresh start
   --remove <id>   Remove project from queue
+  --resume <id>   Resume project by calling auto_orchestrate.py --resume
 
 Examples:
   queue_status.py              # Show full status
   queue_status.py --conflicts  # Show only conflicts
   queue_status.py --reset 15   # Reset project 15
   queue_status.py --fresh 18   # Mark project 18 for fresh start
+  queue_status.py --resume 42  # Resume project 42
         """)
         return
 
@@ -92,6 +100,11 @@ Examples:
         return
 
     conn = sqlite3.connect(db_path)
+    
+    # Enable WAL mode for better concurrency
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=10000;")  # 10 second timeout for locks
+    
     cursor = conn.cursor()
     
     # Handle specific actions
@@ -120,6 +133,47 @@ Examples:
             cursor.execute("DELETE FROM project_queue WHERE id = ?", (project_id,))
             conn.commit()
             print(f"✅ Project {project_id} removed from queue")
+            return
+            
+        elif action == '--resume':
+            # Get project details
+            cursor.execute("SELECT spec_path, project_path FROM project_queue WHERE id = ?", (project_id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                print(f"❌ Project {project_id} not found in queue")
+                return
+                
+            spec_path, project_path = result
+            
+            # Determine project path for auto_orchestrate.py
+            if project_path:
+                resume_path = project_path
+            else:
+                # Extract from spec_path
+                resume_path = str(Path(spec_path).parent)
+            
+            print(f"🔄 Resuming project {project_id}...")
+            print(f"   Spec: {spec_path}")
+            print(f"   Project Path: {resume_path}")
+            
+            # Run auto_orchestrate.py --resume in tmux
+            import subprocess
+            try:
+                result = subprocess.run([
+                    'tmux', 'new-session', '-d', '-s', f'resume-project-{project_id}',
+                    'bash', '-c', f'cd /home/clauderun/Tmux-Orchestrator && ./auto_orchestrate.py --project {resume_path} --resume --daemon'
+                ], capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    print(f"✅ Project {project_id} resume initiated in tmux session: resume-project-{project_id}")
+                    print(f"   Attach with: tmux attach -t resume-project-{project_id}")
+                else:
+                    print(f"❌ Failed to resume project {project_id}")
+                    print(f"   Error: {result.stderr}")
+                    
+            except Exception as e:
+                print(f"❌ Error running resume command: {e}")
             return
 
     # Get all projects

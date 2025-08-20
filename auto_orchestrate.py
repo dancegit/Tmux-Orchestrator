@@ -185,11 +185,14 @@ class ImplementationSpec(BaseModel):
 
 
 class AutoOrchestrator:
-    def __init__(self, project_path: str, spec_path: str, batch_mode: bool = False, overwrite: bool = False):
+    def __init__(self, project_path: str, spec_path: str, batch_mode: bool = False, overwrite: bool = False, daemon: bool = False):
         self.spec_path = Path(spec_path).resolve()
         
-        # Batch mode settings
-        self.batch_mode = batch_mode or (not sys.stdin.isatty())  # Auto-detect non-interactive
+        # Non-interactive mode detection
+        self.daemon_mode = daemon or (not sys.stdin.isatty()) or os.getenv('DAEMON_MODE', 'false').lower() == 'true'
+        
+        # Batch mode settings  
+        self.batch_mode = batch_mode or self.daemon_mode  # Daemon mode implies batch mode
         self.overwrite = overwrite
         
         # Auto-detect project path if not provided or set to 'auto'
@@ -1109,6 +1112,46 @@ CLAUDE_EOF
     def detect_existing_orchestration(self, project_name: str) -> Optional[SessionState]:
         """Detect existing orchestration and load its state"""
         return self.session_state_manager.load_session_state(project_name)
+    
+    def validate_and_recover_session(self, session_state: SessionState) -> bool:
+        """Validate session state and recover broken sessions in daemon mode
+        
+        Returns True if session is valid or successfully recovered, False otherwise
+        """
+        try:
+            from tmux_utils import session_exists, kill_session, recreate_session
+            
+            # Check if main session exists
+            if not session_exists(session_state.session_name):
+                console.print(f"[yellow]Session {session_state.session_name} not found, will be recreated[/yellow]")
+                return True  # Let resume_orchestration handle recreation
+            
+            # Validate agents have valid tmux windows
+            valid_agents = []
+            for agent in session_state.agents:
+                target = f"{session_state.session_name}:{agent.window_index}"
+                result = subprocess.run(['tmux', 'display-message', '-t', target], 
+                                      capture_output=True, stderr=subprocess.DEVNULL)
+                if result.returncode == 0:
+                    valid_agents.append(agent)
+                else:
+                    console.print(f"[yellow]Agent {agent.role} window {agent.window_index} not found[/yellow]")
+            
+            if len(valid_agents) == 0:
+                console.print("[yellow]No valid agent windows found - session needs recreation[/yellow]")
+                # Kill the broken session
+                kill_session(session_state.session_name)
+                return True  # Let resume_orchestration handle recreation
+            
+            # Update session state with valid agents only
+            session_state.agents = valid_agents
+            
+            console.print(f"[green]Session validation passed: {len(valid_agents)} valid agents[/green]")
+            return True
+            
+        except Exception as e:
+            console.print(f"[red]Session validation failed: {e}[/red]")
+            return False
         
     def resume_orchestration(self, session_state: SessionState, resume_mode: str = 'full') -> bool:
         """Resume an existing orchestration session
@@ -4334,7 +4377,11 @@ Remember: Context management is automatic - focus on creating good checkpoints t
                     subprocess.run(['tmux', 'kill-session', '-t', session_name], capture_output=True)
             elif self.batch_mode:
                 # Batch mode without overwrite - default to resume
-                console.print("\n[cyan]📋 Batch mode: Detected existing orchestration[/cyan]")
+                if self.daemon_mode:
+                    console.print("\n[cyan]📋 Daemon mode: Detected existing orchestration[/cyan]")
+                    console.print("[green]✓ Daemon mode: Auto-resuming existing session (unattended)[/green]")
+                else:
+                    console.print("\n[cyan]📋 Batch mode: Detected existing orchestration[/cyan]")
                 
                 if existing_session:
                     console.print(f"[cyan]• Tmux session '{session_name}' already exists[/cyan]")
@@ -4342,7 +4389,8 @@ Remember: Context management is automatic - focus on creating good checkpoints t
                 if existing_worktrees:
                     console.print(f"[cyan]• Found existing worktrees for: {', '.join(existing_worktrees)}[/cyan]")
                 
-                console.print("[green]✓ Batch mode default: Resuming existing session[/green]")
+                if not self.daemon_mode:
+                    console.print("[green]✓ Batch mode default: Resuming existing session[/green]")
                 
                 # Try to resume
                 if existing_session:
@@ -4351,17 +4399,35 @@ Remember: Context management is automatic - focus on creating good checkpoints t
                     )
                     
                     if session_state:
-                        # Use smart resume
-                        if self.resume_orchestration(session_state, resume_mode='full'):
-                            sys.exit(0)
+                        # Use smart resume with enhanced validation in daemon mode
+                        if self.daemon_mode:
+                            # Validate and recover broken sessions before resuming
+                            if not self.validate_and_recover_session(session_state):
+                                console.print("[yellow]Daemon mode: Session recovery failed. Creating new session...[/yellow]")
+                            elif self.resume_orchestration(session_state, resume_mode='full'):
+                                sys.exit(0)
+                            else:
+                                console.print("[yellow]Daemon mode: Resume failed. Creating new session...[/yellow]")
                         else:
-                            console.print("[yellow]Resume failed. Creating new session...[/yellow]")
+                            # Regular resume attempt
+                            if self.resume_orchestration(session_state, resume_mode='full'):
+                                sys.exit(0)
+                            else:
+                                console.print("[yellow]Resume failed. Creating new session...[/yellow]")
                     else:
-                        # No state but session exists - just continue
-                        console.print(f"[green]Session '{session_name}' exists, continuing...[/green]")
-                        sys.exit(0)
+                        # No state but session exists
+                        if self.daemon_mode:
+                            console.print(f"[yellow]Daemon mode: Session exists but no state found. Recreating...[/yellow]")
+                            # In daemon mode, kill and recreate if state is missing
+                            subprocess.run(['tmux', 'kill-session', '-t', session_name], capture_output=True)
+                        else:
+                            console.print(f"[green]Session '{session_name}' exists, continuing...[/green]")
+                            sys.exit(0)
                 else:
-                    console.print("[yellow]No existing session to resume. Creating new session...[/yellow]")
+                    if self.daemon_mode:
+                        console.print("[green]Daemon mode: No existing session found. Creating new session...[/green]")
+                    else:
+                        console.print("[yellow]No existing session to resume. Creating new session...[/yellow]")
             else:
                 # Interactive mode - prompt user
                 console.print("\n[yellow]⚠️  Existing orchestration detected![/yellow]")
@@ -4514,9 +4580,11 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='Git workflow mode: local (worktree optimization) or github (legacy)')
 @click.option('--project-id', type=int, default=None,
               help='Project ID for queue completion callback (used by scheduler)')
+@click.option('--daemon', is_flag=True,
+              help='Run in daemon mode: non-interactive with auto-defaults for all prompts')
 def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, team_type: str, roles: tuple, force: bool, overwrite: bool, plan: str, 
          resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool, new_project: bool,
-         research: Optional[str], restore: Optional[str], continue_batch: bool, git_mode: str, project_id: Optional[int]):
+         research: Optional[str], restore: Optional[str], continue_batch: bool, git_mode: str, project_id: Optional[int], daemon: bool):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
@@ -4741,7 +4809,7 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
         project_name = project_path.name
         
         # Create orchestrator with dummy spec path for now
-        orchestrator = AutoOrchestrator(project, spec[0] if spec else "dummy.md", batch_mode=batch, overwrite=overwrite)
+        orchestrator = AutoOrchestrator(project, spec[0] if spec else "dummy.md", batch_mode=batch, overwrite=overwrite, daemon=daemon)
         orchestrator.rebrief_all = rebrief_all
         orchestrator.team_type = team_type if team_type != 'auto' else None
         orchestrator.project_id = project_id  # Store for database update if from queue
@@ -4806,7 +4874,7 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
         console.print("[red]Error: --spec is required when not using --resume[/red]")
         sys.exit(1)
         
-    orchestrator = AutoOrchestrator(project or 'auto', spec[0], batch_mode=batch, overwrite=overwrite)
+    orchestrator = AutoOrchestrator(project or 'auto', spec[0], batch_mode=batch, overwrite=overwrite, daemon=daemon)
     orchestrator.manual_size = size if size != 'auto' else None
     orchestrator.team_type = team_type if team_type != 'auto' else None
     orchestrator.additional_roles = list(roles) if roles else []

@@ -3,13 +3,150 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
+"""
+Tmux Utilities Module
+Provides reusable tmux session management functions for the orchestrator system
+"""
 
 import subprocess
 import json
 import time
+import logging
+import uuid
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
+
+# Set up logger for utility functions
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Utility Functions for Session Management (Added for orchestrator automation)
+# ============================================================================
+
+def get_active_sessions() -> List[str]:
+    """Get all active tmux sessions - centralized version"""
+    try:
+        result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], 
+                              capture_output=True, text=True)
+        if result.returncode == 0:
+            return [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+        return []
+    except Exception as e:
+        logger.error(f"Failed to get active tmux sessions: {e}")
+        return []
+
+def session_exists(name: str) -> bool:
+    """Check if tmux session exists"""
+    try:
+        result = subprocess.run(['tmux', 'has-session', '-t', name], 
+                              capture_output=True, stderr=subprocess.DEVNULL)
+        return result.returncode == 0
+    except Exception as e:
+        logger.error(f"Failed to check session existence: {e}")
+        return False
+
+def kill_session(name: str) -> bool:
+    """Kill a tmux session if it exists"""
+    try:
+        if session_exists(name):
+            result = subprocess.run(['tmux', 'kill-session', '-t', name], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                logger.info(f"Successfully killed session: {name}")
+                return True
+            else:
+                logger.warning(f"Failed to kill session {name}: {result.stderr}")
+                return False
+        else:
+            logger.debug(f"Session {name} does not exist, nothing to kill")
+            return True
+    except Exception as e:
+        logger.error(f"Error killing session {name}: {e}")
+        return False
+
+def create_session(name: str, command: Optional[str] = None, working_dir: Optional[str] = None) -> bool:
+    """Create a new tmux session"""
+    try:
+        cmd = ['tmux', 'new-session', '-d', '-s', name]
+        if working_dir:
+            cmd.extend(['-c', working_dir])
+        if command:
+            cmd.append(command)
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            logger.info(f"Successfully created session: {name}")
+            return True
+        else:
+            logger.error(f"Failed to create session {name}: {result.stderr}")
+            return False
+    except Exception as e:
+        logger.error(f"Error creating session {name}: {e}")
+        return False
+
+def recreate_session(name: str, command: Optional[str] = None, working_dir: Optional[str] = None) -> bool:
+    """Kill and recreate a tmux session"""
+    logger.info(f"Recreating session: {name}")
+    kill_session(name)
+    return create_session(name, command, working_dir)
+
+def send_keys(session: str, keys: str, window: int = 0) -> bool:
+    """Send keys to a tmux session/window"""
+    try:
+        target = f"{session}:{window}"
+        result = subprocess.run(['tmux', 'send-keys', '-t', target, keys, 'C-m'], 
+                              capture_output=True, text=True)
+        if result.returncode == 0:
+            logger.debug(f"Sent keys to {target}: {keys}")
+            return True
+        else:
+            logger.warning(f"Failed to send keys to {target}: {result.stderr}")
+            return False
+    except Exception as e:
+        logger.error(f"Error sending keys to {session}: {e}")
+        return False
+
+def capture_pane(session: str, window: int = 0, lines: int = 50) -> str:
+    """Capture output from a tmux pane"""
+    try:
+        target = f"{session}:{window}"
+        result = subprocess.run(['tmux', 'capture-pane', '-t', target, '-p', '-S', f'-{lines}'], 
+                              capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout
+        else:
+            logger.warning(f"Failed to capture pane from {target}: {result.stderr}")
+            return ""
+    except Exception as e:
+        logger.error(f"Error capturing pane from {session}: {e}")
+        return ""
+
+def generate_unique_session_name(base_name: str) -> str:
+    """Generate a unique session name by checking existing sessions"""
+    active_sessions = set(get_active_sessions())
+    
+    # Try base name first
+    if base_name not in active_sessions:
+        return base_name
+    
+    # Add short UUID if base name exists
+    unique_name = f"{base_name}-{uuid.uuid4().hex[:8]}"
+    retry_count = 0
+    
+    while unique_name in active_sessions and retry_count < 10:
+        unique_name = f"{base_name}-{uuid.uuid4().hex[:8]}"
+        retry_count += 1
+    
+    if retry_count >= 10:
+        logger.warning(f"Could not generate unique name for {base_name}, using timestamp fallback")
+        unique_name = f"{base_name}-{int(time.time())}"
+    
+    return unique_name
+
+# ============================================================================
+# Existing TmuxOrchestrator Class (Preserved for claude_control.py compatibility)
+# ============================================================================
 
 @dataclass
 class TmuxWindow:

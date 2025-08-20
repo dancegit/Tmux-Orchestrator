@@ -48,6 +48,10 @@ class TmuxOrchestratorScheduler:
         # Add configurable poll interval
         self.poll_interval = int(os.getenv('POLL_INTERVAL_SEC', 60))
         
+        # NEW: For re-entrance protection to prevent notification loops
+        self.processing_events = set()
+        self._event_lock = threading.Lock()
+        
         self.setup_database()
         
         # Auto-subscribe default completion handler
@@ -133,6 +137,14 @@ class TmuxOrchestratorScheduler:
         """Mark a project as completed or failed. Called by orchestration agents when work finishes."""
         try:
             cursor = self.conn.cursor()
+            
+            # NEW: Guard to prevent re-marking and repeated events/loops
+            cursor.execute("SELECT status FROM project_queue WHERE id = ?", (project_id,))
+            row = cursor.fetchone()
+            if row and row[0] in ('completed', 'failed'):
+                logger.debug(f"Project {project_id} already marked as {row[0]}, skipping to prevent notification loop")
+                return  # Exit early without updating or triggering event
+            
             status = 'completed' if success else 'failed'
             with self.conn:  # Transaction for atomic update
                 cursor.execute("""
@@ -156,6 +168,11 @@ class TmuxOrchestratorScheduler:
     def setup_database(self):
         """Initialize SQLite database for persistent task storage"""
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        
+        # Enable WAL mode for better concurrency (multiple readers, single writer)
+        self.conn.execute("PRAGMA journal_mode=WAL;")
+        self.conn.execute("PRAGMA busy_timeout=10000;")  # 10 second timeout for locks
+        self.conn.execute("PRAGMA synchronous=NORMAL;")  # Better performance with WAL
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -253,28 +270,39 @@ class TmuxOrchestratorScheduler:
         logger.info(f"Subscribed {callback.__name__} to event '{event}'")
     
     def complete_task(self, task_id: int, session_name: str, agent_role: str, completion_message: str = ""):
-        """Mark task as complete and trigger completion hooks"""
-        now = time.time()
-        self.conn.execute("UPDATE tasks SET last_run = ? WHERE id = ?", (now, task_id))
-        self.conn.commit()
-        
-        # Extract project name from session name
-        project_name = session_name.split('-impl')[0].replace('-', ' ').title()
-        
-        # Update session state
-        state = self.session_state_manager.load_session_state(project_name)
-        if state and agent_role.lower() in state.agents:
-            agent = state.agents[agent_role.lower()]
-            agent.last_check_in_time = datetime.now().isoformat()
-            self.session_state_manager.save_session_state(state)
-            logger.info(f"Updated session state for {agent_role}")
-        
-        # Trigger event subscribers
-        for callback in self.event_subscribers.get('task_complete', []):
+        """Mark task as complete and trigger completion hooks with re-entrance protection"""
+        # NEW: Re-entrance guard to prevent notification loops
+        task_key = f"{task_id}_{session_name}_{agent_role}"
+        with self._event_lock:
+            if task_key in self.processing_events:
+                logger.warning(f"Skipping recursive/re-entrant event for task {task_key} to prevent notification loop")
+                return
+            self.processing_events.add(task_key)
+            
             try:
-                callback(task_id, session_name, agent_role, completion_message)
-            except Exception as e:
-                logger.error(f"Error in event callback {callback.__name__}: {e}")
+                now = time.time()
+                self.conn.execute("UPDATE tasks SET last_run = ? WHERE id = ?", (now, task_id))
+                self.conn.commit()
+                
+                # Extract project name from session name
+                project_name = session_name.split('-impl')[0].replace('-', ' ').title()
+                
+                # Update session state
+                state = self.session_state_manager.load_session_state(project_name)
+                if state and agent_role.lower() in state.agents:
+                    agent = state.agents[agent_role.lower()]
+                    agent.last_check_in_time = datetime.now().isoformat()
+                    self.session_state_manager.save_session_state(state)
+                    logger.info(f"Updated session state for {agent_role}")
+                
+                # Trigger event subscribers
+                for callback in self.event_subscribers.get('task_complete', []):
+                    try:
+                        callback(task_id, session_name, agent_role, completion_message)
+                    except Exception as e:
+                        logger.error(f"Error in event callback {callback.__name__}: {e}")
+            finally:
+                self.processing_events.remove(task_key)
     
     def _handle_task_completion(self, task_id: int, session_name: str, agent_role: str, completion_message: str):
         """Default handler: Force agent to report to Orchestrator via tmux injection"""
@@ -289,11 +317,14 @@ class TmuxOrchestratorScheduler:
                 
             window_index = state.agents[agent_role.lower()].window_index
             
-            # Construct report message for hub-and-spoke enforcement
-            if not completion_message:
-                completion_message = f"Task {task_id} completed successfully"
+            # FIX: Construct fresh report message (no appending to prevent accumulation)
+            if not completion_message or "Agent orchestrator completed:" in completion_message:
+                # Use fresh message if empty or if it already contains accumulated text
+                fresh_completion_message = f"Task {task_id} completed successfully"
+            else:
+                fresh_completion_message = completion_message
             
-            report_prompt = f"IMPORTANT: Report to Orchestrator (window 0) - {completion_message}"
+            report_prompt = f"IMPORTANT: Report to Orchestrator (window 0) - {fresh_completion_message}"
             
             # Inject into agent's tmux window to prompt Claude to report
             cmd = ['tmux', 'send-keys', '-t', f'{session_name}:{window_index}', report_prompt, 'C-m']
@@ -302,8 +333,8 @@ class TmuxOrchestratorScheduler:
             if result.returncode == 0:
                 logger.info(f"Injected completion report prompt to {session_name}:{window_index} ({agent_role})")
                 
-                # Also schedule an immediate check-in for Orchestrator
-                orchestrator_note = f"Agent {agent_role} completed: {completion_message}"
+                # FIX: Also schedule an immediate check-in for Orchestrator with FRESH note (no accumulation)
+                orchestrator_note = f"Agent {agent_role} completed: {fresh_completion_message}"
                 self.enqueue_task(session_name, 'orchestrator', 0, 0, orchestrator_note)
             else:
                 logger.error(f"Failed to inject completion message: {result.stderr}")
@@ -605,6 +636,7 @@ class TmuxOrchestratorScheduler:
                                 '--project', proj_arg,
                                 '--project-id', str(next_project['id']),  # FIXED: Pass project ID for completion callback
                                 '--batch',  # Enable non-interactive mode (now works with --project-id fix)
+                                '--daemon',  # Force unattended mode with auto-defaults
                             ]
                             
                             # Add resume flag only if we determined we should resume
