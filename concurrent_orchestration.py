@@ -231,16 +231,27 @@ class ConcurrentOrchestrationManager:
                         try:
                             metadata = json.loads(metadata_file.read_text())
                             
-                            # Check if session is still active
-                            session_name = metadata.get('session_name')
-                            if session_name:
-                                result = subprocess.run(
-                                    ['tmux', 'has-session', '-t', session_name],
-                                    capture_output=True
-                                )
-                                metadata['active'] = result.returncode == 0
+                            # Check if process is still active (more reliable than tmux session checking)
+                            pid = metadata.get('pid')
+                            if pid:
+                                try:
+                                    # Check if PID exists and is running
+                                    os.kill(pid, 0)  # Signal 0 doesn't kill but checks if process exists
+                                    metadata['active'] = True
+                                except OSError:
+                                    # Process doesn't exist
+                                    metadata['active'] = False
                             else:
-                                metadata['active'] = False
+                                # Fallback to tmux session check for backward compatibility
+                                session_name = metadata.get('session_name')
+                                if session_name:
+                                    result = subprocess.run(
+                                        ['tmux', 'has-session', '-t', session_name],
+                                        capture_output=True
+                                    )
+                                    metadata['active'] = result.returncode == 0
+                                else:
+                                    metadata['active'] = False
                                 
                             # Add session state info if available
                             if state_file.exists():

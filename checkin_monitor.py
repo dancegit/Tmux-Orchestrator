@@ -8,6 +8,7 @@ import subprocess
 import sqlite3
 import time
 import logging
+import os
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
@@ -34,7 +35,7 @@ class CheckinMonitor:
         self.scheduler_db = self.tmux_orchestrator_path / 'task_queue.db'
         
         # Thresholds for intervention
-        self.stuck_threshold_hours = 2  # Project considered stuck after 2 hours
+        self.stuck_threshold_hours = float(os.getenv('STUCK_THRESHOLD_HOURS', '0.5'))  # Project considered stuck after 30 minutes (was 2 hours)
         self.checkin_warning_minutes = 45  # Warning if no check-in scheduled within 45 min
         
         # Emergency check-in strategy
@@ -45,7 +46,7 @@ class CheckinMonitor:
         self.emergency_tracker = {}  # Track per-session emergency count and last sent time
         
         # Idle detection and nudging (optimized for 2-minute monitoring)  
-        self.idle_threshold_minutes = 5  # No activity in this time = idle (reduced for faster throughput)
+        self.idle_threshold_minutes = float(os.getenv('IDLE_THRESHOLD_MINUTES', '3'))  # No activity in this time = idle (was 5 minutes)
         self.nudge_cooldown_minutes = 6  # Min time between nudges (allows nudge every 3 monitoring cycles)
         self.nudge_tracker = {}  # {session_name: last_nudge_time isoformat}
         
@@ -61,6 +62,28 @@ class CheckinMonitor:
             return []
         except:
             return []
+    
+    def _is_session_alive(self, session_name: str) -> bool:
+        """Check if the tmux session exists and is active."""
+        active_sessions = self.get_active_sessions()
+        if session_name not in active_sessions:
+            logger.warning(f"Session {session_name} is dead - skipping monitoring and escalating to failure")
+            # Extract project name from session name
+            parts = session_name.split('-impl-')
+            if len(parts) > 0:
+                project_name = parts[0].replace('-', ' ').title()
+                state = self.state_manager.load_session_state(project_name)
+                if state and state.completion_status not in ['completed', 'failed']:
+                    # Escalate to failure handler to clean up state
+                    try:
+                        from project_failure_handler import ProjectFailureHandler
+                        handler = ProjectFailureHandler(self.tmux_orchestrator_path)
+                        handler.handle_timeout_failure(project_name, state)
+                        logger.info(f"Escalated dead session {session_name} to failure handler")
+                    except Exception as e:
+                        logger.error(f"Failed to escalate dead session to failure handler: {e}")
+            return False
+        return True
     
     def get_scheduled_checkins(self, session_name: str) -> List[Dict]:
         """Get all scheduled check-ins for a session"""
@@ -342,7 +365,7 @@ class CheckinMonitor:
             duration = datetime.now() - created
             hours_running = duration.total_seconds() / 3600
             
-            if hours_running > 4:
+            if hours_running > 6:
                 # Check if there are pending batch specs
                 if self._has_pending_batch_specs():
                     health['status'] = 'critical'
@@ -555,6 +578,11 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
         if health['status'] not in ['warning', 'critical']:
             return
         
+        # Check if session is still alive before sending emergency messages
+        if not self._is_session_alive(session_name):
+            logger.info(f"Session {session_name} is dead - skipping emergency handling")
+            return
+        
         # Initialize tracking if needed
         if session_name not in self.emergency_tracker:
             self.emergency_tracker[session_name] = {
@@ -617,6 +645,10 @@ If you're the Orchestrator: cd {self.tmux_orchestrator_path} && python3 claude_c
         interventions_needed = []
         
         for session in orchestrator_sessions:
+            # Check if session is alive before processing
+            if not self._is_session_alive(session):
+                continue
+            
             # Extract project name from session name
             parts = session.split('-impl-')
             if len(parts) > 0:

@@ -498,11 +498,32 @@ git push origin integration:main  # Or to a backup branch
 
 ### Conflict Resolution Protocol
 
-1. **Detection**: PM encounters merge conflict during local integration
-2. **Local Resolution**: PM attempts resolution using standard Git tools
-3. **Agent Consultation**: If unclear, ask originating agent: `scm developer:0 "Merge conflict in auth.py - your intent for lines 45-60?"`
-4. **Orchestrator Escalation**: Complex conflicts escalated: `scm orchestrator:0 "Architecture conflict between auth approaches - guidance needed"`
-5. **GitHub Escalation**: Only for external tools or complex reviews requiring web interface
+When a git merge conflict occurs during syncing or integration, follow this protocol to resolve it autonomously when possible, escalating only for complex cases. This leverages your AI reasoning to maintain workflow momentum while ensuring safety.
+
+#### Step 1: Detect and Assess Conflict
+- Run `git merge --no-commit --no-ff <source-branch>` to preview. If conflicts arise, abort with `git merge --abort`.
+- Analyze conflicts: Use `git diff --name-only --diff-filter=U` to list conflicting files.
+- Classify as "simple" (small textual changes, config files) or "complex" (code logic conflicts, >100 lines, binaries).
+- If simple and you have high confidence (>80%), proceed to autonomous resolution. Otherwise, escalate immediately.
+
+#### Step 2: Autonomous Resolution (For Simple Conflicts)
+- Create backup: `git branch backup-<your-role>-$(date +%s)`
+- Use AI assistance: `git-resolve-conflict --ai --files <conflicting-files>`
+- Or manually: For each file, reason through the conflict and merge intelligently
+- Validate: Run tests, check `git diff --check`, self-review for issues
+- Commit: `git commit -m "AI-resolved merge conflict: <description>"`
+- If validation fails, revert: `git reset --hard backup-<your-role>-*` and escalate
+- Limit: 2 attempts maximum before escalation
+
+#### Step 3: Escalation (For Complex Conflicts or Failed Attempts)
+- Report to PM: `scm pm:0 "Merge conflict in <files> during sync from <source>. Classification: complex/failed-validation. Requesting assistance."`
+- Include: Conflicting branches, files, your analysis, partial resolutions if any
+- Wait for PM directive (tracked in SessionState). Do not proceed until resolved.
+
+#### Integration with System Tools
+- Use `git-sync-and-resolve --source <branch>` for automated conflict handling
+- Logs resolution outcomes to SessionState for monitoring
+- Always backup before attempting resolution
 
 ### Backup and Recovery
 
@@ -932,6 +953,40 @@ scm orchestrator:0 "EMERGENCY ROLLBACK: All agents rebase from main immediately"
 - **Rollback Safety**: Can always return to a working state
 - **Progress Tracking**: Clear history of what was accomplished
 
+### General Git Workflow for All Agents
+
+Follow this enhanced workflow that includes autonomous conflict resolution:
+
+1. **Regular Commits**: Commit every 10-15 minutes with semantic messages
+   ```bash
+   git add -A
+   git commit -m "feat: implement user authentication" # or fix:, docs:, test:
+   ```
+
+2. **Smart Syncing**: Before starting new work, sync with AI assistance
+   ```bash
+   # Automatically handles conflicts if they arise
+   git-sync-and-resolve --source pm/integration
+   # Or from main/master
+   git-sync-and-resolve --source origin/main
+   ```
+
+3. **Conflict Handling**: When conflicts occur during your work
+   - Simple conflicts: Use `git-resolve-conflict --ai` for autonomous resolution
+   - Complex conflicts: Escalate to PM with full context
+   - Always validate resolutions with tests before committing
+
+4. **Safety Rules**:
+   - Never force-push without PM approval
+   - Always create backup branches before complex operations
+   - Run tests after any merge or conflict resolution
+   - Update SessionState with resolution outcomes
+
+5. **Integration with Tools**:
+   - Use wrapper commands from git_wrappers.sh for safety
+   - All resolutions are logged to SessionState automatically
+   - GitCoordinator handles complex operations behind the scenes
+
 ## 🌳 Git Worktree & Workflow Rules
 
 ### Worktree Structure
@@ -1070,31 +1125,44 @@ npm run test   # smoke test
 scm orchestrator:0 "Integration complete! All agents pull from main within 1 hour"
 ```
 
-#### Conflict Resolution Protocol
+#### Conflict Resolution Protocol - PM Enhanced
 ```bash
-# When conflicts occur - delegate but don't abandon
+# When conflicts occur - attempt autonomous resolution first
 if git merge origin/feature/branch-name --no-ff; then
   echo "✅ Clean merge successful"
 else
-  echo "⚠️  Conflicts detected - resolving..."
+  echo "⚠️  Conflicts detected - attempting autonomous resolution..."
   
-  # Check conflict type
-  git status | grep "both modified"
-  
-  # Delegate based on file type
-  if git status | grep -q "\.py\|\.js\|\.ts"; then
-    scm developer:0 "Code conflicts in integration branch $(git branch --show-current) - please resolve and commit"
-  elif git status | grep -q "test"; then
-    scm tester:0 "Test conflicts in integration branch $(git branch --show-current) - please resolve and commit"
+  # First, try AI-assisted resolution
+  if git-sync-and-resolve --source origin/feature/branch-name; then
+    echo "✅ Conflicts resolved autonomously"
   else
-    # PM handles documentation/config conflicts
-    git mergetool  # or manual resolution
-    git add .
-    git commit -m "Resolve integration conflicts"
+    # Autonomous failed, classify and delegate
+    conflict_files=$(git diff --name-only --diff-filter=U)
+    
+    # Analyze complexity
+    total_lines=$(git diff --cached | wc -l)
+    if [ $total_lines -gt 100 ]; then
+      echo "Complex conflict detected (${total_lines} lines)"
+    fi
+    
+    # Delegate based on file type and complexity
+    if git status | grep -q "\.py\|\.js\|\.ts"; then
+      scm developer:0 "Complex code conflicts in integration branch $(git branch --show-current) - autonomous resolution failed. Files: ${conflict_files}. Please resolve and commit."
+    elif git status | grep -q "test"; then
+      scm tester:0 "Test conflicts in integration branch $(git branch --show-current) - please resolve and commit"
+    else
+      # PM makes another attempt with different strategy
+      git-resolve-conflict --ai --files "${conflict_files}"
+      if [ $? -ne 0 ]; then
+        # Escalate to Orchestrator
+        scm orchestrator:0 "Integration blocked: unresolvable conflicts in ${conflict_files}. Manual intervention required."
+      fi
+    fi
+    
+    # Set timeout for resolution
+    echo "Waiting for conflict resolution (timeout: 30min)..."
   fi
-  
-  # Wait for agent to resolve before continuing
-  echo "Waiting for conflict resolution..."
 fi
 ```
 
