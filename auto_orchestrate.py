@@ -184,6 +184,103 @@ class ImplementationSpec(BaseModel):
     project_size: ProjectSize = Field(default_factory=ProjectSize)
 
 
+class PathManager:
+    """Centralized path management for consistent worktree and metadata handling"""
+    def __init__(self, project_path: Path, orchestrator_root: Path):
+        self.project_path = project_path.resolve()
+        self.orchestrator_root = orchestrator_root.resolve()
+        self.project_name = self.project_path.name
+        
+        # Worktrees are siblings to the project directory
+        self.worktree_root = self.project_path.parent / f"{self.project_name}-tmux-worktrees"
+        
+        # Metadata is also a sibling (migrating from registry)
+        self.metadata_root = self.project_path.parent / f"{self.project_name}-tmux-metadata"
+        
+        # Legacy registry path (for migration)
+        self.legacy_registry = self.orchestrator_root / 'registry' / 'projects' / self.project_name
+        
+        self._ensure_dirs()
+        self._migrate_legacy_if_exists()
+    
+    def _ensure_dirs(self):
+        """Ensure all required directories exist"""
+        for dir_path in [self.worktree_root, self.metadata_root]:
+            dir_path.mkdir(parents=True, exist_ok=True)
+    
+    def _migrate_legacy_if_exists(self):
+        """One-time migration from legacy registry to sibling structure"""
+        if self.legacy_registry.exists() and not (self.metadata_root / 'migrated.flag').exists():
+            console.print(f"[yellow]Migrating legacy registry data to sibling structure...[/yellow]")
+            try:
+                # Copy session state and other metadata
+                import shutil
+                for item in self.legacy_registry.iterdir():
+                    if item.name != 'worktrees':  # Skip worktrees, they're created fresh
+                        if item.is_file():
+                            shutil.copy2(item, self.metadata_root / item.name)
+                        elif item.is_dir():
+                            shutil.copytree(item, self.metadata_root / item.name, dirs_exist_ok=True)
+                
+                # Mark as migrated
+                (self.metadata_root / 'migrated.flag').touch()
+                console.print(f"[green]✓ Legacy data migrated to {self.metadata_root}[/green]")
+            except Exception as e:
+                console.print(f"[red]Migration failed: {e}. Continuing with fresh metadata.[/red]")
+    
+    def get_worktree_path(self, role: str) -> Path:
+        """Get the worktree path for a specific role"""
+        return self.worktree_root / role.lower().replace('_', '-')
+    
+    def get_session_state_path(self) -> Path:
+        """Get the session state file path"""
+        return self.metadata_root / 'session_state.json'
+    
+    def get_implementation_spec_path(self) -> Path:
+        """Get the implementation spec file path"""
+        return self.metadata_root / 'implementation_spec.json'
+    
+    def get_logs_dir(self) -> Path:
+        """Get the logs directory"""
+        logs_dir = self.metadata_root / 'logs'
+        logs_dir.mkdir(exist_ok=True)
+        return logs_dir
+    
+    def get_notes_dir(self) -> Path:
+        """Get the notes directory"""
+        notes_dir = self.metadata_root / 'notes'
+        notes_dir.mkdir(exist_ok=True)
+        return notes_dir
+    
+    def cleanup_legacy(self):
+        """Remove legacy registry after successful migration"""
+        if self.legacy_registry.exists() and (self.metadata_root / 'migrated.flag').exists():
+            console.print(f"[yellow]Removing legacy registry at {self.legacy_registry}...[/yellow]")
+            import shutil
+            shutil.rmtree(self.legacy_registry)
+            console.print(f"[green]✓ Legacy registry cleaned up[/green]")
+    
+    def reconcile_session_state(self, session_state: dict) -> dict:
+        """Reconcile missing paths in session state"""
+        # Fill in missing project_path
+        if not session_state.get('project_path'):
+            session_state['project_path'] = str(self.project_path)
+        
+        # Fill in missing worktree_base_path
+        if not session_state.get('worktree_base_path'):
+            session_state['worktree_base_path'] = str(self.worktree_root)
+        
+        # Update agent worktree paths
+        if 'agents' in session_state:
+            for role, agent in session_state['agents'].items():
+                if not agent.get('worktree_path'):
+                    role_worktree = self.get_role_worktree(role)
+                    if role_worktree.exists():
+                        agent['worktree_path'] = str(role_worktree)
+        
+        return session_state
+
+
 class AutoOrchestrator:
     def __init__(self, project_path: str, spec_path: str, batch_mode: bool = False, overwrite: bool = False, daemon: bool = False):
         self.spec_path = Path(spec_path).resolve()
@@ -208,6 +305,9 @@ class AutoOrchestrator:
             
         self.tmux_orchestrator_path = Path(__file__).parent
         self.implementation_spec: Optional[ImplementationSpec] = None
+        
+        # Initialize PathManager for unified path handling
+        self.path_manager = PathManager(self.project_path, self.tmux_orchestrator_path)
         
         # Track start time for duration calculation
         self.start_time = time.time()

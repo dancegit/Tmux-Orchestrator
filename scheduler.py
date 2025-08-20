@@ -19,6 +19,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 
+# NEW: Imports for inter-process locking
+import json
+import socket
+from fcntl import flock, LOCK_EX, LOCK_NB, LOCK_UN
+import atexit
+
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent))
 from session_state import SessionStateManager, SessionState
@@ -45,14 +51,25 @@ class TmuxOrchestratorScheduler:
         # Add lock for thread-safe queue operations (FIX: Prevent concurrent project starts)
         self.queue_lock = threading.Lock()
         
+        # NEW: Inter-process lock file
+        self.lock_path = Path('locks/project_queue.lock')
+        self.lock_fd = None
+        self._acquire_process_lock()  # NEW: Acquire early to prevent multiple instances
+        
         # Add configurable poll interval
         self.poll_interval = int(os.getenv('POLL_INTERVAL_SEC', 60))
+        
+        # Add configurable concurrency limit (default 1 for sequential processing)
+        self.max_concurrent = int(os.getenv('MAX_CONCURRENT_PROJECTS', 1))
         
         # NEW: For re-entrance protection to prevent notification loops
         self.processing_events = set()
         self._event_lock = threading.Lock()
         
         self.setup_database()
+        
+        # Clean stale registry entries on startup
+        self.session_state_manager.cleanup_stale_registries()
         
         # Auto-subscribe default completion handler
         self.subscribe('task_complete', self._handle_task_completion)
@@ -62,6 +79,9 @@ class TmuxOrchestratorScheduler:
         self.event_subscribers.setdefault('authorization_request', [])
         self.event_subscribers.setdefault('authorization_response', [])
         
+        # NEW: Register lock release on exit
+        atexit.register(self._release_process_lock)
+        
         # Start batch monitoring thread if enabled
         self._monitoring_enabled = os.getenv('ENABLE_BATCH_MONITORING', 'true').lower() == 'true'
         self._stop_monitoring = threading.Event()
@@ -69,6 +89,182 @@ class TmuxOrchestratorScheduler:
             self.retry_thread = threading.Thread(target=self._monitor_batches, daemon=True)
             self.retry_thread.start()
             logger.info("Batch monitoring thread started")
+        
+        # NEW: Start heartbeat thread to keep lock fresh
+        self.heartbeat_thread = threading.Thread(target=self._heartbeat_thread, daemon=True)
+        self.heartbeat_thread.start()
+        logger.info("Lock heartbeat thread started")
+    
+    # NEW: Inter-process lock acquisition
+    def _acquire_process_lock(self):
+        try:
+            # Create lock directory if it doesn't exist
+            self.lock_path.parent.mkdir(exist_ok=True)
+            
+            # Create/open lock file
+            self.lock_fd = open(self.lock_path, 'w+')
+            
+            # Try to acquire exclusive non-blocking lock
+            try:
+                flock(self.lock_fd, LOCK_EX | LOCK_NB)
+            except IOError:
+                # Lock is held - check for staleness
+                self.lock_fd.seek(0)
+                try:
+                    lock_content = self.lock_fd.read()
+                    if lock_content:
+                        lock_data = json.loads(lock_content)
+                        pid = lock_data.get('pid')
+                        timestamp = datetime.fromisoformat(lock_data.get('timestamp', '1970-01-01'))
+                        
+                        # Check if lock is stale (older than 1 hour)
+                        if (datetime.now() - timestamp).total_seconds() > 3600:
+                            logger.warning(f"Lock is stale (created at {timestamp}), attempting to release")
+                            self.lock_fd.seek(0)
+                            self.lock_fd.truncate()
+                            flock(self.lock_fd, LOCK_EX | LOCK_NB)
+                        # Check if process is dead
+                        elif pid and pid != os.getpid():
+                            try:
+                                os.kill(pid, 0)  # Check if process exists
+                            except OSError:
+                                logger.warning(f"Lock holder process {pid} is dead, releasing lock")
+                                self.lock_fd.seek(0)
+                                self.lock_fd.truncate()
+                                flock(self.lock_fd, LOCK_EX | LOCK_NB)
+                            else:
+                                raise RuntimeError(f"Scheduler already running (PID: {pid})")
+                        else:
+                            raise RuntimeError("Scheduler already running")
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Invalid lock file content: {e}, attempting to acquire")
+                    self.lock_fd.seek(0)
+                    self.lock_fd.truncate()
+                    flock(self.lock_fd, LOCK_EX | LOCK_NB)
+            
+            # Write our lock data
+            self.lock_fd.seek(0)
+            self.lock_fd.truncate()
+            lock_data = {
+                'pid': os.getpid(),
+                'timestamp': datetime.now().isoformat(),
+                'hostname': socket.gethostname()
+            }
+            self.lock_fd.write(json.dumps(lock_data) + '\n')
+            self.lock_fd.flush()
+            logger.info(f"Acquired process lock: {lock_data}")
+        except Exception as e:
+            logger.error(f"Failed to acquire lock: {e}")
+            if self.lock_fd:
+                self.lock_fd.close()
+                self.lock_fd = None
+            raise RuntimeError(f"Could not acquire scheduler lock: {e}")
+    
+    # NEW: Release inter-process lock
+    def _release_process_lock(self):
+        if self.lock_fd:
+            flock(self.lock_fd, LOCK_UN)
+            self.lock_fd.close()
+            logger.info("Released process lock")
+    
+    # NEW: Heartbeat thread to keep lock fresh
+    def _heartbeat_thread(self):
+        """Update lock file timestamp every 30 seconds to indicate we're alive"""
+        while not self._stop_monitoring.is_set():
+            try:
+                if self.lock_fd and not self.lock_fd.closed:
+                    self.lock_fd.seek(0)
+                    lock_data = {
+                        'pid': os.getpid(),
+                        'timestamp': datetime.now().isoformat(),
+                        'hostname': socket.gethostname()
+                    }
+                    self.lock_fd.truncate()
+                    self.lock_fd.write(json.dumps(lock_data) + '\n')
+                    self.lock_fd.flush()
+                    logger.debug(f"Updated lock heartbeat: {lock_data['timestamp']}")
+            except Exception as e:
+                logger.error(f"Error updating lock heartbeat: {e}")
+            
+            # Sleep for 30 seconds
+            self._stop_monitoring.wait(30)
+    
+    def check_stuck_projects(self):
+        """Auto-reset projects stuck in processing >4 hours"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE project_queue 
+            SET status = 'failed', 
+                error_message = 'Auto-reset: Timeout after 4 hours in processing',
+                completed_at = strftime('%s', 'now')
+            WHERE status = 'processing' 
+            AND strftime('%s', 'now') - started_at > 14400
+        """)
+        affected = cursor.rowcount
+        self.conn.commit()
+        if affected > 0:
+            logger.warning(f"Auto-reset {affected} stuck projects to 'failed'")
+    
+    def check_and_reset_specific_project(self, project_id: int, force: bool = False) -> bool:
+        """Check if a specific project is stuck and optionally reset it"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT status, started_at, orchestrator_session, main_session
+            FROM project_queue 
+            WHERE id = ?
+        """, (project_id,))
+        row = cursor.fetchone()
+        if not row:
+            logger.error(f"Project {project_id} not found")
+            return False
+        
+        status, started_at, orch_session, main_session = row
+        if status != 'processing':
+            logger.info(f"Project {project_id} is {status}, not processing")
+            return False
+        
+        is_stuck = False
+        if started_at and time.time() - float(started_at) > 7200:  # 2 hours (reduced from 4)
+            is_stuck = True
+            logger.info(f"Project {project_id} has been running for {(time.time() - float(started_at))/3600:.1f} hours")
+        elif orch_session and not self._session_exists(orch_session):  # Check tmux
+            is_stuck = True
+            logger.info(f"Project {project_id} orchestrator session '{orch_session}' no longer exists")
+        
+        if is_stuck or force:
+            self.mark_project_complete(project_id, success=False, error_message='Manual reset: Project appeared stuck or orphaned')
+            logger.warning(f"Reset project {project_id} to failed")
+            return True
+        logger.info(f"Project {project_id} appears to be running normally")
+        return False
+    
+    def remove_project_from_queue(self, project_id: int) -> bool:
+        """Remove a project from the queue (for completed/failed projects)"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT status FROM project_queue WHERE id = ?", (project_id,))
+        row = cursor.fetchone()
+        if not row:
+            logger.error(f"Project {project_id} not found")
+            return False
+        
+        status = row[0]
+        if status == 'processing':
+            logger.warning(f"Cannot remove project {project_id} - still processing")
+            return False
+        
+        cursor.execute("DELETE FROM project_queue WHERE id = ?", (project_id,))
+        self.conn.commit()
+        logger.info(f"Removed project {project_id} from queue (was {status})")
+        return cursor.rowcount > 0
+    
+    def _session_exists(self, session_name: str) -> bool:
+        """Check if a tmux session exists"""
+        try:
+            result = subprocess.run(['tmux', 'has-session', '-t', session_name], 
+                                  capture_output=True, text=True)
+            return result.returncode == 0
+        except:
+            return False
     
     def get_active_tmux_sessions(self):
         """Helper to get active tmux sessions (for sequential processing check)."""
@@ -85,53 +281,62 @@ class TmuxOrchestratorScheduler:
     def get_next_project_atomic(self) -> Optional[Dict[str, Any]]:
         """Atomically dequeue the next project if none are processing. FIXES SEQUENTIAL PROCESSING."""
         with self.queue_lock:
+            cursor = self.conn.cursor()
             try:
-                # Use transaction for atomic check-select-update
-                with self.conn:  # Implicit BEGIN/COMMIT for transaction
-                    cursor = self.conn.cursor()
-                    
-                    # Step 1: Check if any project is already processing
-                    cursor.execute("SELECT COUNT(*) FROM project_queue WHERE status = 'processing'")
-                    active_count = cursor.fetchone()[0]
-                    if active_count > 0:
-                        logger.debug(f"Skipping dequeue: {active_count} project(s) already processing")
-                        return None
+                cursor.execute("BEGIN")  # Explicit transaction
+                
+                # Step 1: Check if we're at the concurrency limit
+                cursor.execute("SELECT COUNT(*) FROM project_queue WHERE status = 'processing'")
+                active_count = cursor.fetchone()[0]
+                if active_count >= self.max_concurrent:
+                    logger.debug(f"Skipping dequeue: {active_count} project(s) processing (limit: {self.max_concurrent})")
+                    self.conn.rollback()
+                    return None
 
-                    # Step 2: Select the next highest-priority queued project
-                    cursor.execute("""
-                        SELECT id, spec_path, project_path, batch_id, retry_count
-                        FROM project_queue 
-                        WHERE status = 'queued' 
-                        ORDER BY priority DESC, enqueued_at ASC 
-                        LIMIT 1
-                    """)
-                    row = cursor.fetchone()
-                    if not row:
-                        logger.debug("No queued projects available")
-                        return None
+                # Step 2: Select the next highest-priority queued project
+                cursor.execute("""
+                    SELECT id, spec_path, project_path, batch_id, retry_count
+                    FROM project_queue 
+                    WHERE status = 'queued' 
+                    ORDER BY priority DESC, enqueued_at ASC 
+                    LIMIT 1
+                """)
+                row = cursor.fetchone()
+                if not row:
+                    logger.debug("No queued projects available - queue is empty")
+                    self.conn.rollback()
+                    return None
 
-                    # Step 3: Atomically update to 'processing' (within transaction)
-                    project_id = row[0]
-                    cursor.execute("""
-                        UPDATE project_queue 
-                        SET status = 'processing', started_at = strftime('%s', 'now') 
-                        WHERE id = ?
-                    """, (project_id,))
-                    
-                    # Return project data
-                    return {
-                        'id': row[0],
-                        'spec_path': row[1], 
-                        'project_path': row[2],
-                        'batch_id': row[3],
-                        'retry_count': row[4]
-                    }
-            except sqlite3.Error as e:
-                logger.error(f"Database error in atomic dequeue: {e}")
-                return None
+                # Step 3: Atomically update to 'processing' (within transaction)
+                project_id = row[0]
+                cursor.execute("""
+                    UPDATE project_queue 
+                    SET status = 'processing', started_at = strftime('%s', 'now') 
+                    WHERE id = ?
+                """, (project_id,))
+                
+                self.conn.commit()  # Commit if successful
+                logger.info(f"Dequeued project {project_id}")
+                
+                # Return project data
+                return {
+                    'id': row[0],
+                    'spec_path': row[1], 
+                    'project_path': row[2],
+                    'batch_id': row[3],
+                    'retry_count': row[4]
+                }
+            except sqlite3.OperationalError as e:
+                self.conn.rollback()
+                if "locked" in str(e).lower():
+                    logger.warning("DB locked during dequeue; will retry later")
+                    time.sleep(1)  # Simple backoff
+                    return None  # Caller can retry
+                raise
             except Exception as e:
-                logger.error(f"Unexpected error in atomic dequeue: {e}")
-                return None
+                self.conn.rollback()
+                logger.error(f"Transaction failed in atomic dequeue: {e}")
+                raise
     
     def mark_project_complete(self, project_id: int, success: bool = True, error_message: str = None):
         """Mark a project as completed or failed. Called by orchestration agents when work finishes."""
@@ -167,12 +372,20 @@ class TmuxOrchestratorScheduler:
         
     def setup_database(self):
         """Initialize SQLite database for persistent task storage"""
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
+        cursor = self.conn.cursor()
         
         # Enable WAL mode for better concurrency (multiple readers, single writer)
-        self.conn.execute("PRAGMA journal_mode=WAL;")
-        self.conn.execute("PRAGMA busy_timeout=10000;")  # 10 second timeout for locks
-        self.conn.execute("PRAGMA synchronous=NORMAL;")  # Better performance with WAL
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        journal_mode = cursor.fetchone()[0]
+        if journal_mode != 'wal':
+            raise RuntimeError(f"Failed to enable WAL mode: current mode is {journal_mode}")
+        
+        cursor.execute("PRAGMA busy_timeout=10000;")  # 10 second timeout for locks
+        cursor.execute("PRAGMA synchronous=NORMAL;")  # Better performance with WAL
+        
+        # Log for debugging
+        logger.info(f"Database initialized in {journal_mode} mode with busy_timeout=10000")
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -343,7 +556,30 @@ class TmuxOrchestratorScheduler:
             logger.error(f"Error in completion handler: {e}")
     
     def trigger_event(self, event_name: str, data: Dict[str, Any]):
-        """Trigger an event with data for all subscribers"""
+        """Trigger an event with data for all subscribers with rate limiting and deduplication"""
+        import hashlib
+        
+        # Rate limiting - enforce minimum interval between events
+        current_time = time.time()
+        if hasattr(self, '_last_event_time'):
+            time_since_last = current_time - self._last_event_time
+            if time_since_last < 0.5:  # 500ms minimum between events
+                time.sleep(0.5 - time_since_last)
+                current_time = time.time()
+        self._last_event_time = current_time
+        
+        # Deduplication - skip duplicate events
+        event_hash = hashlib.md5(f"{event_name}:{json.dumps(data, sort_keys=True)}".encode()).hexdigest()
+        if not hasattr(self, '_event_history'):
+            self._event_history = collections.deque(maxlen=100)
+        
+        if event_hash in self._event_history:
+            logger.warning(f"Skipping duplicate event: {event_name} - {data}")
+            return
+            
+        self._event_history.append(event_hash)
+        
+        # Trigger subscribers
         for subscriber in self.event_subscribers.get(event_name, []):
             try:
                 subscriber(data)
@@ -586,6 +822,9 @@ class TmuxOrchestratorScheduler:
         while True:
             try:
                 with FileLock(str(self.tmux_orchestrator_path / 'locks' / 'project_queue.lock'), timeout=30):
+                    # Check for stuck projects and auto-reset them
+                    self.check_stuck_projects()
+                    
                     # CRITICAL: Check for active orchestrations before processing ANY queued project
                     logger.debug("Checking for active orchestrations before processing queue...")
                     active_check = self.has_active_orchestrations()
@@ -1116,4 +1355,43 @@ def main():
         parser.print_help()
 
 if __name__ == '__main__':
+    # Check for special commands first
+    if len(sys.argv) > 1:
+        if sys.argv[1] == '--reset-project' and len(sys.argv) > 2:
+            try:
+                project_id = int(sys.argv[2])
+                scheduler = TmuxOrchestratorScheduler()
+                force = '--force' in sys.argv
+                reset = scheduler.check_and_reset_specific_project(project_id, force=force)
+                if reset:
+                    print(f"✅ Project {project_id} has been reset")
+                else:
+                    print(f"ℹ️ Project {project_id} was not reset (use --force to override)")
+                sys.exit(0)
+            except ValueError:
+                print("❌ Invalid project ID")
+                sys.exit(1)
+        elif sys.argv[1] == '--check-project' and len(sys.argv) > 2:
+            try:
+                project_id = int(sys.argv[2])
+                scheduler = TmuxOrchestratorScheduler()
+                scheduler.check_and_reset_specific_project(project_id, force=False)
+                sys.exit(0)
+            except ValueError:
+                print("❌ Invalid project ID")
+                sys.exit(1)
+        elif sys.argv[1] == '--remove-project' and len(sys.argv) > 2:
+            try:
+                project_id = int(sys.argv[2])
+                scheduler = TmuxOrchestratorScheduler()
+                removed = scheduler.remove_project_from_queue(project_id)
+                if removed:
+                    print(f"✅ Project {project_id} has been removed from queue")
+                else:
+                    print(f"❌ Project {project_id} not found or could not be removed")
+                sys.exit(0)
+            except ValueError:
+                print("❌ Invalid project ID")
+                sys.exit(1)
+    
     main()

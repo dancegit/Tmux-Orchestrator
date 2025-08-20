@@ -206,27 +206,145 @@ class SessionStateManager:
             if not agents:
                 return None
             
-            # Create minimal session state
+            # Try to derive paths
+            project_path, worktree_paths, spec_path, impl_spec_path = self._derive_project_paths(project_name, session_name)
+            
+            # Update agent worktree paths
+            for role, agent in agents.items():
+                if role in worktree_paths:
+                    agent.worktree_path = str(worktree_paths[role])
+            
+            # Create minimal session state with derived paths
             fallback_state = SessionState(
                 session_name=session_name,
-                project_path="",  # Will be detected later
+                project_path=str(project_path) if project_path else "",
                 project_name=project_name,
-                implementation_spec_path="",
+                implementation_spec_path=str(impl_spec_path) if impl_spec_path else "",
                 created_at=datetime.now().isoformat(),
                 updated_at=datetime.now().isoformat(),
                 agents=agents,
-                completion_status="pending"
+                completion_status="pending",
+                spec_path=str(spec_path) if spec_path else None,
+                worktree_base_path=str(worktree_paths.get('base')) if 'base' in worktree_paths else None
             )
             
             # Save the fallback state
             self.save_session_state(fallback_state)
-            print(f"Created fallback state for {project_name} with {len(agents)} agents")
+            print(f"Created fallback state for {project_name} with {len(agents)} agents and derived paths")
             
             return fallback_state
             
         except Exception as e:
             print(f"Failed to create fallback state for {project_name}: {e}")
             return None
+    
+    def _derive_project_paths(self, project_name: str, session_name: str) -> tuple[Optional[Path], Dict[str, Path], Optional[Path], Optional[Path]]:
+        """Try to derive project paths from various sources"""
+        project_path = None
+        worktree_paths = {}
+        spec_path = None
+        impl_spec_path = None
+        
+        # Strategy 1: Check for spec files in registry
+        registry_project_dir = self.registry_dir / 'projects' / project_name.lower().replace(' ', '-')
+        if registry_project_dir.exists():
+            # Look for implementation spec
+            impl_spec_candidates = list(registry_project_dir.glob('implementation_spec*.json'))
+            if impl_spec_candidates:
+                impl_spec_path = impl_spec_candidates[0]
+                
+                # Try to load it and extract paths
+                try:
+                    impl_spec_data = json.loads(impl_spec_path.read_text())
+                    if 'spec_path' in impl_spec_data:
+                        spec_path = Path(impl_spec_data['spec_path'])
+                        if spec_path.exists():
+                            # Find git root from spec path
+                            from pathlib import Path as P
+                            current = spec_path.parent
+                            while current != current.parent:
+                                if (current / '.git').exists():
+                                    project_path = current
+                                    break
+                                current = current.parent
+                except Exception:
+                    pass
+        
+        # Strategy 2: Look for worktrees in common locations
+        if project_path:
+            # Check for sibling worktree directories
+            worktree_base = project_path.parent / f"{project_path.name}-tmux-worktrees"
+            if worktree_base.exists():
+                worktree_paths['base'] = worktree_base
+                
+                # Map common role directories
+                role_dirs = {
+                    'orchestrator': ['orchestrator'],
+                    'project_manager': ['project-manager', 'pm'],
+                    'developer': ['developer', 'dev'],
+                    'tester': ['tester', 'test'],
+                    'testrunner': ['testrunner', 'test-runner'],
+                    'devops': ['devops'],
+                    'sysadmin': ['sysadmin', 'sys-admin'],
+                    'securityops': ['securityops', 'security-ops'],
+                    'networkops': ['networkops', 'network-ops'],
+                    'monitoringops': ['monitoringops', 'monitoring-ops'],
+                    'databaseops': ['databaseops', 'database-ops']
+                }
+                
+                for role, possible_names in role_dirs.items():
+                    for name in possible_names:
+                        candidate = worktree_base / name
+                        if candidate.exists() and (candidate / '.git').exists():
+                            worktree_paths[role] = candidate
+                            break
+        
+        # Strategy 3: Check for legacy registry worktrees
+        if not worktree_paths and registry_project_dir.exists():
+            legacy_worktree_dir = registry_project_dir / 'worktrees'
+            if legacy_worktree_dir.exists():
+                for role_dir in legacy_worktree_dir.iterdir():
+                    if role_dir.is_dir() and (role_dir / '.git').exists():
+                        role = self._map_window_to_role(role_dir.name)
+                        if role:
+                            worktree_paths[role] = role_dir
+        
+        # Strategy 4: Try to find project from active tmux panes
+        if not project_path:
+            try:
+                # Get current directory from orchestrator window
+                result = subprocess.run(
+                    ['tmux', 'display-message', '-t', f'{session_name}:0', '-p', '#{pane_current_path}'],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    pane_path = Path(result.stdout.strip())
+                    # Find git root
+                    current = pane_path
+                    while current != current.parent:
+                        if (current / '.git').exists():
+                            # Check if this is a worktree
+                            git_file = current / '.git'
+                            if git_file.is_file():
+                                # It's a worktree, find the main project
+                                git_content = git_file.read_text()
+                                if 'gitdir:' in git_content:
+                                    gitdir = git_content.split('gitdir:')[1].strip()
+                                    # Navigate from worktree to main project
+                                    main_git = Path(gitdir).parent.parent
+                                    if main_git.exists() and (main_git / '.git').is_dir():
+                                        project_path = main_git
+                                        break
+                            else:
+                                # Regular git repo
+                                project_path = current
+                                break
+                        current = current.parent
+            except Exception:
+                pass
+        
+        return project_path, worktree_paths, spec_path, impl_spec_path
     
     def _map_window_to_role(self, window_name: str) -> Optional[str]:
         """Map tmux window names to agent roles"""
@@ -383,10 +501,43 @@ class SessionStateManager:
         state.updated_at = datetime.now().isoformat()
         return state
         
+    def _check_status_report_rate_limit(self, state: SessionState, role: str) -> bool:
+        """Check if a role has exceeded status report rate limit"""
+        role_lower = role.lower()
+        current_time = datetime.now()
+        
+        # Initialize rate limit tracking if not exists
+        if not hasattr(state, 'status_report_history'):
+            state.status_report_history = {}
+        
+        if role_lower not in state.status_report_history:
+            state.status_report_history[role_lower] = []
+        
+        # Remove old reports (older than 5 minutes)
+        cutoff_time = current_time - timedelta(minutes=5)
+        state.status_report_history[role_lower] = [
+            timestamp for timestamp in state.status_report_history[role_lower]
+            if datetime.fromisoformat(timestamp) > cutoff_time
+        ]
+        
+        # Check rate limit: max 5 reports per 5 minutes per role
+        if len(state.status_report_history[role_lower]) >= 5:
+            logger.warning(f"Rate limit exceeded for {role}: {len(state.status_report_history[role_lower])} reports in 5 minutes")
+            return False
+            
+        # Add current timestamp
+        state.status_report_history[role_lower].append(current_time.isoformat())
+        return True
+        
     def update_status_report(self, project_name: str, role: str, topic: str, status: str, details: str = ""):
-        """Update status report for an agent"""
+        """Update status report for an agent with rate limiting"""
         state = self.load_session_state(project_name)
         if state:
+            # Check rate limit
+            if not self._check_status_report_rate_limit(state, role):
+                logger.warning(f"Dropping status report from {role} due to rate limit")
+                return
+                
             state.status_reports[role.lower()] = {
                 "topic": topic.lower(),
                 "status": status.upper(),
@@ -853,6 +1004,36 @@ class SessionStateManager:
             return True
         return False
     
+    def cleanup_stale_registries(self, age_threshold: int = 86400):
+        """Clean stale registry entries without active sessions or recent updates"""
+        from tmux_utils import session_exists
+        import shutil
+        
+        cleaned = 0
+        projects_dir = self.registry_dir / 'projects'
+        if not projects_dir.exists():
+            return
+            
+        for proj_dir in projects_dir.iterdir():
+            if not proj_dir.is_dir():
+                continue
+            state_file = proj_dir / 'session_state.json'
+            if state_file.exists():
+                try:
+                    state_dict = json.loads(state_file.read_text())
+                    session_name = state_dict.get('session_name')
+                    updated_at = datetime.fromisoformat(state_dict.get('updated_at', '1970-01-01'))
+                    age = (datetime.now() - updated_at).total_seconds()
+                    
+                    if (session_name and not session_exists(session_name)) or age > age_threshold:
+                        shutil.rmtree(proj_dir)
+                        cleaned += 1
+                        print(f"Cleaned stale registry: {proj_dir.name} (age: {age:.0f}s, session exists: {session_name is not None and session_exists(session_name) if session_name else False})")
+                except Exception as e:
+                    print(f"Failed to clean {proj_dir.name}: {e}")
+        if cleaned > 0:
+            print(f"Cleaned {cleaned} stale registries")
+
     def set_role_dependencies(self, project_name: str, dependencies: Dict[str, List[str]]) -> None:
         """Set role dependencies for a project"""
         state = self.load_session_state(project_name)
