@@ -146,7 +146,7 @@ class ProjectFailureHandler:
             # Update session state
             state.completion_status = "failed"
             state.completion_time = datetime.now().isoformat()
-            state.failure_reason = "timeout_after_4_hours_with_pending_specs"
+            state.failure_reason = "timeout_after_6_hours_with_pending_specs"
             self.state_manager.save_session_state(state)
             
             # Log to separate historical failure log
@@ -187,7 +187,7 @@ class ProjectFailureHandler:
                 f.write("# Project Failure Report\\n\\n")
                 f.write(f"**Project**: {project_name}\\n")
                 f.write(f"**Session**: {state.session_name}\\n")
-                f.write(f"**Failure Reason**: Timeout after 4 hours with pending batch specs\\n")
+                f.write(f"**Failure Reason**: Timeout after 6 hours with pending batch specs\\n")
                 f.write(f"**Duration**: {hours_running:.1f} hours\\n")
                 f.write(f"**Start Time**: {state.created_at}\\n")
                 f.write(f"**End Time**: {datetime.now().isoformat()}\\n")

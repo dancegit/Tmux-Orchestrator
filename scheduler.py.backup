@@ -41,13 +41,6 @@ class TmuxOrchestratorScheduler:
         self.tmux_orchestrator_path = tmux_orchestrator_path or Path(__file__).parent
         self.session_state_manager = SessionStateManager(self.tmux_orchestrator_path)
         self.event_subscribers: Dict[str, List[Callable]] = {}  # Event hook system
-        
-        # Add lock for thread-safe queue operations (FIX: Prevent concurrent project starts)
-        self.queue_lock = threading.Lock()
-        
-        # Add configurable poll interval
-        self.poll_interval = int(os.getenv('POLL_INTERVAL_SEC', 60))
-        
         self.setup_database()
         
         # Auto-subscribe default completion handler
@@ -65,93 +58,6 @@ class TmuxOrchestratorScheduler:
             self.retry_thread = threading.Thread(target=self._monitor_batches, daemon=True)
             self.retry_thread.start()
             logger.info("Batch monitoring thread started")
-    
-    def get_active_tmux_sessions(self):
-        """Helper to get active tmux sessions (for sequential processing check)."""
-        try:
-            result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], 
-                                    capture_output=True, text=True)
-            if result.returncode == 0:
-                return [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
-            return []
-        except Exception as e:
-            logger.error(f"Failed to get tmux sessions: {e}")
-            return []
-    
-    def get_next_project_atomic(self) -> Optional[Dict[str, Any]]:
-        """Atomically dequeue the next project if none are processing. FIXES SEQUENTIAL PROCESSING."""
-        with self.queue_lock:
-            try:
-                # Use transaction for atomic check-select-update
-                with self.conn:  # Implicit BEGIN/COMMIT for transaction
-                    cursor = self.conn.cursor()
-                    
-                    # Step 1: Check if any project is already processing
-                    cursor.execute("SELECT COUNT(*) FROM project_queue WHERE status = 'processing'")
-                    active_count = cursor.fetchone()[0]
-                    if active_count > 0:
-                        logger.debug(f"Skipping dequeue: {active_count} project(s) already processing")
-                        return None
-
-                    # Step 2: Select the next highest-priority queued project
-                    cursor.execute("""
-                        SELECT id, spec_path, project_path, batch_id, retry_count
-                        FROM project_queue 
-                        WHERE status = 'queued' 
-                        ORDER BY priority DESC, enqueued_at ASC 
-                        LIMIT 1
-                    """)
-                    row = cursor.fetchone()
-                    if not row:
-                        logger.debug("No queued projects available")
-                        return None
-
-                    # Step 3: Atomically update to 'processing' (within transaction)
-                    project_id = row[0]
-                    cursor.execute("""
-                        UPDATE project_queue 
-                        SET status = 'processing', started_at = strftime('%s', 'now') 
-                        WHERE id = ?
-                    """, (project_id,))
-                    
-                    # Return project data
-                    return {
-                        'id': row[0],
-                        'spec_path': row[1], 
-                        'project_path': row[2],
-                        'batch_id': row[3],
-                        'retry_count': row[4]
-                    }
-            except sqlite3.Error as e:
-                logger.error(f"Database error in atomic dequeue: {e}")
-                return None
-            except Exception as e:
-                logger.error(f"Unexpected error in atomic dequeue: {e}")
-                return None
-    
-    def mark_project_complete(self, project_id: int, success: bool = True, error_message: str = None):
-        """Mark a project as completed or failed. Called by orchestration agents when work finishes."""
-        try:
-            cursor = self.conn.cursor()
-            status = 'completed' if success else 'failed'
-            with self.conn:  # Transaction for atomic update
-                cursor.execute("""
-                    UPDATE project_queue 
-                    SET status = ?, completed_at = strftime('%s', 'now'), error_message = ? 
-                    WHERE id = ?
-                """, (status, error_message, project_id))
-            logger.info(f"Project {project_id} marked as {status}")
-            
-            # Trigger project completion event for monitoring
-            self.complete_task(f"project_{project_id}", {
-                'project_id': project_id, 
-                'status': status, 
-                'error_message': error_message
-            })
-        except sqlite3.Error as e:
-            logger.error(f"Failed to update completion status for project {project_id}: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error marking project {project_id} complete: {e}")
         
     def setup_database(self):
         """Initialize SQLite database for persistent task storage"""
@@ -190,16 +96,6 @@ class TmuxOrchestratorScheduler:
                 main_session TEXT  -- Main project session created by orchestration
             )
         ''')
-        
-        # Create unique index to prevent duplicate active projects
-        try:
-            self.conn.execute('''
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_project 
-                ON project_queue(spec_path, project_path) 
-                WHERE status IN ('queued', 'processing')
-            ''')
-        except sqlite3.OperationalError as e:
-            logger.debug(f"Index already exists or not supported: {e}")
         
         # Add batch retry system columns to existing table
         try:
@@ -320,10 +216,8 @@ class TmuxOrchestratorScheduler:
                 logger.error(f"Error in event subscriber for {event_name}: {e}")
         
     def run_task(self, task_id, session_name, agent_role, window_index, note):
-        """Execute a scheduled task with verification"""
+        """Execute a scheduled task"""
         try:
-            import shlex
-            
             # Extract project name from session name (format: project-impl-uuid)
             project_name = session_name.split('-impl')[0]
             
@@ -353,45 +247,25 @@ class TmuxOrchestratorScheduler:
                 message = f"SCHEDULED CHECK-IN: {note}"
             else:
                 message = "SCHEDULED CHECK-IN: Time for your regular status update"
-            
-            # Target window for tmux commands
-            target_window = f"{session_name}:{window_index}"
-            
-            # Capture before state
-            cmd_capture_before = f"tmux capture-pane -t {target_window} -p | tail -20"
-            result_before = subprocess.run(cmd_capture_before, shell=True, capture_output=True, text=True)
-            before_content = result_before.stdout if result_before.returncode == 0 else ""
-            
-            # Send message using send-claude-message.sh script if available
+                
+            # Use the send-claude-message.sh script if available
             send_script = self.tmux_orchestrator_path / "send-claude-message.sh"
             if send_script.exists():
-                cmd = [str(send_script), target_window, message]
-                result_send = subprocess.run(cmd, capture_output=True, text=True)
+                cmd = [str(send_script), f"{session_name}:{window_index}", message]
             else:
                 # Fallback to direct tmux send-keys
-                cmd_send = f"tmux send-keys -t {target_window} {shlex.quote(message)} Enter"
-                result_send = subprocess.run(cmd_send, shell=True, capture_output=True, text=True)
+                cmd = ['tmux', 'send-keys', '-t', f'{session_name}:{window_index}', message, 'Enter']
+                
+            result = subprocess.run(cmd, capture_output=True, text=True)
             
-            if result_send.returncode != 0:
-                logger.error(f"Failed to send message to {target_window}: {result_send.stderr}")
+            if result.returncode == 0:
+                logger.info(f"Successfully executed task {task_id} for {agent_role}")
+                # Trigger completion event with the note as completion message
+                self.complete_task(task_id, session_name, agent_role, note)
+                return True
+            else:
+                logger.error(f"Failed to execute task {task_id}: {result.stderr}")
                 return False
-            
-            # Wait and verify
-            time.sleep(3)
-            
-            cmd_capture_after = f"tmux capture-pane -t {target_window} -p | tail -20"
-            result_after = subprocess.run(cmd_capture_after, shell=True, capture_output=True, text=True)
-            after_content = result_after.stdout if result_after.returncode == 0 else ""
-            
-            # Check if content changed
-            if before_content == after_content:
-                logger.warning(f"WARNING: No response detected from {target_window} - message may not have been received")
-                return False
-            
-            logger.info(f"✓ Message verified as delivered to {target_window} for task {task_id}")
-            # Trigger completion event with the note as completion message
-            self.complete_task(task_id, session_name, agent_role, note)
-            return True
                 
         except Exception as e:
             logger.error(f"Error running task {task_id}: {e}")
@@ -564,11 +438,10 @@ class TmuxOrchestratorScheduler:
                         time.sleep(poll_interval)  # Wait before retrying
                         continue
                     
-                    # FIXED: Use atomic dequeue to ensure only one project processes at a time
-                    next_project = self.get_next_project_atomic()
+                    next_project = self.get_next_project()
                     if next_project:
                         project_start_time = time.time()
-                        # Project is already marked as 'processing' by atomic method
+                        self.update_project_status(next_project['id'], 'processing')
                         
                         # Extract project name from spec path
                         spec_path = Path(next_project['spec_path'])
@@ -603,8 +476,7 @@ class TmuxOrchestratorScheduler:
                                 str(self.tmux_orchestrator_path / 'auto_orchestrate.py'),
                                 '--spec', next_project['spec_path'],
                                 '--project', proj_arg,
-                                '--project-id', str(next_project['id']),  # FIXED: Pass project ID for completion callback
-                                '--batch',  # Enable non-interactive mode (now works with --project-id fix)
+                                '--batch'  # Enable batch mode for non-interactive operation
                             ]
                             
                             # Add resume flag only if we determined we should resume
@@ -617,12 +489,11 @@ class TmuxOrchestratorScheduler:
                                 cmd.append('--overwrite')
                                 logger.info(f"Adding --overwrite flag for fresh start project {project_name}")
                             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-                            # FIXED: Keep project in 'processing' until actual orchestration work completes
-                            # Project remains 'processing' - will be marked 'completed' by orchestration agents
-                            logger.info(f"Started project {next_project['id']} - orchestration setup completed, project remains in processing")
+                            self.update_project_status(next_project['id'], 'completed')
+                            logger.info(f"Completed project {next_project['id']}")
                             
-                            # Track started (not completed yet)
-                            completed_projects.append(f"{project_name} (ID: {next_project['id']}) - Setup Complete")
+                            # Track completion
+                            completed_projects.append(f"{project_name} (ID: {next_project['id']})")
                             
                             # Send individual project completion email
                             # Note: auto_orchestrate.py already sends its own email, 
@@ -724,38 +595,8 @@ class TmuxOrchestratorScheduler:
     # ========== BATCH RETRY SYSTEM METHODS ==========
     
     def enqueue_project(self, spec_path: str, project_path: str = None, batch_id: str = None, retry_count: int = 0):
-        """Add a project to the queue for batch processing with idempotency checks"""
-        import traceback
+        """Add a project to the queue for batch processing"""
         cursor = self.conn.cursor()
-        
-        # Log caller information for debugging
-        stack = traceback.extract_stack()
-        caller_info = stack[-2] if len(stack) >= 2 else None
-        if caller_info:
-            logger.debug(f"enqueue_project called from {caller_info.filename}:{caller_info.lineno} in {caller_info.name}")
-        
-        # Check if project already exists in active states
-        cursor.execute("""
-            SELECT id, status, batch_id 
-            FROM project_queue 
-            WHERE spec_path = ? 
-            AND (project_path = ? OR (project_path IS NULL AND ? IS NULL))
-            AND status IN ('queued', 'processing')
-            ORDER BY enqueued_at DESC
-            LIMIT 1
-        """, (spec_path, project_path, project_path))
-        
-        existing = cursor.fetchone()
-        if existing:
-            project_id, status, existing_batch = existing
-            logger.warning(f"Duplicate enqueue prevented: ID={project_id}, spec={spec_path}, status={status}, batch={existing_batch}")
-            if caller_info:
-                logger.warning(f"  Called from: {caller_info.filename}:{caller_info.lineno}")
-            
-            # Don't create duplicate - return existing ID
-            return project_id
-            
-        # If not duplicate, proceed with insertion
         cursor.execute("""
             INSERT INTO project_queue (spec_path, project_path, batch_id, retry_count)
             VALUES (?, ?, ?, ?)
@@ -1000,13 +841,6 @@ These projects require manual review and intervention.
                 daemon=True
             ).start()
             
-    def update_session_name(self, project_id: int, session_name: str):
-        """Update the tmux session name for a project in the queue"""
-        with self.conn:
-            cursor = self.conn.cursor()
-            cursor.execute("UPDATE project_queue SET session_name = ? WHERE id = ?", (session_name, project_id))
-            logger.info(f"Updated session_name for project {project_id} to {session_name}")
-    
     def stop_monitoring(self):
         """Stop the batch monitoring thread"""
         if hasattr(self, '_stop_monitoring'):

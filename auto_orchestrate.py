@@ -2024,6 +2024,16 @@ This file is automatically read by Claude Code when working in this directory.
             console.print(f"Deployed roles: {', '.join([r[0] for r in roles_to_deploy])}")
             console.print(f"\nTo attach: [cyan]tmux attach -t {session_name}[/cyan]")
             console.print(f"\n[yellow]Note: Each agent works in their own git worktree to prevent conflicts[/yellow]")
+            
+            # Update database with session name if called from queue daemon
+            if hasattr(self, 'project_id') and self.project_id:
+                try:
+                    from scheduler import TmuxOrchestratorScheduler
+                    scheduler = TmuxOrchestratorScheduler()
+                    scheduler.update_session_name(self.project_id, session_name)
+                    console.print(f"[blue]Updated queue database with session name: {session_name}[/blue]")
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Failed to update session name in database: {e}[/yellow]")
     
     def brief_all_roles(self, session_name: str, spec: ImplementationSpec, roles_to_deploy: List[Tuple[str, str]], worktree_paths: Dict[str, Path]):
         """Start Claude in each window and provide role-specific briefings"""
@@ -4502,9 +4512,11 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='Continue last incomplete batch with intelligent retries')
 @click.option('--git-mode', type=click.Choice(['local', 'github']), default='local',
               help='Git workflow mode: local (worktree optimization) or github (legacy)')
+@click.option('--project-id', type=int, default=None,
+              help='Project ID for queue completion callback (used by scheduler)')
 def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, team_type: str, roles: tuple, force: bool, overwrite: bool, plan: str, 
          resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool, new_project: bool,
-         research: Optional[str], restore: Optional[str], continue_batch: bool, git_mode: str):
+         research: Optional[str], restore: Optional[str], continue_batch: bool, git_mode: str, project_id: Optional[int]):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
@@ -4646,23 +4658,31 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
             console.print(f"[yellow]Failed to create {len(failed_projects)} project(s): {', '.join(failed_projects)}[/yellow]")
         
         # If multiple projects or batch mode, use scheduler for sequential processing
-        if len(created_projects) > 1 or batch:
+        # UNLESS called from daemon (project_id present - indicates we're already processing from queue)
+        if (len(created_projects) > 1 or batch) and not project_id:
             from scheduler import TmuxOrchestratorScheduler
             scheduler = TmuxOrchestratorScheduler()
             
             console.print(f"[cyan]Enqueuing {len(created_projects)} projects for batch orchestration...[/cyan]")
             
             for project_info in created_projects:
-                project_id = scheduler.enqueue_project(
+                new_id = scheduler.enqueue_project(
                     project_info['spec_path'], 
                     project_info['project_path']
                 )
-                console.print(f"[green]✓ Enqueued: {project_info['project_path']} (ID: {project_id})[/green]")
+                console.print(f"[green]✓ Enqueued: {project_info['project_path']} (ID: {new_id})[/green]")
             
             console.print("\n[yellow]Projects enqueued for batch processing.[/yellow]")
             console.print("[cyan]To start processing:[/cyan] uv run scheduler.py --queue-daemon")
             console.print("[cyan]To view queue status:[/cyan] uv run scheduler.py --queue-list")
             return
+        elif project_id and len(created_projects) > 1:
+            # Safeguard: Daemon calls should be single-project
+            raise ValueError("Daemon-initiated orchestration supports single projects only (multiple specs detected)")
+        
+        # Log daemon detection for debugging
+        if project_id:
+            console.print(f"[cyan]Queue daemon call detected (project ID: {project_id}) - proceeding to full orchestration...[/cyan]")
         
         else:
             # Single project - process immediately
@@ -4676,7 +4696,8 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
             # Continue with normal single-project orchestration below
     
     # Handle batch mode - enqueue multiple specs
-    if len(spec) > 1 or batch:
+    # UNLESS called from daemon (project_id present)
+    if (len(spec) > 1 or batch) and not project_id:
         # Import scheduler
         from scheduler import TmuxOrchestratorScheduler
         import uuid
@@ -4723,6 +4744,7 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
         orchestrator = AutoOrchestrator(project, spec[0] if spec else "dummy.md", batch_mode=batch, overwrite=overwrite)
         orchestrator.rebrief_all = rebrief_all
         orchestrator.team_type = team_type if team_type != 'auto' else None
+        orchestrator.project_id = project_id  # Store for database update if from queue
         
         # Try to load session state - first by exact name
         session_state = orchestrator.session_state_manager.load_session_state(project_name)
@@ -4790,6 +4812,7 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
     orchestrator.additional_roles = list(roles) if roles else []
     orchestrator.force = force
     orchestrator.plan_type = plan if plan != 'auto' else 'max20'  # Default to max20
+    orchestrator.project_id = project_id  # Store for database update if from queue
     
     # Set custom worktree path for new projects (from --new-project processing above)
     if new_project and project:
