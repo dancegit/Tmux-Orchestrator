@@ -78,11 +78,11 @@ To enable fast, asynchronous collaboration (60-500x faster than GitHub), use **l
 
 **Setup Local Remotes** (Automated by auto_orchestrate.py; run manually if needed):
 ```bash
-# Use absolute paths (example)
-git remote add orchestrator /path/to/project/worktrees/orchestrator
-git remote add pm /path/to/project/worktrees/pm
-git remote add developer /path/to/project/worktrees/developer
-git remote add tester /path/to/project/worktrees/tester
+# Use absolute paths (example) - Note: worktrees are SIBLINGS to project!
+git remote add orchestrator /path/to/project-tmux-worktrees/orchestrator
+git remote add pm /path/to/project-tmux-worktrees/pm
+git remote add developer /path/to/project-tmux-worktrees/developer
+git remote add tester /path/to/project-tmux-worktrees/tester
 # Add for other roles as deployed
 ```
 
@@ -600,24 +600,34 @@ This ensures the script works even when:
 - The repository has complex branch structures
 
 ### Worktree Locations
+
+**IMPORTANT: Worktrees are ALWAYS siblings to the project directory, NOT under registry!**
+
 ```
-Tmux-Orchestrator/
-└── registry/
-    └── projects/
-        └── {project-name}/
-            └── worktrees/
-                ├── orchestrator/        # Orchestrator's project workspace
-                ├── developer/           # Developer's workspace
-                ├── tester/             # Tester's workspace
-                └── testrunner/         # TestRunner's workspace
+{project_path}/                          # Your actual project directory
+├── (your project files)
+└── {project_name}-tmux-worktrees/      # Sibling directory containing all worktrees
+    ├── orchestrator/                    # Orchestrator's workspace
+    ├── developer/                       # Developer's workspace
+    ├── tester/                         # Tester's workspace
+    └── testrunner/                     # TestRunner's workspace
+```
+
+**Example**: If your project is at `/home/user/myproject`, worktrees will be at `/home/user/myproject-tmux-worktrees/`
+
+**ALWAYS verify worktree locations with:**
+```bash
+git worktree list  # Shows all worktrees and their actual paths
+pwd               # Confirms your current location
 ```
 
 ### 🎯 Orchestrator's Dual Directory Structure
 
 The Orchestrator is unique - it works from TWO locations:
 
-1. **Project Worktree** (`registry/projects/{name}/worktrees/orchestrator/`)
-   - Primary working directory
+1. **Project Worktree** (`{project_path}-tmux-worktrees/orchestrator/`)
+   - Primary working directory (sibling to project, NOT in registry)
+   - **ALWAYS verify location**: Run `pwd` to confirm you're in the right place
    - Create ALL project files here:
      - Status reports
      - Project documentation
@@ -635,7 +645,9 @@ The Orchestrator is unique - it works from TWO locations:
 **Example Orchestrator Workflow**:
 ```bash
 # Start in project worktree - create project docs
-pwd  # Shows: .../registry/projects/myproject/worktrees/orchestrator
+pwd  # Shows: /path/to/myproject-tmux-worktrees/orchestrator (NOT registry!)
+git worktree list  # Verify this matches your actual location
+
 mkdir -p project_management/architecture
 echo "# Architecture Decisions" > project_management/architecture/decisions.md
 
@@ -646,6 +658,7 @@ cd ~/gitrepos/Tmux-Orchestrator  # Or wherever your Tmux-Orchestrator is
 
 # Back to project worktree for more work
 cd -  # Returns to previous directory
+pwd  # Always verify you're back in the worktree
 ```
 
 ### Benefits of Worktrees
@@ -990,9 +1003,9 @@ Follow this enhanced workflow that includes autonomous conflict resolution:
 ## 🌳 Git Worktree & Workflow Rules
 
 ### Worktree Structure
-Each agent works in isolated worktree:
+Each agent works in isolated worktree (as SIBLINGS to the project, NOT in registry):
 ```
-registry/projects/{project}/worktrees/
+{project_path}-tmux-worktrees/        # Sibling to your project directory
 ├── orchestrator/     # Dual-directory agent
 ├── project-manager/  # Integration coordinator
 ├── developer/        # Implementation
@@ -1000,6 +1013,8 @@ registry/projects/{project}/worktrees/
 ├── researcher/      # MCP research
 └── [other-agents]/  # Role-specific
 ```
+
+**CRITICAL**: Worktrees are NEVER under registry! Always verify with `git worktree list`
 
 ### Worktree Discipline Rules
 1. **Stay in Your Lane**: Never directly modify files in other agents' worktrees

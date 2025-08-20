@@ -1122,10 +1122,11 @@ tmux ls | grep -E "old-project|test-" | cut -d: -f1 | xargs -I {} tmux kill-sess
 # 2. Read agent logs
 tmux capture-pane -t webapp-impl:1 -p -S -1000 | less
 
-# 3. Check git worktree status
-cd registry/projects/webapp/worktrees/developer
+# 3. Check git worktree status (worktrees are siblings to project!)
+cd /path/to/webapp-tmux-worktrees/developer  # NOT in registry!
 git status
 git log --oneline -10
+# Always verify with: git worktree list
 
 # 4. Restart with specific instructions
 ./send-claude-message.sh webapp-impl:1 \

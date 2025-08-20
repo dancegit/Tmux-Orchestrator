@@ -226,7 +226,7 @@ Upon approval, the script:
 
 #### Orchestrator
 - **Location**: Window 0, Project worktree
-- **Worktree**: `registry/projects/{name}/worktrees/orchestrator/`
+- **Worktree**: `{project_path}-tmux-worktrees/orchestrator/` (sibling to project, NOT in registry)
 - **Tool Directory**: Tmux-Orchestrator root (for running tools)
 - **Responsibilities**: High-level oversight, coordination, blocker resolution
 - **Check-ins**: Every 20 minutes
@@ -237,40 +237,40 @@ Upon approval, the script:
 
 #### Project Manager
 - **Location**: Window 1, Own git worktree
-- **Worktree**: `registry/projects/{name}/worktrees/project_manager/`
+- **Worktree**: `{project_path}-tmux-worktrees/project_manager/` (sibling to project)
 - **Responsibilities**: Quality assurance, progress tracking, team coordination
 - **Check-ins**: Every 25 minutes
 - **Focus**: Maintaining exceptional standards, coordinating merges between worktrees
 
 #### Developer
 - **Location**: Own git worktree
-- **Worktree**: `registry/projects/{name}/worktrees/developer/`
+- **Worktree**: `{project_path}-tmux-worktrees/developer/` (sibling to project)
 - **Responsibilities**: Implementation, testing, documentation
 - **Check-ins**: Every 30 minutes
 - **Git**: Creates feature branch, commits every 30 minutes
 
 #### Tester (Medium/Large Projects)
 - **Location**: Own git worktree
-- **Worktree**: `registry/projects/{name}/worktrees/tester/`
+- **Worktree**: `{project_path}-tmux-worktrees/tester/` (sibling to project)
 - **Responsibilities**: Test execution, coverage tracking, regression prevention
 - **Check-ins**: Every 30 minutes
 - **Integration**: Works closely with Developer
 
 #### DevOps (Large Projects)
 - **Location**: Own git worktree
-- **Worktree**: `registry/projects/{name}/worktrees/devops/`
+- **Worktree**: `{project_path}-tmux-worktrees/devops/` (sibling to project)
 - **Responsibilities**: Infrastructure setup, deployment pipelines, monitoring
 - **Check-ins**: Every 45 minutes
 
 #### Code Reviewer (Large Projects)
 - **Location**: Own git worktree
-- **Worktree**: `registry/projects/{name}/worktrees/code_reviewer/`
+- **Worktree**: `{project_path}-tmux-worktrees/code_reviewer/` (sibling to project)
 - **Responsibilities**: Code quality, security audit, best practices
 - **Check-ins**: Every 40 minutes
 
 #### Researcher (Core Role)
 - **Location**: Own git worktree
-- **Worktree**: `registry/projects/{name}/worktrees/researcher/`
+- **Worktree**: `{project_path}-tmux-worktrees/researcher/` (sibling to project)
 - **Responsibilities**: 
   - MCP tool discovery and utilization
   - Research best practices and security vulnerabilities
@@ -424,11 +424,15 @@ Each agent works in their own git worktree to prevent conflicts:
 cd /path/to/project
 git worktree list
 
-# Access a specific agent's worktree
-cd ~/Tmux-Orchestrator/registry/projects/{project-name}/worktrees/developer/
+# Access a specific agent's worktree (remember: worktrees are siblings to project!)
+cd {project_path}-tmux-worktrees/developer/
+# Example: If project is at /home/user/myproject, worktree is at /home/user/myproject-tmux-worktrees/developer/
+
+# Verify worktree locations
+git worktree list
 
 # Clean up worktrees after project completion
-git worktree remove ~/Tmux-Orchestrator/registry/projects/{project-name}/worktrees/developer/
+git worktree remove {project_path}-tmux-worktrees/developer/
 ```
 
 ### Resuming Sessions

@@ -15,6 +15,11 @@ import os
 from pathlib import Path
 from datetime import datetime
 
+# NEW: Imports for inter-process locking
+import json
+import socket
+from fcntl import flock, LOCK_EX, LOCK_NB, LOCK_UN
+
 def get_active_tmux_sessions():
     """Get all active tmux sessions - DEPRECATED: Use tmux_utils.get_active_sessions() instead"""
     # Import here to avoid circular imports
@@ -77,20 +82,22 @@ Usage:
   queue_status.py [options]
 
 Options:
-  -h, --help      Show this help
-  --conflicts     Only show conflicts
-  --active        Show active tmux sessions
-  --reset <id>    Reset project to queued status
-  --fresh <id>    Mark project for fresh start
-  --remove <id>   Remove project from queue
-  --resume <id>   Resume project by calling auto_orchestrate.py --resume
+  -h, --help         Show this help
+  --conflicts        Only show conflicts
+  --active           Show active tmux sessions
+  --reset <id>       Reset project to queued status
+  --fresh <id>       Mark project for fresh start
+  --remove <id>      Remove project from queue
+  --resume <id>      Resume project by calling auto_orchestrate.py --resume
+  --cleanup-stale    Clean stale registry entries (inactive sessions)
 
 Examples:
-  queue_status.py              # Show full status
-  queue_status.py --conflicts  # Show only conflicts
-  queue_status.py --reset 15   # Reset project 15
-  queue_status.py --fresh 18   # Mark project 18 for fresh start
-  queue_status.py --resume 42  # Resume project 42
+  queue_status.py                # Show full status
+  queue_status.py --conflicts    # Show only conflicts
+  queue_status.py --reset 15     # Reset project 15
+  queue_status.py --fresh 18     # Mark project 18 for fresh start
+  queue_status.py --resume 42    # Resume project 42
+  queue_status.py --cleanup-stale # Clean stale registries
         """)
         return
 
@@ -98,14 +105,50 @@ Examples:
     if not Path(db_path).exists():
         print("❌ Queue database not found. Run from Tmux-Orchestrator directory.")
         return
+    
+    # NEW: Check if this is a write operation
+    is_write_op = any(opt in sys.argv for opt in ['--reset', '--fresh', '--remove', '--resume', '--cleanup-stale'])
+    # Note: --remove uses safe removal logic that checks for processing status
+    
+    # NEW: Acquire lock only for writes
+    lock_path = Path('locks/project_queue.lock')
+    lock_fd = None
+    if is_write_op:
+        try:
+            # Create lock file if it doesn't exist, then open for reading
+            lock_path.parent.mkdir(exist_ok=True)
+            lock_fd = open(lock_path, 'a+')
+            flock(lock_fd, LOCK_EX | LOCK_NB)
+        except IOError:
+            # For --remove, provide helpful guidance instead of hard failure
+            if '--remove' in sys.argv:
+                project_id = int(sys.argv[2]) if len(sys.argv) > 2 else None
+                if project_id:
+                    print("⚠️ Cannot acquire lock - scheduler is active.")
+                    print(f"💡 Alternative: Use scheduler's built-in removal:")
+                    print(f"   python3 scheduler.py --remove-project {project_id}")
+                    return
+                else:
+                    print("❌ Invalid project ID for removal")
+                    return
+            else:
+                print("❌ Cannot acquire lock for write operation. Scheduler may be active.")
+                return
 
-    conn = sqlite3.connect(db_path)
-    
-    # Enable WAL mode for better concurrency
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA busy_timeout=10000;")  # 10 second timeout for locks
-    
+    # NEW: Connect with WAL and busy_timeout
+    conn = sqlite3.connect(db_path, timeout=10.0)
     cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA busy_timeout=10000;")
+    
+    # Handle cleanup-stale (no ID needed)
+    if len(sys.argv) > 1 and sys.argv[1] == '--cleanup-stale':
+        from session_state import SessionStateManager
+        session_mgr = SessionStateManager()
+        print("🧹 Cleaning stale registry entries...")
+        session_mgr.cleanup_stale_registries()
+        print("✅ Cleanup complete")
+        return
     
     # Handle specific actions
     if len(sys.argv) > 2:
@@ -130,9 +173,30 @@ Examples:
             return
             
         elif action == '--remove':
+            # Use the same logic as scheduler's remove_project_from_queue but without lock contention
+            print(f"🔄 Removing project {project_id} using scheduler-compatible logic...")
+            
+            # Check if project exists and get status
+            cursor.execute("SELECT status FROM project_queue WHERE id = ?", (project_id,))
+            row = cursor.fetchone()
+            if not row:
+                print(f"❌ Project {project_id} not found")
+                return
+            
+            status = row[0]
+            if status == 'processing':
+                print(f"❌ Cannot remove project {project_id} - still processing")
+                print("   Use `./qs --reset <id>` to reset stuck projects first")
+                return
+            
+            # Safe to remove completed/failed/queued projects
             cursor.execute("DELETE FROM project_queue WHERE id = ?", (project_id,))
             conn.commit()
-            print(f"✅ Project {project_id} removed from queue")
+            
+            if cursor.rowcount > 0:
+                print(f"✅ Project {project_id} removed from queue (was {status})")
+            else:
+                print(f"❌ Failed to remove project {project_id}")
             return
             
         elif action == '--resume':
@@ -272,12 +336,18 @@ Examples:
     
     print("-" * 80)
     print("💡 USAGE:")
-    print("  queue_status.py --conflicts    # Show only conflicts")
-    print("  queue_status.py --reset <id>   # Reset project to queued")
-    print("  queue_status.py --fresh <id>   # Mark for fresh start") 
-    print("  queue_status.py --remove <id>  # Remove from queue")
+    print("  queue_status.py --conflicts      # Show only conflicts")
+    print("  queue_status.py --reset <id>     # Reset project to queued")
+    print("  queue_status.py --fresh <id>     # Mark for fresh start") 
+    print("  queue_status.py --remove <id>    # Remove from queue (or use: python3 scheduler.py --remove-project <id>)")
+    print("  queue_status.py --cleanup-stale  # Clean stale registries")
     
     conn.close()
+    
+    # NEW: Release lock if held
+    if lock_fd:
+        flock(lock_fd, LOCK_UN)
+        lock_fd.close()
 
 if __name__ == '__main__':
     main()

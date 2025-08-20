@@ -14,6 +14,13 @@ WINDOW="$1"
 shift  # Remove first argument, rest is the message
 MESSAGE="$*"
 
+# Self-referential detection - prevent agents from messaging themselves
+CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}" 2>/dev/null || echo "")
+if [ "$CURRENT_WINDOW" = "$WINDOW" ]; then
+    echo "WARNING: Attempting to send message to self ($WINDOW). Skipping to prevent feedback loop."
+    exit 0
+fi
+
 # Check if message contains /compact
 if echo "$MESSAGE" | grep -q "/compact"; then
     # Extract message without /compact
