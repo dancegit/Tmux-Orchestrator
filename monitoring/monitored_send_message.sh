@@ -47,8 +47,14 @@ LOG_ENTRY=$(jq -c -n \
 # Log the message (single line for JSONL)
 echo "$LOG_ENTRY" >> "$MESSAGE_LOG"
 
-# Send the actual message using the original script
-"$PARENT_DIR/send-claude-message.sh" "$TARGET" "$MESSAGE"
+# Send the actual message using the original script with TmuxManager support
+# Pass through USE_TMUX_MANAGER environment variable if set
+if [ "$USE_TMUX_MANAGER" = "1" ]; then
+    echo "🔧 Monitored messaging: Using TmuxManager for centralized operations"
+    USE_TMUX_MANAGER=1 "$PARENT_DIR/send-claude-message.sh" "$TARGET" "$MESSAGE"
+else
+    "$PARENT_DIR/send-claude-message.sh" "$TARGET" "$MESSAGE"
+fi
 
 # Trigger async compliance check if monitor is running
 if pgrep -f "compliance_monitor.py" > /dev/null; then
