@@ -179,7 +179,14 @@ if [ "$LEGACY_MODE" = "1" ]; then
     # Use resolved WINDOW for target
     RESOLVED_TARGET="$SESSION:$WINDOW"
     
-    nohup bash -c "sleep $SECONDS && tmux send-keys -t $RESOLVED_TARGET 'Time for orchestrator check! $CMD' && sleep 1 && tmux send-keys -t $RESOLVED_TARGET Enter" > /dev/null 2>&1 &
+    # Support TmuxManager for scheduled messages if enabled
+    if [ "$USE_TMUX_MANAGER" = "1" ]; then
+        # Use TmuxManager for centralized operations
+        nohup bash -c "sleep $SECONDS && USE_TMUX_MANAGER=1 '$SCRIPT_DIR/send-claude-message.sh' '$RESOLVED_TARGET' 'Time for orchestrator check! $CMD'" > /dev/null 2>&1 &
+    else
+        # Legacy tmux command
+        nohup bash -c "sleep $SECONDS && tmux send-keys -t $RESOLVED_TARGET 'Time for orchestrator check! $CMD' && sleep 1 && tmux send-keys -t $RESOLVED_TARGET Enter" > /dev/null 2>&1 &
+    fi
     
     # Get the PID of the background process
     SCHEDULE_PID=$!
