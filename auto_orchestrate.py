@@ -8,6 +8,7 @@
 #     "pyyaml",
 #     "python-dotenv",
 #     "gitpython",
+#     "psutil",
 # ]
 # ///
 
@@ -429,6 +430,181 @@ class AutoOrchestrator:
                 console.print(f"  • {warning}")
         
         console.print("\n[green]✓ All required dependencies are installed[/green]")
+    
+    def pre_flight_checks(self) -> bool:
+        """
+        Comprehensive pre-flight checks before tmux session creation.
+        
+        Returns:
+            True if all checks pass, False otherwise
+        """
+        console.print("\n[cyan]🚀 Running pre-flight checks...[/cyan]")
+        
+        checks = [
+            ("tmux availability", self._check_tmux_available),
+            ("git repository validity", self._check_git_repo_valid),
+            ("disk space sufficiency", self._check_disk_space_sufficient),
+            ("session conflicts", self._check_no_session_conflicts),
+            ("resource availability", self._check_resources_available)
+        ]
+        
+        all_passed = True
+        
+        for check_name, check_func in checks:
+            try:
+                console.print(f"  Checking {check_name}...", end="")
+                if check_func():
+                    console.print(" [green]✓[/green]")
+                else:
+                    console.print(" [red]✗[/red]")
+                    all_passed = False
+            except Exception as e:
+                console.print(f" [red]✗ Error: {e}[/red]")
+                all_passed = False
+        
+        if all_passed:
+            console.print("[green]✅ All pre-flight checks passed[/green]")
+        else:
+            console.print("[red]❌ Pre-flight checks failed - aborting[/red]")
+        
+        return all_passed
+    
+    def _check_tmux_available(self) -> bool:
+        """Check if tmux is available and responsive"""
+        try:
+            # Test tmux version
+            result = subprocess.run(['tmux', '-V'], capture_output=True, text=True, timeout=5)
+            if result.returncode != 0:
+                console.print(f"\n[red]Error: tmux command failed: {result.stderr}[/red]")
+                return False
+            
+            # Test if we can create a temporary session
+            test_session = f"preflight-test-{int(time.time())}"
+            result = subprocess.run(['tmux', 'new-session', '-d', '-s', test_session], capture_output=True)
+            if result.returncode == 0:
+                # Clean up test session
+                subprocess.run(['tmux', 'kill-session', '-t', test_session], capture_output=True)
+                return True
+            else:
+                console.print(f"\n[red]Error: Cannot create tmux sessions: {result.stderr.decode()}[/red]")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            console.print("\n[red]Error: tmux command timed out[/red]")
+            return False
+        except FileNotFoundError:
+            console.print("\n[red]Error: tmux not found in PATH[/red]")
+            return False
+        except Exception as e:
+            console.print(f"\n[red]Error testing tmux: {e}[/red]")
+            return False
+    
+    def _check_git_repo_valid(self) -> bool:
+        """Check if the project is a valid git repository"""
+        try:
+            if not (self.project_path / '.git').exists():
+                console.print(f"\n[red]Error: {self.project_path} is not a git repository[/red]")
+                return False
+            
+            # Test git operations
+            result = subprocess.run(['git', 'status', '--porcelain'], 
+                                  cwd=self.project_path, capture_output=True, text=True)
+            if result.returncode != 0:
+                console.print(f"\n[red]Error: Git repository appears corrupted: {result.stderr}[/red]")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            console.print(f"\n[red]Error checking git repository: {e}[/red]")
+            return False
+    
+    def _check_disk_space_sufficient(self) -> bool:
+        """Check if sufficient disk space is available"""
+        try:
+            # Check disk space for project directory
+            statvfs = os.statvfs(self.project_path)
+            free_space_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
+            
+            # Require at least 1GB free space
+            min_space_gb = 1.0
+            if free_space_gb < min_space_gb:
+                console.print(f"\n[red]Error: Insufficient disk space. Available: {free_space_gb:.1f}GB, Required: {min_space_gb}GB[/red]")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            console.print(f"\n[red]Error checking disk space: {e}[/red]")
+            return False
+    
+    def _check_no_session_conflicts(self) -> bool:
+        """Check for potential tmux session name conflicts"""
+        try:
+            # Get list of existing sessions
+            result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], 
+                                  capture_output=True, text=True)
+            
+            existing_sessions = set()
+            if result.returncode == 0:
+                existing_sessions = set(line.strip() for line in result.stdout.split('\n') if line.strip())
+            
+            # Check for common conflict patterns
+            project_name = self.project_path.name.lower()
+            potential_conflicts = [
+                f"{project_name}-impl",
+                f"{project_name}-orchestrator", 
+                f"{project_name}-dev",
+                project_name
+            ]
+            
+            conflicts = []
+            for session_name in potential_conflicts:
+                if session_name in existing_sessions:
+                    conflicts.append(session_name)
+            
+            if conflicts and not self.args.force:
+                console.print(f"\n[yellow]Warning: Potential session name conflicts detected: {', '.join(conflicts)}[/yellow]")
+                console.print("[yellow]Use --force to override, or manually resolve conflicts[/yellow]")
+                # For now, warn but don't fail - conflict resolution is handled separately
+            
+            return True
+            
+        except Exception as e:
+            console.print(f"\n[red]Error checking session conflicts: {e}[/red]")
+            return False
+    
+    def _check_resources_available(self) -> bool:
+        """Check if system resources are sufficient"""
+        try:
+            # Check available memory (require at least 1GB available)
+            try:
+                import psutil
+                memory = psutil.virtual_memory()
+                available_gb = memory.available / (1024**3)
+                
+                if available_gb < 1.0:
+                    console.print(f"\n[yellow]Warning: Low memory available: {available_gb:.1f}GB[/yellow]")
+                    # Don't fail, just warn
+                    
+            except ImportError:
+                # psutil not available, skip memory check
+                pass
+            
+            # Check if we can create files in the project directory
+            test_file = self.project_path / '.preflight_test'
+            try:
+                test_file.write_text('test')
+                test_file.unlink()
+            except Exception:
+                console.print(f"\n[red]Error: Cannot write to project directory: {self.project_path}[/red]")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            console.print(f"\n[red]Error checking resources: {e}[/red]")
+            return False
     
     def setup_git_locals(self):
         """Automatically set up local remotes, role-specific branches, and integration branch for all agents."""
@@ -853,7 +1029,7 @@ IMPORTANT:
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
-            task = progress.add_task("Analyzing specification with Claude...", total=None)
+            task = progress.add_task("Analyzing specification with Claude (may take 5-20 minutes)...", total=None)
             
             # Create a temporary file for the prompt
             with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
@@ -869,6 +1045,9 @@ IMPORTANT:
                 # Try a simpler approach without -p flag
                 # Write prompt to temporary file and use cat | claude approach
                 import uuid
+                import threading
+                import time
+                
                 prompt_script = f"""#!/bin/bash
 cd "{self.project_path}"
 cat << 'CLAUDE_EOF' | /usr/bin/claude --dangerously-skip-permissions
@@ -883,13 +1062,48 @@ CLAUDE_EOF
                     f.write(prompt_script)
                 os.chmod(script_file, 0o755)
                 
+                # Run subprocess in background with progress updates
+                result_container = {}
+                error_container = {}
+                
+                def run_claude():
+                    try:
+                        logger.info(f"Starting Claude analysis with script: {script_file}")
+                        result = subprocess.run(
+                            ['bash', script_file],
+                            capture_output=True,
+                            text=True,
+                            timeout=1200  # Increased timeout to 20 minutes for complex Claude analysis
+                        )
+                        logger.info(f"Claude analysis completed with exit code: {result.returncode}")
+                        if result.stderr:
+                            logger.warning(f"Claude stderr: {result.stderr}")
+                        if result.returncode != 0:
+                            logger.error(f"Claude failed with exit code {result.returncode}")
+                        result_container['result'] = result
+                    except Exception as e:
+                        logger.error(f"Claude subprocess exception: {e}")
+                        error_container['error'] = e
+                
+                claude_thread = threading.Thread(target=run_claude)
+                claude_thread.start()
+                
+                # Update progress with elapsed time while Claude runs
+                start_time = time.time()
+                while claude_thread.is_alive():
+                    elapsed = time.time() - start_time
+                    progress.update(task, description=f"Analyzing with Claude ({elapsed:.0f}s elapsed, est. 5-20min)...")
+                    time.sleep(5)  # Update every 5 seconds
+                
+                claude_thread.join()
+                
+                if 'error' in error_container:
+                    raise error_container['error']
+                
+                result = result_container['result']
+                
                 try:
-                    result = subprocess.run(
-                        ['bash', script_file],
-                        capture_output=True,
-                        text=True,
-                        timeout=360  # Increased timeout for combined context prime + analysis
-                    )
+                    pass  # Cleanup happens in finally block below
                 finally:
                     if os.path.exists(script_file):
                         os.unlink(script_file)
@@ -2085,6 +2299,202 @@ This file is automatically read by Claude Code when working in this directory.
         except subprocess.CalledProcessError:
             console.print(f"[yellow]⚠️  Could not lock worktree {worktree_path.name}[/yellow]")
     
+    def resolve_session_conflicts(self, session_name: str) -> bool:
+        """
+        Resolve tmux session conflicts with sophisticated strategies.
+        
+        Args:
+            session_name: The session name to check for conflicts
+            
+        Returns:
+            True if conflicts were resolved or no conflicts exist, False if unresolvable
+        """
+        try:
+            # Check if session exists
+            result = subprocess.run(['tmux', 'has-session', '-t', session_name], capture_output=True)
+            if result.returncode != 0:
+                # No conflict - session doesn't exist
+                return True
+            
+            console.print(f"[yellow]Session conflict detected: '{session_name}' already exists[/yellow]")
+            
+            # Get session details for analysis
+            session_info = self._get_session_info(session_name)
+            
+            if self.args.daemon or self.args.batch:
+                # In non-interactive mode, use automatic resolution
+                return self._auto_resolve_conflict(session_name, session_info)
+            else:
+                # In interactive mode, prompt user for resolution strategy
+                return self._interactive_resolve_conflict(session_name, session_info)
+                
+        except Exception as e:
+            console.print(f"[red]Error resolving session conflicts: {e}[/red]")
+            return False
+    
+    def _get_session_info(self, session_name: str) -> dict:
+        """Get detailed information about an existing tmux session"""
+        info = {
+            'windows': [],
+            'created': None,
+            'last_activity': None,
+            'has_active_processes': False
+        }
+        
+        try:
+            # Get session creation time and activity
+            result = subprocess.run(['tmux', 'display-message', '-t', session_name, 
+                                   '-p', '#{session_created} #{session_activity}'],
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                parts = result.stdout.strip().split()
+                if len(parts) >= 2:
+                    info['created'] = int(parts[0])
+                    info['last_activity'] = int(parts[1])
+            
+            # Get windows and their processes
+            result = subprocess.run(['tmux', 'list-windows', '-t', session_name,
+                                   '-F', '#{window_name}:#{window_active}'],
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if ':' in line:
+                        name, active = line.strip().split(':', 1)
+                        info['windows'].append({'name': name, 'active': active == '1'})
+            
+            # Check for active processes (non-shell)
+            result = subprocess.run(['tmux', 'list-panes', '-t', session_name, '-a',
+                                   '-F', '#{pane_current_command}'],
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                commands = result.stdout.strip().split('\n')
+                for cmd in commands:
+                    if cmd.strip() and cmd.strip() not in ['bash', 'zsh', 'sh', 'fish']:
+                        info['has_active_processes'] = True
+                        break
+                        
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not get full session info: {e}[/yellow]")
+        
+        return info
+    
+    def _auto_resolve_conflict(self, session_name: str, session_info: dict) -> bool:
+        """Automatically resolve session conflicts in non-interactive mode"""
+        try:
+            # Strategy 1: If session has been inactive for >1 hour, kill it
+            if session_info.get('last_activity'):
+                inactive_time = time.time() - session_info['last_activity']
+                if inactive_time > 3600:  # 1 hour
+                    console.print(f"[yellow]Auto-resolving: Session inactive for {inactive_time/3600:.1f}h, terminating[/yellow]")
+                    return self._kill_session_safely(session_name)
+            
+            # Strategy 2: If no active processes, kill it
+            if not session_info.get('has_active_processes', True):
+                console.print(f"[yellow]Auto-resolving: No active processes detected, terminating session[/yellow]")
+                return self._kill_session_safely(session_name)
+            
+            # Strategy 3: If --force flag is used, kill regardless
+            if self.args.force:
+                console.print(f"[yellow]Auto-resolving: Force flag enabled, terminating session[/yellow]")
+                return self._kill_session_safely(session_name)
+            
+            # Strategy 4: Try to rename the existing session
+            backup_name = f"{session_name}-backup-{int(time.time())}"
+            result = subprocess.run(['tmux', 'rename-session', '-t', session_name, backup_name],
+                                  capture_output=True)
+            if result.returncode == 0:
+                console.print(f"[green]Auto-resolved: Renamed conflicting session to '{backup_name}'[/green]")
+                return True
+            
+            # Strategy 5: Give up - cannot resolve automatically
+            console.print(f"[red]Cannot auto-resolve conflict for session '{session_name}'[/red]")
+            console.print("[yellow]Use --force to override, or manually resolve the conflict[/yellow]")
+            return False
+            
+        except Exception as e:
+            console.print(f"[red]Error in auto-resolution: {e}[/red]")
+            return False
+    
+    def _interactive_resolve_conflict(self, session_name: str, session_info: dict) -> bool:
+        """Interactively resolve session conflicts with user prompts"""
+        console.print(f"\n[bold]Session Conflict Resolution[/bold]")
+        console.print(f"Session: {session_name}")
+        
+        if session_info.get('windows'):
+            console.print(f"Windows: {len(session_info['windows'])}")
+            for window in session_info['windows'][:3]:  # Show first 3 windows
+                console.print(f"  - {window['name']}")
+        
+        if session_info.get('has_active_processes'):
+            console.print("[yellow]⚠️  Session has active processes[/yellow]")
+        
+        console.print("\nResolution options:")
+        console.print("1. Kill existing session (may lose work)")
+        console.print("2. Rename existing session (safe)")
+        console.print("3. Cancel orchestration")
+        
+        while True:
+            try:
+                choice = input("\nEnter choice (1-3): ").strip()
+                if choice == '1':
+                    return self._kill_session_safely(session_name)
+                elif choice == '2':
+                    backup_name = f"{session_name}-backup-{int(time.time())}"
+                    result = subprocess.run(['tmux', 'rename-session', '-t', session_name, backup_name],
+                                          capture_output=True)
+                    if result.returncode == 0:
+                        console.print(f"[green]Renamed session to '{backup_name}'[/green]")
+                        return True
+                    else:
+                        console.print("[red]Failed to rename session[/red]")
+                        return False
+                elif choice == '3':
+                    console.print("[yellow]Orchestration cancelled[/yellow]")
+                    return False
+                else:
+                    console.print("[red]Invalid choice. Please enter 1, 2, or 3.[/red]")
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Cancelled[/yellow]")
+                return False
+            except Exception as e:
+                console.print(f"[red]Error: {e}[/red]")
+                return False
+    
+    def _kill_session_safely(self, session_name: str) -> bool:
+        """Safely kill a tmux session with proper cleanup"""
+        try:
+            # First attempt graceful kill
+            result = subprocess.run(['tmux', 'kill-session', '-t', session_name], 
+                                  capture_output=True)
+            
+            if result.returncode == 0:
+                # Verify session is gone
+                time.sleep(0.5)
+                check_result = subprocess.run(['tmux', 'has-session', '-t', session_name], 
+                                            capture_output=True)
+                if check_result.returncode != 0:
+                    console.print(f"[green]Successfully terminated session '{session_name}'[/green]")
+                    return True
+            
+            # If graceful kill failed, try force kill
+            console.print(f"[yellow]Attempting force termination of session '{session_name}'[/yellow]")
+            result = subprocess.run(['tmux', 'kill-session', '-t', session_name, '-f'], 
+                                  capture_output=True)
+            
+            time.sleep(0.5)
+            check_result = subprocess.run(['tmux', 'has-session', '-t', session_name], 
+                                        capture_output=True)
+            if check_result.returncode != 0:
+                console.print(f"[green]Force terminated session '{session_name}'[/green]")
+                return True
+            else:
+                console.print(f"[red]Failed to terminate session '{session_name}'[/red]")
+                return False
+                
+        except Exception as e:
+            console.print(f"[red]Error killing session '{session_name}': {e}[/red]")
+            return False
+    
     def setup_tmux_session(self, spec: ImplementationSpec):
         """Set up the tmux session with roles based on project size using git worktrees"""
         # Use concurrent orchestration manager for unique naming
@@ -2120,21 +2530,9 @@ This file is automatically read by Claude Code when working in this directory.
             # Create tmux session
             task = progress.add_task("Creating tmux session...", total=len(roles_to_deploy))
             
-            # Kill existing session if it exists
-            subprocess.run(['tmux', 'kill-session', '-t', session_name], 
-                         capture_output=True)
-            
-            # Add a small delay to ensure session is fully killed
-            time.sleep(0.5)
-            
-            # Double-check session is gone
-            check_result = subprocess.run(['tmux', 'has-session', '-t', session_name], 
-                                        capture_output=True)
-            if check_result.returncode == 0:
-                # Session still exists, force kill it
-                subprocess.run(['tmux', 'kill-session', '-t', session_name, '-f'], 
-                             capture_output=True)
-                time.sleep(0.5)
+            # Handle session conflicts using proper conflict resolution
+            if not self.resolve_session_conflicts(session_name):
+                raise RuntimeError(f"Could not resolve session conflicts for {session_name}")
             
             # Create new session with first role
             first_window, first_role = roles_to_deploy[0]
@@ -4391,6 +4789,11 @@ Remember: Context management is automatic - focus on creating good checkpoints t
         
         # Check dependencies
         self.check_dependencies()
+        
+        # NEW: Comprehensive pre-flight checks
+        if not self.pre_flight_checks():
+            console.print("[red]Pre-flight checks failed - aborting orchestration[/red]")
+            sys.exit(1)
         
         # Ensure tmux server is running
         self.ensure_tmux_server()

@@ -35,6 +35,8 @@ sys.path.append(str(Path(__file__).parent))
 from session_state import SessionStateManager, SessionState
 from email_notifier import get_email_notifier
 from process_manager import ProcessManager  # NEW: Import ProcessManager for subprocess tracking
+from state_synchronizer import StateSynchronizer  # NEW: Import for proactive null session repair
+from project_lock import ProjectLock  # NEW: Import for cross-project interference prevention
 
 # Setup logging
 logging.basicConfig(
@@ -47,12 +49,60 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class DependencyChecker:
+    """Ensures critical dependencies are available at runtime with auto-installation."""
+    
+    @staticmethod
+    def verify_psutil():
+        """Verify psutil is available, auto-install if missing."""
+        try:
+            import psutil
+            logger.info(f"✓ psutil verified: version {psutil.__version__}")
+            return True
+        except ImportError:
+            logger.warning("⚠️  psutil missing - attempting auto-install")
+            try:
+                # Use uv to install psutil
+                result = subprocess.run(['uv', 'pip', 'install', 'psutil>=5.9.0'], 
+                                      check=True, capture_output=True, text=True)
+                logger.info(f"✓ psutil installation output: {result.stdout}")
+                
+                # Verify installation worked
+                import psutil
+                logger.info(f"✓ psutil installed successfully: version {psutil.__version__}")
+                return True
+            except subprocess.CalledProcessError as e:
+                logger.error(f"❌ Failed to install psutil via uv: {e}")
+                logger.error(f"Command output: {e.stdout}")
+                logger.error(f"Command error: {e.stderr}")
+                return False
+            except ImportError as e:
+                logger.error(f"❌ psutil still unavailable after installation attempt: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"❌ Unexpected error during psutil installation: {e}")
+                return False
+    
+    @staticmethod
+    def verify_all_dependencies():
+        """Verify all critical dependencies are available."""
+        dependencies_ok = True
+        
+        if not DependencyChecker.verify_psutil():
+            dependencies_ok = False
+            
+        return dependencies_ok
+
 class TmuxOrchestratorScheduler:
     def __init__(self, db_path='task_queue.db', tmux_orchestrator_path=None):
         self.db_path = db_path
         self.tmux_orchestrator_path = tmux_orchestrator_path or Path(__file__).parent
         self.session_state_manager = SessionStateManager(self.tmux_orchestrator_path)
         self.event_subscribers: Dict[str, List[Callable]] = {}  # Event hook system
+        
+        # Verify critical dependencies before proceeding
+        if not DependencyChecker.verify_all_dependencies():
+            raise RuntimeError("Critical dependencies unavailable - cannot proceed with scheduler initialization")
         
         # Add lock for thread-safe queue operations (FIX: Prevent concurrent project starts)
         self.queue_lock = threading.Lock()
@@ -82,10 +132,23 @@ class TmuxOrchestratorScheduler:
         self.phantom_grace_period = int(os.getenv('PHANTOM_GRACE_PERIOD_SEC', 900))  # Default 15 minutes instead of 2
         logger.info(f"ProcessManager initialized with {self.process_manager.max_runtime}s timeout")
         
+        # NEW: State synchronization configuration
+        self.state_sync_interval = int(os.getenv('STATE_SYNC_INTERVAL_SEC', 300))  # 5 minutes default
+        self.last_state_sync = 0
+        logger.info(f"State synchronization configured with {self.state_sync_interval}s interval")
+        
+        # NEW: Orphaned session reconciliation configuration
+        self.orphaned_reconcile_interval = int(os.getenv('ORPHANED_RECONCILE_INTERVAL_SEC', 600))  # 10 minutes default
+        self.last_orphaned_reconcile = 0
+        logger.info(f"Orphaned session reconciliation configured with {self.orphaned_reconcile_interval}s interval")
+        
         self.setup_database()
         
         # Clean stale registry entries on startup
         self.session_state_manager.cleanup_stale_registries()
+        
+        # NEW: Reboot recovery - handle projects that were processing before shutdown
+        self._recover_from_reboot()
         
         # Auto-subscribe default completion handler
         self.subscribe('task_complete', self._handle_task_completion)
@@ -300,26 +363,34 @@ class TmuxOrchestratorScheduler:
             # Already have lock, don't acquire again
             cursor = self.conn.cursor()
         else:
-            # External call, acquire lock
-            with self.queue_lock:
-                cursor = self.conn.cursor()
-                cursor.execute("""
-                    SELECT id FROM project_queue WHERE id = ?
-                """, (project_id,))
-                row = cursor.fetchone()
-                if not row:
-                    logger.error(f"Project {project_id} not found")
-                    return False
-                
-                cursor.execute("""
-                    UPDATE project_queue 
-                    SET status = 'queued', started_at = NULL, completed_at = NULL, 
-                        error_message = NULL, orchestrator_session = NULL, main_session = NULL
-                    WHERE id = ?
-                """, (project_id,))
-                self.conn.commit()
-                logger.info(f"Project {project_id} reset to queued status")
-                return True
+            # External call, acquire both queue lock and project lock
+            project_lock = ProjectLock()
+            if not project_lock.acquire(project_id):
+                logger.error(f"Failed to acquire project lock for reset of project {project_id}")
+                return False
+            
+            try:
+                with self.queue_lock:
+                    cursor = self.conn.cursor()
+                    cursor.execute("""
+                        SELECT id FROM project_queue WHERE id = ?
+                    """, (project_id,))
+                    row = cursor.fetchone()
+                    if not row:
+                        logger.error(f"Project {project_id} not found")
+                        return False
+                    
+                    cursor.execute("""
+                        UPDATE project_queue 
+                        SET status = 'queued', started_at = NULL, completed_at = NULL, 
+                            error_message = NULL, orchestrator_session = NULL, main_session = NULL
+                        WHERE id = ?
+                    """, (project_id,))
+                    self.conn.commit()
+                    logger.info(f"Project {project_id} reset to queued status")
+                    return True
+            finally:
+                project_lock.release()
         
         # Internal call path
         cursor.execute("""
@@ -342,45 +413,54 @@ class TmuxOrchestratorScheduler:
 
     def check_and_reset_specific_project(self, project_id: int, force: bool = False) -> bool:
         """Check if a specific project is stuck and optionally reset it"""
-        with self.queue_lock:
-            cursor = self.conn.cursor()
-            cursor.execute("""
-                SELECT status, started_at, orchestrator_session, main_session, session_name
-                FROM project_queue 
-                WHERE id = ?
-            """, (project_id,))
-            row = cursor.fetchone()
-            if not row:
-                logger.error(f"Project {project_id} not found")
+        # Acquire project lock to prevent interference during reset operations
+        project_lock = ProjectLock()
+        if not project_lock.acquire(project_id):
+            logger.error(f"Failed to acquire project lock for check/reset of project {project_id}")
+            return False
+        
+        try:
+            with self.queue_lock:
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    SELECT status, started_at, orchestrator_session, main_session, session_name
+                    FROM project_queue 
+                    WHERE id = ?
+                """, (project_id,))
+                row = cursor.fetchone()
+                if not row:
+                    logger.error(f"Project {project_id} not found")
+                    return False
+                
+                status, started_at, orch_session, main_session, session_name = row
+                
+                # If force is specified, always reset regardless of status
+                if force:
+                    return self.reset_project_to_queued(project_id, _internal_call=True)
+                
+                if status != 'processing':
+                    logger.info(f"Project {project_id} is {status}, not processing")
+                    return False
+                
+                is_stuck = False
+                if started_at and time.time() - float(started_at) > 7200:  # 2 hours (reduced from 4)
+                    is_stuck = True
+                    logger.info(f"Project {project_id} has been running for {(time.time() - float(started_at))/3600:.1f} hours")
+                elif session_name and not self._session_exists(session_name):  # Check tmux using session_name
+                    is_stuck = True
+                    logger.info(f"Project {project_id} session '{session_name}' no longer exists")
+                elif not session_name and orch_session and not self._session_exists(orch_session):  # Fallback to orchestrator_session
+                    is_stuck = True
+                    logger.info(f"Project {project_id} orchestrator session '{orch_session}' no longer exists")
+                
+                if is_stuck:
+                    self.mark_project_complete(project_id, success=False, error_message='Manual reset: Project appeared stuck or orphaned')
+                    logger.warning(f"Reset project {project_id} to failed")
+                    return True
+                logger.info(f"Project {project_id} appears to be running normally")
                 return False
-            
-            status, started_at, orch_session, main_session, session_name = row
-            
-            # If force is specified, always reset regardless of status
-            if force:
-                return self.reset_project_to_queued(project_id, _internal_call=True)
-            
-            if status != 'processing':
-                logger.info(f"Project {project_id} is {status}, not processing")
-                return False
-            
-            is_stuck = False
-            if started_at and time.time() - float(started_at) > 7200:  # 2 hours (reduced from 4)
-                is_stuck = True
-                logger.info(f"Project {project_id} has been running for {(time.time() - float(started_at))/3600:.1f} hours")
-            elif session_name and not self._session_exists(session_name):  # Check tmux using session_name
-                is_stuck = True
-                logger.info(f"Project {project_id} session '{session_name}' no longer exists")
-            elif not session_name and orch_session and not self._session_exists(orch_session):  # Fallback to orchestrator_session
-                is_stuck = True
-                logger.info(f"Project {project_id} orchestrator session '{orch_session}' no longer exists")
-            
-            if is_stuck:
-                self.mark_project_complete(project_id, success=False, error_message='Manual reset: Project appeared stuck or orphaned')
-                logger.warning(f"Reset project {project_id} to failed")
-                return True
-            logger.info(f"Project {project_id} appears to be running normally")
-        return False
+        finally:
+            project_lock.release()
     
     def detect_and_reset_phantom_projects(self) -> int:
         """
@@ -823,6 +903,151 @@ class TmuxOrchestratorScheduler:
                 
         except Exception as e:
             return False, f"Pattern matching scan failed: {e}"
+    
+    def _recover_from_reboot(self):
+        """Recover from system reboot by checking status of projects that were processing"""
+        logger.info("🔄 Starting reboot recovery check...")
+        
+        try:
+            with self.queue_lock:
+                cursor = self.conn.cursor()
+                
+                # Find all projects that were marked as processing
+                cursor.execute("""
+                    SELECT id, spec_path, project_path, session_name, started_at
+                    FROM project_queue 
+                    WHERE status IN ('processing', 'credit_paused')
+                    ORDER BY id
+                """)
+                
+                processing_projects = cursor.fetchall()
+                
+                if not processing_projects:
+                    logger.info("No projects found in processing state - clean startup")
+                    return
+                
+                logger.info(f"Found {len(processing_projects)} projects in processing/credit_paused state")
+                
+                # Initialize state synchronizer for null session name repairs
+                synchronizer = StateSynchronizer(self.db_path, "registry")
+                
+                for project_id, spec_path, project_path, session_name, started_at in processing_projects:
+                    logger.info(f"Checking project {project_id} (session: {session_name})")
+                    
+                    # NEW: Proactive repair for null session names
+                    if not session_name:
+                        logger.warning(f"Null session_name detected for project {project_id} - attempting repair")
+                        max_attempts = 3
+                        repaired = False
+                        
+                        for attempt in range(max_attempts):
+                            logger.info(f"Repair attempt {attempt+1}/{max_attempts} for project {project_id}")
+                            
+                            try:
+                                if synchronizer.repair_missing_session_name(project_id):
+                                    # Refresh session_name after repair
+                                    cursor.execute("SELECT session_name FROM project_queue WHERE id = ?", (project_id,))
+                                    result = cursor.fetchone()
+                                    if result and result[0]:
+                                        session_name = result[0]
+                                        logger.info(f"✅ Repaired null session for project {project_id}: {session_name}")
+                                        repaired = True
+                                        break
+                                    else:
+                                        logger.warning(f"Repair returned success but session_name still null for project {project_id}")
+                                else:
+                                    logger.warning(f"Repair failed for project {project_id} on attempt {attempt+1}")
+                            except Exception as e:
+                                logger.error(f"Error during repair attempt {attempt+1} for project {project_id}: {e}")
+                            
+                            if attempt < max_attempts - 1:  # Don't sleep after last attempt
+                                time.sleep(1)  # Backoff between attempts
+                        
+                        if not repaired and not session_name:
+                            # Mark as failed if unrepairable after all attempts
+                            logger.error(f"❌ Failed to repair null session for project {project_id} after {max_attempts} attempts")
+                            cursor.execute("""
+                                UPDATE project_queue 
+                                SET status = 'failed', 
+                                    error_message = 'Unrecoverable null session name after reboot - repair failed',
+                                    completed_at = strftime('%s', 'now')
+                                WHERE id = ?
+                            """, (project_id,))
+                            logger.error(f"Marked project {project_id} as failed due to unrecoverable null session name")
+                            continue  # Skip further processing for this project
+                    
+                    # Check if the tmux session still exists
+                    session_exists = False
+                    if session_name:
+                        try:
+                            result = subprocess.run(['tmux', 'has-session', '-t', session_name], 
+                                                  capture_output=True)
+                            session_exists = result.returncode == 0
+                        except Exception as e:
+                            logger.error(f"Error checking session {session_name}: {e}")
+                    
+                    # Also try pattern matching if session_name is missing
+                    if not session_exists and spec_path:
+                        is_live, reason = self.validate_session_liveness(
+                            None, 
+                            project_id=project_id, 
+                            spec_path=spec_path
+                        )
+                        session_exists = is_live
+                        if is_live:
+                            logger.info(f"Found active session for project {project_id} via pattern matching")
+                    
+                    if session_exists:
+                        # Session still exists - project may still be running
+                        logger.info(f"✅ Project {project_id} session still active - keeping as processing")
+                        
+                        # Check if it was credit_paused and might need to be resumed
+                        cursor.execute("SELECT status FROM project_queue WHERE id = ?", (project_id,))
+                        status = cursor.fetchone()[0]
+                        
+                        if status == 'credit_paused':
+                            # Check if credits might be available now
+                            logger.info(f"Project {project_id} was credit_paused - will be checked by credit monitor")
+                    else:
+                        # Session doesn't exist - likely terminated during reboot
+                        logger.warning(f"❌ Project {project_id} session not found after reboot")
+                        
+                        # Check if there's completion information in SessionState
+                        project_name = None
+                        if spec_path:
+                            project_name = Path(spec_path).stem.lower().replace('_', '-')
+                        
+                        completion_detected = False
+                        if project_name:
+                            state = self.session_state_manager.load_session_state(project_name)
+                            if state and state.completion_status in ['completed', 'failed']:
+                                # Project actually completed before reboot
+                                logger.info(f"Project {project_id} found {state.completion_status} in SessionState")
+                                cursor.execute("""
+                                    UPDATE project_queue 
+                                    SET status = ?, 
+                                        completed_at = strftime('%s', 'now'),
+                                        error_message = ?
+                                    WHERE id = ?
+                                """, (state.completion_status, state.failure_reason, project_id))
+                                completion_detected = True
+                        
+                        if not completion_detected:
+                            # Mark as failed due to reboot
+                            cursor.execute("""
+                                UPDATE project_queue 
+                                SET status = 'failed', 
+                                    completed_at = strftime('%s', 'now'),
+                                    error_message = 'Project terminated during system reboot/shutdown'
+                                WHERE id = ?
+                            """, (project_id,))
+                            logger.info(f"Marked project {project_id} as failed due to reboot")
+                
+                self.conn.commit()
+                logger.info("✅ Reboot recovery completed")
+                
+        except Exception as e:
+            logger.error(f"Error during reboot recovery: {e}", exc_info=True)
     
     def _dispatch_event(self, event: str, data: Dict[str, Any]):
         """Dispatch an event to all subscribers"""
@@ -1392,24 +1617,22 @@ class TmuxOrchestratorScheduler:
                         # Prepare project_path arg ('auto' if None)
                         proj_arg = next_project['project_path'] or 'auto'
                         
-                        # CRITICAL: Determine if this should be resume vs create new
-                        should_resume = False
-                        if proj_arg != 'auto':
-                            # Specific project path provided - check if orchestration exists
-                            try:
-                                state = self.session_state_manager.load_session_state(project_name)
-                                should_resume = state is not None and state.session_name
-                                if should_resume:
-                                    logger.info(f"Found existing orchestration for {project_name} - will resume")
-                                else:
-                                    logger.info(f"No existing orchestration for {project_name} - will create new")
-                            except Exception as e:
-                                logger.warning(f"Could not check session state for {project_name}: {e}")
-                                should_resume = False
+                        # NEW: Enhanced default resume mode - always attempt auto-resume first
+                        logger.info(f"Checking for existing orchestration to resume for {project_name}")
+                        should_resume = self._attempt_auto_resume(proj_arg, next_project['spec_path'])
+                        
+                        if should_resume:
+                            logger.info(f"✅ Default resume mode: Found existing healthy orchestration for {project_name} - will resume")
                         else:
-                            # Auto-detect mode - never resume, always create new
-                            logger.info(f"Auto-detect mode for {project_name} - will create new orchestration")
+                            if proj_arg != 'auto':
+                                logger.info(f"No existing/healthy orchestration found for {project_name} - will create new")
+                            else:
+                                logger.info(f"Auto-detect mode for {project_name} - will create new orchestration")
+                        
+                        # Override resume decision only if fresh_start is explicitly requested
+                        if next_project.get('fresh_start', False):
                             should_resume = False
+                            logger.info(f"Fresh start requested for {project_name} - overriding resume mode")
                         
                         # Build command - FIXED: Call auto_orchestrate.py directly to avoid nested uv execution
                         # The script has shebang #!/usr/bin/env -S uv run --quiet --script
@@ -1892,6 +2115,274 @@ These projects require manual review and intervention.
         # Return True for now to not block operations
         return True
         
+    def _run_state_sync(self):
+        """Run proactive state synchronization between SQLite, JSON states, and tmux sessions"""
+        try:
+            logger.debug("Running state synchronization check...")
+            synchronizer = StateSynchronizer(self.db_path, "registry")
+            mismatches = synchronizer.detect_mismatches()
+            
+            if mismatches:
+                logger.warning(f"Detected {len(mismatches)} state mismatches")
+                
+                # Log details of each mismatch for debugging
+                for mismatch in mismatches:
+                    logger.warning(f"State mismatch - {mismatch.type}: {mismatch.description}")
+                
+                # Attempt auto-repair
+                results = synchronizer.auto_repair_mismatches(mismatches)
+                logger.info(f"State sync repair results: repaired={results['repaired']}, failed={results['failed']}")
+                
+                # Escalate critical unresolved issues via email
+                if results['failed'] > 0:
+                    critical_failed = [m for m in mismatches if m.severity == 'critical']
+                    if critical_failed:
+                        try:
+                            notifier = get_email_notifier()
+                            report = synchronizer.generate_report(critical_failed)
+                            notifier.send_email(
+                                subject="Critical State Synchronization Alert - Tmux Orchestrator",
+                                body=f"Critical state mismatches detected and could not be automatically repaired:\n\n{report}"
+                            )
+                            logger.warning("Sent email alert for critical state synchronization failures")
+                        except Exception as email_error:
+                            logger.error(f"Failed to send state sync alert email: {email_error}")
+            else:
+                logger.debug("No state mismatches detected - system synchronized")
+                
+        except Exception as e:
+            logger.error(f"State synchronization check failed: {e}", exc_info=True)
+    
+    def _reconcile_orphaned_sessions(self):
+        """Reconcile orphaned tmux sessions that exist but aren't tracked in SQLite/JSON"""
+        try:
+            logger.debug("Running orphaned session reconciliation...")
+            
+            # Get all active tmux sessions
+            active_sessions = set()
+            try:
+                result = subprocess.run(
+                    ['tmux', 'list-sessions', '-F', '#{session_name}'],
+                    capture_output=True, text=True, check=False
+                )
+                if result.returncode == 0:
+                    active_sessions = set(line.strip() for line in result.stdout.strip().split('\n') if line.strip())
+                else:
+                    logger.debug("No tmux sessions found or tmux not running")
+                    return
+            except Exception as e:
+                logger.warning(f"Failed to get active tmux sessions: {e}")
+                return
+            
+            if not active_sessions:
+                logger.debug("No active tmux sessions found")
+                return
+            
+            # Get known sessions from database
+            known_sessions = set()
+            with self.queue_lock:
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT session_name FROM project_queue WHERE session_name IS NOT NULL")
+                known_sessions.update(row[0] for row in cursor.fetchall())
+            
+            # Get known sessions from JSON states
+            try:
+                synchronizer = StateSynchronizer(self.db_path, "registry")
+                json_states = synchronizer.get_json_session_states()
+                known_sessions.update(state.get('session_name') for state in json_states if state.get('session_name'))
+            except Exception as e:
+                logger.warning(f"Failed to get JSON session states: {e}")
+            
+            # Find orphaned sessions (exist in tmux but not tracked)
+            orphaned = active_sessions - known_sessions
+            
+            if not orphaned:
+                logger.debug("No orphaned sessions detected")
+                return
+            
+            logger.info(f"Found {len(orphaned)} potentially orphaned sessions: {', '.join(sorted(orphaned))}")
+            
+            for session_name in orphaned:
+                try:
+                    # Check if session is recent (grace period to avoid killing new sessions)
+                    session_age = self._get_session_age(session_name)
+                    grace_period = int(os.getenv('ORPHANED_SESSION_GRACE_PERIOD_SEC', 3600))  # 1 hour default
+                    
+                    if session_age < grace_period:
+                        logger.debug(f"Session '{session_name}' is only {session_age}s old, within grace period")
+                        continue
+                    
+                    # Check if this might be a system session we should preserve
+                    if self._is_system_session(session_name):
+                        logger.debug(f"Session '{session_name}' appears to be a system session, preserving")
+                        continue
+                    
+                    logger.warning(f"Terminating orphaned session: '{session_name}' (age: {session_age}s)")
+                    
+                    # Kill the orphaned session
+                    result = subprocess.run(
+                        ['tmux', 'kill-session', '-t', session_name],
+                        capture_output=True, text=True, check=False
+                    )
+                    
+                    if result.returncode == 0:
+                        logger.info(f"✅ Successfully terminated orphaned session: '{session_name}'")
+                    else:
+                        logger.warning(f"Failed to terminate orphaned session '{session_name}': {result.stderr}")
+                        
+                except Exception as e:
+                    logger.error(f"Error processing orphaned session '{session_name}': {e}")
+                    
+        except Exception as e:
+            logger.error(f"Orphaned session reconciliation failed: {e}", exc_info=True)
+    
+    def _get_session_age(self, session_name: str) -> int:
+        """Get the age of a tmux session in seconds"""
+        try:
+            # Get session creation time using tmux format
+            result = subprocess.run(
+                ['tmux', 'display-message', '-t', session_name, '-p', '#{session_created}'],
+                capture_output=True, text=True, check=False
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                session_created = int(result.stdout.strip())
+                return int(time.time()) - session_created
+        except Exception as e:
+            logger.debug(f"Could not determine age for session '{session_name}': {e}")
+        
+        # Default to old age if we can't determine (err on the side of terminating)
+        return 7200  # 2 hours
+    
+    def _is_system_session(self, session_name: str) -> bool:
+        """Check if a session appears to be a system/user session that should be preserved"""
+        # Preserve numeric sessions (like "0", "1", "2") as they're likely user sessions
+        if session_name.isdigit():
+            return True
+            
+        # Preserve common system session patterns
+        preserve_patterns = [
+            'main', 'default', 'work', 'dev', 'prod', 'staging',
+            'tmux-orc', 'orchestrator', 'scheduler',  # Our own system sessions
+            'claude', 'vim', 'editor', 'shell'  # Common user tool sessions
+        ]
+        
+        # Check if session name matches any preserve pattern
+        session_lower = session_name.lower()
+        for pattern in preserve_patterns:
+            if pattern in session_lower:
+                return True
+                
+        return False
+    
+    def _attempt_auto_resume(self, project_path: str, spec_path: str) -> bool:
+        """
+        Attempt to auto-resume an existing orchestration for a project.
+        
+        Args:
+            project_path: Path to the project directory  
+            spec_path: Path to the specification file
+            
+        Returns:
+            True if existing session found and resume should be attempted, False otherwise
+        """
+        try:
+            # Extract project name from spec path for session state lookup
+            spec_file = Path(spec_path)
+            project_name = spec_file.stem.lower().replace('_', '-')
+            
+            logger.debug(f"Checking for existing orchestration: project_name={project_name}")
+            
+            # Check if there's an existing session state
+            state = self.session_state_manager.load_session_state(project_name)
+            if not state or not state.session_name:
+                logger.debug(f"No existing session state found for {project_name}")
+                return False
+            
+            # Verify the tmux session still exists
+            try:
+                result = subprocess.run(
+                    ['tmux', 'has-session', '-t', state.session_name],
+                    capture_output=True, check=False
+                )
+                session_exists = result.returncode == 0
+                
+                if session_exists:
+                    logger.info(f"Found existing tmux session '{state.session_name}' for {project_name}")
+                    
+                    # Additional validation: Check if session is healthy/active
+                    if self._is_session_healthy(state.session_name):
+                        logger.info(f"Session '{state.session_name}' appears healthy - will attempt resume")
+                        return True
+                    else:
+                        logger.warning(f"Session '{state.session_name}' exists but appears unhealthy - will start new")
+                        return False
+                else:
+                    logger.debug(f"Session '{state.session_name}' no longer exists for {project_name}")
+                    return False
+                    
+            except Exception as e:
+                logger.warning(f"Error checking tmux session for {project_name}: {e}")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"Error during auto-resume check for {project_path}: {e}")
+            return False
+    
+    def _is_session_healthy(self, session_name: str) -> bool:
+        """
+        Check if a tmux session appears to be healthy/active.
+        
+        Args:
+            session_name: Name of tmux session to check
+            
+        Returns:
+            True if session appears healthy, False otherwise
+        """
+        try:
+            # Check if session has any windows
+            result = subprocess.run(
+                ['tmux', 'list-windows', '-t', session_name, '-F', '#{window_name}'],
+                capture_output=True, text=True, check=False
+            )
+            
+            if result.returncode != 0:
+                return False
+                
+            windows = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+            
+            # Session should have at least one window
+            if not windows:
+                logger.debug(f"Session '{session_name}' has no windows")
+                return False
+            
+            # Check if any windows have active processes (not just shell)
+            active_windows = 0
+            for window in windows:
+                try:
+                    # Get pane count and process info
+                    result = subprocess.run(
+                        ['tmux', 'list-panes', '-t', f"{session_name}:{window}", '-F', '#{pane_current_command}'],
+                        capture_output=True, text=True, check=False
+                    )
+                    if result.returncode == 0:
+                        commands = result.stdout.strip().split('\n')
+                        # Count panes with active processes (not just shell)
+                        for cmd in commands:
+                            if cmd.strip() and cmd.strip() not in ['bash', 'zsh', 'sh', 'fish']:
+                                active_windows += 1
+                                break
+                except Exception:
+                    continue
+            
+            # Consider healthy if at least one window has active processes
+            is_healthy = active_windows > 0
+            logger.debug(f"Session '{session_name}' health check: {active_windows} active windows, healthy={is_healthy}")
+            return is_healthy
+            
+        except Exception as e:
+            logger.debug(f"Error checking session health for '{session_name}': {e}")
+            return False
+    
     def _monitor_batches(self):
         """Enhanced background thread with all monitoring functions"""
         logger.info("Starting enhanced batch monitoring loop")
@@ -1912,6 +2403,19 @@ These projects require manual review and intervention.
                 self.check_stuck_projects()
                 self.detect_and_reset_phantom_projects()
                 self.detect_completed_projects()
+                
+                # NEW: Proactive state synchronization (every 5 minutes by default)
+                now = time.time()
+                if now - self.last_state_sync > self.state_sync_interval:
+                    logger.debug("Running periodic state synchronization...")
+                    self._run_state_sync()
+                    self.last_state_sync = now
+                
+                # NEW: Orphaned session reconciliation (every 10 minutes by default)
+                if now - self.last_orphaned_reconcile > self.orphaned_reconcile_interval:
+                    logger.debug("Running orphaned session reconciliation...")
+                    self._reconcile_orphaned_sessions()
+                    self.last_orphaned_reconcile = now
                 
                 # Original batch monitoring
                 cursor.execute("""
