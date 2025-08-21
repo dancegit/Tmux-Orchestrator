@@ -34,10 +34,15 @@ class ProcessManager:
         self._stop = False
         self._lock = threading.Lock()  # Thread-safe access to active_processes
         
+        # Heartbeat extension settings
+        self.heartbeat_timeout = int(os.getenv('HEARTBEAT_TIMEOUT_SEC', 600))  # 10min default
+        self.max_extensions = int(os.getenv('MAX_TIMEOUT_EXTENSIONS', 3))  # Max 3 extensions
+        self.extension_duration = int(os.getenv('EXTENSION_DURATION_SEC', 900))  # 15min per extension
+        
         # Start background monitor thread
         self.monitor_thread = threading.Thread(target=self._monitor, daemon=True)
         self.monitor_thread.start()
-        logger.info(f"ProcessManager started with {max_runtime}s timeout, {monitor_interval}s monitoring")
+        logger.info(f"ProcessManager started with {max_runtime}s timeout, {monitor_interval}s monitoring, heartbeat extensions enabled")
 
     def register(self, project_id: int, pid: int, cmd: Optional[str] = None):
         """
@@ -53,7 +58,9 @@ class ProcessManager:
                 'pid': pid,
                 'start_time': time.time(),
                 'last_heartbeat': time.time(),
-                'cmd': cmd or 'auto_orchestrate.py'
+                'cmd': cmd or 'auto_orchestrate.py',
+                'timeout_extensions': 0,  # Track number of extensions granted
+                'extended_timeout': self.max_runtime  # Current effective timeout
             }
         logger.info(f"Registered process {pid} for project {project_id} (cmd: {cmd})")
 
@@ -135,6 +142,108 @@ class ProcessManager:
             if project_id in self.active_processes:
                 self.active_processes[project_id]['last_heartbeat'] = time.time()
 
+    def extend_timeout(self, project_id: int, reason: str = "Long-running operation") -> bool:
+        """
+        Extend timeout for a process based on recent heartbeat activity.
+        
+        Args:
+            project_id: Project ID to extend timeout for
+            reason: Reason for extension (for logging)
+            
+        Returns:
+            True if timeout was extended, False if extension denied
+        """
+        with self._lock:
+            info = self.active_processes.get(project_id)
+            if not info:
+                logger.warning(f"Cannot extend timeout for project {project_id}: not found in registry")
+                return False
+            
+            # Check if we've exceeded maximum extensions
+            if info['timeout_extensions'] >= self.max_extensions:
+                logger.warning(f"Cannot extend timeout for project {project_id}: max extensions ({self.max_extensions}) reached")
+                return False
+            
+            # Check if heartbeat is recent enough to justify extension
+            current_time = time.time()
+            heartbeat_age = current_time - info['last_heartbeat']
+            
+            if heartbeat_age > self.heartbeat_timeout:
+                logger.warning(f"Cannot extend timeout for project {project_id}: stale heartbeat ({heartbeat_age:.1f}s > {self.heartbeat_timeout}s)")
+                return False
+            
+            # Grant extension
+            info['timeout_extensions'] += 1
+            info['extended_timeout'] += self.extension_duration
+            
+            logger.info(f"Extended timeout for project {project_id} by {self.extension_duration}s (extension #{info['timeout_extensions']}/{self.max_extensions}) - {reason}")
+            return True
+
+    def get_effective_timeout(self, project_id: int) -> int:
+        """Get the current effective timeout for a process (including extensions)."""
+        with self._lock:
+            info = self.active_processes.get(project_id)
+            if not info:
+                return self.max_runtime
+            return info.get('extended_timeout', self.max_runtime)
+
+    def heartbeat_with_extension(self, project_id: int, operation_name: str = "Long operation") -> dict:
+        """
+        Update heartbeat and potentially extend timeout if nearing expiration.
+        
+        This is a convenience method for long-running operations to call periodically.
+        It updates the heartbeat and automatically requests timeout extension if needed.
+        
+        Args:
+            project_id: Project ID to heartbeat
+            operation_name: Name of the operation (for logging)
+            
+        Returns:
+            dict with status information:
+            {
+                'heartbeat_updated': bool,
+                'extension_granted': bool,
+                'timeout_remaining': int,
+                'extensions_used': int,
+                'max_extensions': int
+            }
+        """
+        result = {
+            'heartbeat_updated': False,
+            'extension_granted': False,
+            'timeout_remaining': 0,
+            'extensions_used': 0,
+            'max_extensions': self.max_extensions
+        }
+        
+        # Update heartbeat first
+        self.update_heartbeat(project_id)
+        result['heartbeat_updated'] = True
+        
+        # Check if we need extension
+        with self._lock:
+            info = self.active_processes.get(project_id)
+            if not info:
+                return result
+                
+            current_time = time.time()
+            runtime = current_time - info['start_time']
+            effective_timeout = info.get('extended_timeout', self.max_runtime)
+            remaining = max(0, effective_timeout - runtime)
+            extensions_used = info.get('timeout_extensions', 0)
+            
+            result['timeout_remaining'] = int(remaining)
+            result['extensions_used'] = extensions_used
+            
+            # Auto-extend if we're within 5 minutes of timeout and haven't maxed out extensions
+            if (remaining < 300 and  # Less than 5 minutes remaining
+                extensions_used < self.max_extensions):
+                if self.extend_timeout(project_id, f"Auto-extension during {operation_name}"):
+                    result['extension_granted'] = True
+                    result['timeout_remaining'] = int(remaining + self.extension_duration)
+        
+        return result
+
     def get_active_count(self) -> int:
         """Get count of currently tracked processes."""
         with self._lock:
@@ -156,10 +265,17 @@ class ProcessManager:
                 return None
             
             # Add runtime calculation
-            runtime = time.time() - info['start_time']
+            current_time = time.time()
+            runtime = current_time - info['start_time']
+            heartbeat_age = current_time - info['last_heartbeat']
+            effective_timeout = info.get('extended_timeout', self.max_runtime)
+            
             return {
                 **info,
                 'runtime_seconds': runtime,
+                'heartbeat_age_seconds': heartbeat_age,
+                'effective_timeout_seconds': effective_timeout,
+                'timeout_remaining_seconds': max(0, effective_timeout - runtime),
                 'is_alive': self.is_alive(project_id)
             }
 
@@ -167,11 +283,18 @@ class ProcessManager:
         """Get info for all tracked processes (for debugging/monitoring)."""
         with self._lock:
             result = {}
+            current_time = time.time()
             for project_id, info in self.active_processes.items():
-                runtime = time.time() - info['start_time']
+                runtime = current_time - info['start_time']
+                heartbeat_age = current_time - info['last_heartbeat']
+                effective_timeout = info.get('extended_timeout', self.max_runtime)
+                
                 result[project_id] = {
                     **info,
                     'runtime_seconds': runtime,
+                    'heartbeat_age_seconds': heartbeat_age,
+                    'effective_timeout_seconds': effective_timeout,
+                    'timeout_remaining_seconds': max(0, effective_timeout - runtime),
                     'is_alive': self.is_alive(project_id)
                 }
             return result
@@ -198,11 +321,26 @@ class ProcessManager:
                     to_remove.append(project_id)
                     continue
                 
-                # Check for timeout
-                if runtime > self.max_runtime:
-                    logger.warning(f"Process {pid} for project {project_id} exceeded timeout ({runtime:.1f}s > {self.max_runtime}s)")
-                    if self.kill(project_id, force=True, reason=f"Timeout after {runtime:.1f}s"):
-                        to_remove.append(project_id)
+                # Check for timeout using extended timeout
+                effective_timeout = info.get('extended_timeout', self.max_runtime)
+                heartbeat_age = current_time - info['last_heartbeat']
+                
+                if runtime > effective_timeout:
+                    # Check if we can auto-extend based on recent heartbeat
+                    if (heartbeat_age <= self.heartbeat_timeout and 
+                        info.get('timeout_extensions', 0) < self.max_extensions):
+                        # Auto-extend timeout
+                        with self._lock:
+                            if project_id in self.active_processes:  # Double-check still exists
+                                self.active_processes[project_id]['timeout_extensions'] += 1
+                                self.active_processes[project_id]['extended_timeout'] += self.extension_duration
+                                extensions = self.active_processes[project_id]['timeout_extensions']
+                                logger.info(f"Auto-extended timeout for project {project_id} by {self.extension_duration}s due to recent heartbeat (extension #{extensions}/{self.max_extensions})")
+                    else:
+                        # No more extensions available or stale heartbeat
+                        logger.warning(f"Process {pid} for project {project_id} exceeded timeout ({runtime:.1f}s > {effective_timeout}s, heartbeat age: {heartbeat_age:.1f}s)")
+                        if self.kill(project_id, force=True, reason=f"Timeout after {runtime:.1f}s"):
+                            to_remove.append(project_id)
                 
             # Clean up removed processes
             with self._lock:
