@@ -1,7 +1,10 @@
 #!/usr/bin/env -S uv run --quiet --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = [
+#     "psutil",
+#     "python-dotenv",
+# ]
 # ///
 """
 Tmux Orchestrator Scheduler - Replaces at command with reliable Python-based scheduling
@@ -17,11 +20,13 @@ import logging
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Callable, Tuple
+import psutil  # For process scanning
 
 # NEW: Imports for inter-process locking
 import json
 import socket
+import signal
 from fcntl import flock, LOCK_EX, LOCK_NB, LOCK_UN
 import atexit
 
@@ -29,6 +34,7 @@ import atexit
 sys.path.append(str(Path(__file__).parent))
 from session_state import SessionStateManager, SessionState
 from email_notifier import get_email_notifier
+from process_manager import ProcessManager  # NEW: Import ProcessManager for subprocess tracking
 
 # Setup logging
 logging.basicConfig(
@@ -66,6 +72,16 @@ class TmuxOrchestratorScheduler:
         self.processing_events = set()
         self._event_lock = threading.Lock()
         
+        # NEW: Initialize ProcessManager for subprocess tracking and timeout enforcement
+        self.process_manager = ProcessManager(
+            max_runtime=int(os.getenv('MAX_AUTO_ORCHESTRATE_RUNTIME_SEC', 1800)),  # Default 30 minutes for Claude analysis
+            monitor_interval=int(os.getenv('PROCESS_MONITOR_INTERVAL_SEC', 30))   # Check every 30 seconds
+        )
+        
+        # Configure phantom detection grace period for long-running Claude analysis
+        self.phantom_grace_period = int(os.getenv('PHANTOM_GRACE_PERIOD_SEC', 900))  # Default 15 minutes instead of 2
+        logger.info(f"ProcessManager initialized with {self.process_manager.max_runtime}s timeout")
+        
         self.setup_database()
         
         # Clean stale registry entries on startup
@@ -79,8 +95,16 @@ class TmuxOrchestratorScheduler:
         self.event_subscribers.setdefault('authorization_request', [])
         self.event_subscribers.setdefault('authorization_response', [])
         
+        # CRITICAL: Run phantom detection on startup to clean up stuck projects
+        logger.info("Running initial phantom project detection...")
+        self.detect_and_reset_phantom_projects()
+        
         # NEW: Register lock release on exit
         atexit.register(self._release_process_lock)
+        
+        # NEW: Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
         
         # Start batch monitoring thread if enabled
         self._monitoring_enabled = os.getenv('ENABLE_BATCH_MONITORING', 'true').lower() == 'true'
@@ -162,9 +186,10 @@ class TmuxOrchestratorScheduler:
     
     # NEW: Release inter-process lock
     def _release_process_lock(self):
-        if self.lock_fd:
+        if self.lock_fd and not self.lock_fd.closed:
             flock(self.lock_fd, LOCK_UN)
             self.lock_fd.close()
+            self.lock_fd = None
             logger.info("Released process lock")
     
     # NEW: Heartbeat thread to keep lock fresh
@@ -190,53 +215,270 @@ class TmuxOrchestratorScheduler:
             self._stop_monitoring.wait(30)
     
     def check_stuck_projects(self):
-        """Auto-reset projects stuck in processing >4 hours"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            UPDATE project_queue 
-            SET status = 'failed', 
-                error_message = 'Auto-reset: Timeout after 4 hours in processing',
-                completed_at = strftime('%s', 'now')
-            WHERE status = 'processing' 
-            AND strftime('%s', 'now') - started_at > 14400
-        """)
-        affected = cursor.rowcount
-        self.conn.commit()
-        if affected > 0:
-            logger.warning(f"Auto-reset {affected} stuck projects to 'failed'")
+        """Enhanced stuck project detection with configurable timeout and liveness checks"""
+        stuck_timeout_hours = int(os.getenv('STUCK_TIMEOUT_HOURS', '4'))
+        timeout_seconds = stuck_timeout_hours * 3600
+        
+        with self.queue_lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT id, project_path, started_at, orchestrator_session, main_session, spec_path, session_name
+                FROM project_queue 
+                WHERE status = 'processing'
+            """)
+            
+            now = int(time.time())
+            for row in cursor.fetchall():
+                project_id, project_path, started_at, orch_session, main_session, spec_path, session_name = row
+                is_stuck = False
+                reason = None
+                
+                # Derive project name from spec path (for state manager)
+                project_name = None
+                if spec_path:
+                    project_name = Path(spec_path).stem.lower().replace('_', '-')
+                
+                # Time-based timeout
+                if started_at and now - int(started_at) > timeout_seconds:
+                    is_stuck = True
+                    reason = f'Timeout after {stuck_timeout_hours} hours in processing'
+                
+                # Liveness check even if not timed out - USE session_name column directly
+                elif session_name:
+                    # Use the session_name from database directly instead of trying to derive it
+                    is_live, liveness_reason = self.validate_session_liveness(session_name, project_id=project_id, spec_path=spec_path)
+                    if not is_live:
+                        is_stuck = True
+                        reason = liveness_reason
+                # Fallback: if no session_name, try orchestrator_session or main_session, or pattern matching
+                elif orch_session:
+                    is_live, liveness_reason = self.validate_session_liveness(orch_session, project_id=project_id, spec_path=spec_path)
+                    if not is_live:
+                        is_stuck = True
+                        reason = liveness_reason
+                elif main_session:
+                    is_live, liveness_reason = self.validate_session_liveness(main_session, project_id=project_id, spec_path=spec_path)
+                    if not is_live:
+                        is_stuck = True
+                        reason = liveness_reason
+                else:
+                    # No session names in database - use pattern matching fallback
+                    is_live, liveness_reason = self.validate_session_liveness(None, project_id=project_id, spec_path=spec_path)
+                    if not is_live:
+                        is_stuck = True
+                        reason = liveness_reason
+                
+                if is_stuck:
+                    cursor.execute("""
+                        UPDATE project_queue 
+                        SET status = 'failed', 
+                            error_message = ?,
+                            completed_at = strftime('%s', 'now')
+                        WHERE id = ?
+                    """, (f'Auto-reset: {reason}', project_id))
+                    
+                    if project_name:
+                        state = self.session_state_manager.load_session_state(project_name)
+                        if state:
+                            state.completion_status = 'failed'
+                            state.failure_reason = reason
+                            self.session_state_manager.save_session_state(state)
+                    
+                    logger.warning(f"Reset stuck project {project_id}: {reason}")
+                    self._dispatch_event('project_complete', {
+                        'project_id': project_id,
+                        'status': 'failed',
+                        'reason': reason,
+                        'project_name': project_name
+                    })
+            
+            self.conn.commit()
     
-    def check_and_reset_specific_project(self, project_id: int, force: bool = False) -> bool:
-        """Check if a specific project is stuck and optionally reset it"""
-        cursor = self.conn.cursor()
+    def reset_project_to_queued(self, project_id: int, _internal_call: bool = False) -> bool:
+        """Reset a project to queued status regardless of current status"""
+        if _internal_call:
+            # Already have lock, don't acquire again
+            cursor = self.conn.cursor()
+        else:
+            # External call, acquire lock
+            with self.queue_lock:
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    SELECT id FROM project_queue WHERE id = ?
+                """, (project_id,))
+                row = cursor.fetchone()
+                if not row:
+                    logger.error(f"Project {project_id} not found")
+                    return False
+                
+                cursor.execute("""
+                    UPDATE project_queue 
+                    SET status = 'queued', started_at = NULL, completed_at = NULL, 
+                        error_message = NULL, orchestrator_session = NULL, main_session = NULL
+                    WHERE id = ?
+                """, (project_id,))
+                self.conn.commit()
+                logger.info(f"Project {project_id} reset to queued status")
+                return True
+        
+        # Internal call path
         cursor.execute("""
-            SELECT status, started_at, orchestrator_session, main_session
-            FROM project_queue 
-            WHERE id = ?
+            SELECT id FROM project_queue WHERE id = ?
         """, (project_id,))
         row = cursor.fetchone()
         if not row:
             logger.error(f"Project {project_id} not found")
             return False
         
-        status, started_at, orch_session, main_session = row
-        if status != 'processing':
-            logger.info(f"Project {project_id} is {status}, not processing")
-            return False
-        
-        is_stuck = False
-        if started_at and time.time() - float(started_at) > 7200:  # 2 hours (reduced from 4)
-            is_stuck = True
-            logger.info(f"Project {project_id} has been running for {(time.time() - float(started_at))/3600:.1f} hours")
-        elif orch_session and not self._session_exists(orch_session):  # Check tmux
-            is_stuck = True
-            logger.info(f"Project {project_id} orchestrator session '{orch_session}' no longer exists")
-        
-        if is_stuck or force:
-            self.mark_project_complete(project_id, success=False, error_message='Manual reset: Project appeared stuck or orphaned')
-            logger.warning(f"Reset project {project_id} to failed")
-            return True
-        logger.info(f"Project {project_id} appears to be running normally")
+        cursor.execute("""
+            UPDATE project_queue 
+            SET status = 'queued', started_at = NULL, completed_at = NULL, 
+                error_message = NULL, orchestrator_session = NULL, main_session = NULL
+            WHERE id = ?
+        """, (project_id,))
+        self.conn.commit()
+        logger.info(f"Project {project_id} reset to queued status")
+        return True
+
+    def check_and_reset_specific_project(self, project_id: int, force: bool = False) -> bool:
+        """Check if a specific project is stuck and optionally reset it"""
+        with self.queue_lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT status, started_at, orchestrator_session, main_session, session_name
+                FROM project_queue 
+                WHERE id = ?
+            """, (project_id,))
+            row = cursor.fetchone()
+            if not row:
+                logger.error(f"Project {project_id} not found")
+                return False
+            
+            status, started_at, orch_session, main_session, session_name = row
+            
+            # If force is specified, always reset regardless of status
+            if force:
+                return self.reset_project_to_queued(project_id, _internal_call=True)
+            
+            if status != 'processing':
+                logger.info(f"Project {project_id} is {status}, not processing")
+                return False
+            
+            is_stuck = False
+            if started_at and time.time() - float(started_at) > 7200:  # 2 hours (reduced from 4)
+                is_stuck = True
+                logger.info(f"Project {project_id} has been running for {(time.time() - float(started_at))/3600:.1f} hours")
+            elif session_name and not self._session_exists(session_name):  # Check tmux using session_name
+                is_stuck = True
+                logger.info(f"Project {project_id} session '{session_name}' no longer exists")
+            elif not session_name and orch_session and not self._session_exists(orch_session):  # Fallback to orchestrator_session
+                is_stuck = True
+                logger.info(f"Project {project_id} orchestrator session '{orch_session}' no longer exists")
+            
+            if is_stuck:
+                self.mark_project_complete(project_id, success=False, error_message='Manual reset: Project appeared stuck or orphaned')
+                logger.warning(f"Reset project {project_id} to failed")
+                return True
+            logger.info(f"Project {project_id} appears to be running normally")
         return False
+    
+    def detect_and_reset_phantom_projects(self) -> int:
+        """
+        CRITICAL: Detect and reset phantom PROCESSING projects that have no tmux sessions.
+        Enhanced version with process scanning using psutil.
+        
+        Returns: Number of phantom projects reset
+        """
+        reset_count = 0
+        
+        with self.queue_lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT id, project_path, orchestrator_session, main_session, started_at, spec_path
+                FROM project_queue 
+                WHERE status = 'processing'
+            """)
+            
+            for row in cursor.fetchall():
+                project_id, project_path, orch_session, main_session, started_at, spec_path = row
+                
+                # Derive project name from spec path
+                project_name = None
+                if spec_path:
+                    project_name = Path(spec_path).stem.lower().replace('_', '-')
+                
+                # Skip if project just started (configurable grace period for Claude analysis)
+                grace_period = self.phantom_grace_period  # Use configurable value
+                elapsed = time.time() - float(started_at) if started_at else 0
+                
+                if started_at and elapsed < grace_period:
+                    logger.debug(f"Project {project_id} is within grace period ({grace_period}s), skipping (elapsed: {elapsed:.0f}s)")
+                    continue
+                
+                # Check 1: No session name set (auto_orchestrate.py failed before session creation)
+                if not orch_session and not main_session:
+                    # NEW: Check if process is still alive via ProcessManager before flagging
+                    if self.process_manager.is_alive(project_id):
+                        logger.debug(f"Project {project_id} has no session but process is alive ({elapsed:.0f}s elapsed) - skipping phantom reset")
+                        continue
+                    
+                    if started_at and elapsed > grace_period:
+                        self._reset_phantom_project(cursor, project_id, project_name or "unknown", 
+                                                  reason=f"No session created after {grace_period}s (elapsed: {elapsed:.0f}s)")
+                        reset_count += 1
+                        logger.warning(f"Phantom reset for {project_id}: No session after {elapsed:.0f}s, no active process")
+                        continue
+                
+                # Check 2: Session validation (with pattern matching fallback if no session name)
+                session_to_check = orch_session or main_session
+                if session_to_check:
+                    is_live, reason = self.validate_session_liveness(session_to_check, project_id=project_id, spec_path=spec_path)
+                    if not is_live:
+                        self._reset_phantom_project(cursor, project_id, project_name or "unknown", reason=reason)
+                        reset_count += 1
+                        continue
+                else:
+                    # No session names recorded - try pattern matching fallback
+                    is_live, reason = self.validate_session_liveness(None, project_id=project_id, spec_path=spec_path)
+                    if not is_live:
+                        self._reset_phantom_project(cursor, project_id, project_name or "unknown", reason=reason)
+                        reset_count += 1
+                        continue
+                
+                # Check 3: Running auto_orchestrate.py process
+                is_running = False
+                try:
+                    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                        try:
+                            cmdline = proc.info['cmdline']
+                            if cmdline and any('auto_orchestrate.py' in arg for arg in cmdline):
+                                # Check if this process is for our project
+                                if project_name and any(project_name in arg for arg in cmdline):
+                                    is_running = True
+                                    break
+                                # Also check by project ID
+                                if any(f'--project-id {project_id}' in ' '.join(cmdline) for arg in cmdline):
+                                    is_running = True
+                                    break
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+                except Exception as e:
+                    logger.error(f"Error checking processes: {e}")
+                
+                if not is_running and started_at and time.time() - float(started_at) > 300:  # 5 minutes
+                    self._reset_phantom_project(cursor, project_id, project_name or "unknown", 
+                                              reason="No running auto_orchestrate.py process after 5 minutes")
+                    reset_count += 1
+                    continue
+            
+            self.conn.commit()
+        
+        if reset_count > 0:
+            logger.warning(f"Reset {reset_count} phantom PROCESSING projects")
+        else:
+            logger.debug("No phantom projects detected")
+            
+        return reset_count
     
     def remove_project_from_queue(self, project_id: int) -> bool:
         """Remove a project from the queue (for completed/failed projects)"""
@@ -369,6 +611,303 @@ class TmuxOrchestratorScheduler:
             logger.error(f"Failed to update completion status for project {project_id}: {e}")
         except Exception as e:
             logger.error(f"Unexpected error marking project {project_id} complete: {e}")
+    
+    def _reset_phantom_project(self, cursor, project_id: int, project_name: str, reason: str):
+        """Helper to reset a phantom project and update state."""
+        error_msg = f"Phantom project detected: {reason}"
+        cursor.execute("""
+            UPDATE project_queue 
+            SET status = 'failed', 
+                error_message = ?,
+                completed_at = strftime('%s', 'now')
+            WHERE id = ?
+        """, (error_msg, project_id))
+        logger.warning(f"Reset phantom project {project_id} ({project_name}): {reason}")
+        
+        # Update session state if exists
+        state = self.session_state_manager.load_session_state(project_name) if project_name else None
+        if state:
+            state.completion_status = 'failed'
+            state.failure_reason = reason
+            self.session_state_manager.save_session_state(state)
+        
+        # Dispatch event for notifications
+        self._dispatch_event('project_complete', {
+            'project_id': project_id, 
+            'status': 'failed', 
+            'reason': reason,
+            'project_name': project_name
+        })
+    
+    def validate_session_liveness(self, session_name: str, grace_period_sec: int = 900, project_id: int = None, spec_path: str = None) -> Tuple[bool, str]:
+        """Validate tmux session liveness with multiple checks and pattern matching fallback.
+        
+        Args:
+            session_name: Tmux session name to check. If None, uses pattern matching.
+            grace_period_sec: Allow recent sessions to pass even if not fully active (e.g., during startup).
+            project_id: Project ID for pattern matching fallback (optional).
+            spec_path: Spec path for pattern matching fallback (optional).
+        
+        Returns:
+            (is_live, reason): True if live, else False with failure reason.
+        """
+        now = int(time.time())
+        
+        # Primary check: If we have a session name, use it directly
+        if session_name and session_name.strip():
+            return self._check_session_directly(session_name, now, grace_period_sec)
+        
+        # Fallback: Pattern matching scan for sessions when session_name is missing
+        logger.info(f"Session name missing for project {project_id}, attempting pattern matching scan...")
+        return self._scan_active_sessions_for_project(project_id, spec_path, now, grace_period_sec)
+    
+    def _check_session_directly(self, session_name: str, now: int, grace_period_sec: int) -> Tuple[bool, str]:
+        """Direct session validation for known session names"""
+        # Check existence
+        try:
+            result = subprocess.run(['tmux', 'has-session', '-t', session_name], capture_output=True)
+            if result.returncode != 0:
+                return False, f"Session '{session_name}' does not exist"
+        except Exception as e:
+            return False, f"Session existence check failed: {e}"
+        
+        # Check for dead panes
+        try:
+            panes = subprocess.run(
+                ['tmux', 'list-panes', '-t', session_name, '-F', '#{pane_dead}'],
+                capture_output=True, text=True
+            )
+            if panes.returncode != 0:
+                return False, "Failed to list panes"
+            
+            if '1' in panes.stdout.strip().split('\n'):
+                return False, "Session has dead panes"
+            
+            # Check activity (last activity time)
+            activity = subprocess.run(
+                ['tmux', 'display-message', '-t', session_name, '-p', '#{session_activity}'],
+                capture_output=True, text=True
+            )
+            if activity.returncode == 0 and activity.stdout.strip():
+                try:
+                    last_active = int(activity.stdout.strip())
+                    idle_time = now - last_active
+                    # More lenient idle threshold - some sessions may be idle but still valid
+                    # e.g., completed work but waiting for manual review
+                    if idle_time > 7200:  # 2 hour idle threshold instead of 30min
+                        return False, f"Session inactive for {idle_time//60} minutes"
+                except:
+                    # If we can't parse activity, check start time
+                    pass
+            
+            # Check session creation time for grace period
+            created = subprocess.run(
+                ['tmux', 'display-message', '-t', session_name, '-p', '#{session_created}'],
+                capture_output=True, text=True
+            )
+            if created.returncode == 0 and created.stdout.strip():
+                try:
+                    created_time = int(created.stdout.strip())
+                    if now - created_time < grace_period_sec:
+                        return True, f"Session '{session_name}' is new and within grace period"
+                except:
+                    pass
+        except Exception as e:
+            return False, f"Liveness check failed: {e}"
+        
+        # Check for active processes in panes
+        processes = subprocess.run(
+            ['tmux', 'list-panes', '-t', session_name, '-F', '#{pane_pid}'],
+            capture_output=True, text=True
+        )
+        if processes.returncode != 0 or not processes.stdout.strip():
+            return False, "No active processes in panes"
+        
+        return True, f"Session '{session_name}' is live"
+    
+    def _scan_active_sessions_for_project(self, project_id: int, spec_path: str, now: int, grace_period_sec: int) -> Tuple[bool, str]:
+        """Scan all active tmux sessions looking for ones that might belong to this project"""
+        try:
+            # Get all active sessions
+            result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}:#{session_created}'], 
+                                  capture_output=True, text=True)
+            if result.returncode != 0:
+                return False, "Failed to list tmux sessions"
+            
+            project_keywords = []
+            if spec_path:
+                # Extract keywords from spec path for pattern matching
+                path_parts = spec_path.lower().split('/')
+                for part in path_parts:
+                    # Look for relevant parts
+                    if any(term in part for term in ['elliott', 'wave', 'options', 'reporting', 'backtesting']):
+                        project_keywords.extend(part.split('_'))
+                        project_keywords.extend(part.split('-'))
+                
+                # Add specific keywords based on spec name patterns
+                spec_name = os.path.basename(spec_path).lower()
+                if 'reporting' in spec_name:
+                    project_keywords.extend(['elliott', 'wave', 'options', 'report', 'reporting', 'generation'])
+                elif 'backtesting' in spec_name:
+                    project_keywords.extend(['elliott', 'wave', 'backtesting', 'implementation'])
+                elif 'elliott' in spec_name:
+                    project_keywords.extend(['elliott', 'wave'])
+            
+            # Look for sessions matching project patterns
+            candidate_sessions = []
+            for line in result.stdout.strip().split('\n'):
+                if ':' not in line:
+                    continue
+                    
+                session_name, created_str = line.split(':', 1)
+                
+                # More flexible matching - check if session looks like our project sessions
+                is_project_session = False
+                
+                # Direct impl pattern match
+                if '-impl-' in session_name:
+                    is_project_session = True
+                
+                # Keyword-based match (more flexible)
+                if project_keywords and any(keyword in session_name.lower() 
+                                          for keyword in project_keywords if keyword and len(keyword) > 2):
+                    is_project_session = True
+                
+                # Elliott Wave specific patterns
+                if 'elliott' in session_name.lower() and any(term in session_name.lower() 
+                                                           for term in ['wave', 'options', 'report', 'backtesting']):
+                    is_project_session = True
+                
+                if not is_project_session:
+                    continue
+                
+                # Check if session is recent enough to be relevant
+                # Be more lenient - projects can run for many hours legitimately
+                try:
+                    created_time = int(created_str)
+                    session_age = now - created_time
+                    # Only skip sessions older than 8 hours (projects can legitimately run long)
+                    if session_age > 28800:  # 8 hours instead of 2 hours
+                        continue
+                except:
+                    continue
+                
+                candidate_sessions.append((session_name, created_time))
+            
+            if not candidate_sessions:
+                return False, f"No candidate sessions found for project {project_id} (keywords: {project_keywords})"
+            
+            # Check the most recent candidate session
+            candidate_sessions.sort(key=lambda x: x[1], reverse=True)  # Sort by creation time, newest first
+            best_match, _ = candidate_sessions[0]
+            
+            logger.info(f"Found candidate session '{best_match}' for project {project_id}")
+            
+            # Validate the candidate session
+            is_live, reason = self._check_session_directly(best_match, now, grace_period_sec)
+            
+            if is_live:
+                # Update database with discovered session name
+                try:
+                    with self.conn:
+                        cursor = self.conn.cursor()
+                        cursor.execute("UPDATE project_queue SET session_name = ? WHERE id = ?", 
+                                     (best_match, project_id))
+                        logger.info(f"Updated project {project_id} with discovered session name: {best_match}")
+                except Exception as e:
+                    logger.error(f"Failed to update discovered session name: {e}")
+                
+                return True, f"Found active session '{best_match}' via pattern matching"
+            else:
+                return False, f"Candidate session '{best_match}' failed validation: {reason}"
+                
+        except Exception as e:
+            return False, f"Pattern matching scan failed: {e}"
+    
+    def _dispatch_event(self, event: str, data: Dict[str, Any]):
+        """Dispatch an event to all subscribers"""
+        for callback in self.event_subscribers.get(event, []):
+            try:
+                callback(data)
+            except Exception as e:
+                logger.error(f"Error in event callback {callback.__name__}: {e}")
+    
+    def process_signal_files(self) -> int:
+        """Process signal files for reset operations"""
+        processed = 0
+        signal_dir = Path('signals')
+        if not signal_dir.exists():
+            return 0
+        
+        for signal_file in signal_dir.glob('reset_project_*.signal'):
+            try:
+                with open(signal_file, 'r') as f:
+                    import json
+                    signal_data = json.loads(f.read())
+                
+                project_id = signal_data['project_id']
+                logger.info(f"Processing reset signal for project {project_id}")
+                
+                # Process the reset
+                success = self.reset_project_to_queued(project_id)
+                if success:
+                    logger.info(f"Successfully reset project {project_id} via signal")
+                    processed += 1
+                else:
+                    logger.error(f"Failed to reset project {project_id} via signal")
+                
+                # Remove processed signal file
+                signal_file.unlink()
+                
+            except Exception as e:
+                logger.error(f"Error processing signal file {signal_file}: {e}")
+                # Remove corrupted signal file
+                try:
+                    signal_file.unlink()
+                except:
+                    pass
+        
+        return processed
+
+    def detect_completed_projects(self):
+        """Sync completion status from SessionState to project_queue."""
+        with self.queue_lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id, project_path, spec_path FROM project_queue WHERE status = 'processing'")
+            
+            for row in cursor.fetchall():
+                project_id, project_path, spec_path = row
+                
+                # Derive project name from spec path
+                project_name = None
+                if spec_path:
+                    project_name = Path(spec_path).stem.lower().replace('_', '-')
+                
+                if not project_name:
+                    continue
+                    
+                state = self.session_state_manager.load_session_state(project_name)
+                if not state:
+                    continue
+                
+                if state.completion_status in ['completed', 'failed']:
+                    status = state.completion_status
+                    error_msg = state.failure_reason if status == 'failed' else None
+                    cursor.execute("""
+                        UPDATE project_queue 
+                        SET status = ?, 
+                            error_message = ?,
+                            completed_at = strftime('%s', 'now')
+                        WHERE id = ?
+                    """, (status, error_msg, project_id))
+                    logger.info(f"Synced completion for project {project_id} ({project_name}) to {status}")
+                    self._dispatch_event('project_complete', {
+                        'project_id': project_id, 
+                        'status': status,
+                        'project_name': project_name
+                    })
+            
+            self.conn.commit()
         
     def setup_database(self):
         """Initialize SQLite database for persistent task storage"""
@@ -821,141 +1360,262 @@ class TmuxOrchestratorScheduler:
         
         while True:
             try:
-                with FileLock(str(self.tmux_orchestrator_path / 'locks' / 'project_queue.lock'), timeout=30):
-                    # Check for stuck projects and auto-reset them
-                    self.check_stuck_projects()
+                # Check for stuck projects and auto-reset them
+                # NOTE: Process already holds lock via _acquire_process_lock(), no additional FileLock needed
+                self.check_stuck_projects()
+                
+                # CRITICAL: Check for phantom PROCESSING projects and reset them
+                phantom_count = self.detect_and_reset_phantom_projects()
+                if phantom_count > 0:
+                    logger.warning(f"Detected and reset {phantom_count} phantom projects")
+                
+                # CRITICAL: Check for active orchestrations before processing ANY queued project
+                logger.debug("Checking for active orchestrations before processing queue...")
+                active_check = self.has_active_orchestrations()
+                logger.info(f"Active orchestration check result: {active_check}")
+                if active_check:
+                    logger.info("Active orchestrations detected - waiting before processing queue...")
+                    time.sleep(poll_interval)  # Wait before retrying
+                    continue
+                
+                # FIXED: Use atomic dequeue to ensure only one project processes at a time
+                next_project = self.get_next_project_atomic()
+                if next_project:
+                    project_start_time = time.time()
+                    # Project is already marked as 'processing' by atomic method
                     
-                    # CRITICAL: Check for active orchestrations before processing ANY queued project
-                    logger.debug("Checking for active orchestrations before processing queue...")
-                    active_check = self.has_active_orchestrations()
-                    logger.info(f"Active orchestration check result: {active_check}")
-                    if active_check:
-                        logger.info("Active orchestrations detected - waiting before processing queue...")
-                        time.sleep(poll_interval)  # Wait before retrying
-                        continue
+                    # Extract project name from spec path
+                    spec_path = Path(next_project['spec_path'])
+                    project_name = spec_path.stem
                     
-                    # FIXED: Use atomic dequeue to ensure only one project processes at a time
-                    next_project = self.get_next_project_atomic()
-                    if next_project:
-                        project_start_time = time.time()
-                        # Project is already marked as 'processing' by atomic method
+                    try:
+                        # Prepare project_path arg ('auto' if None)
+                        proj_arg = next_project['project_path'] or 'auto'
                         
-                        # Extract project name from spec path
-                        spec_path = Path(next_project['spec_path'])
-                        project_name = spec_path.stem
-                        
-                        try:
-                            # Prepare project_path arg ('auto' if None)
-                            proj_arg = next_project['project_path'] or 'auto'
-                            
-                            # CRITICAL: Determine if this should be resume vs create new
-                            should_resume = False
-                            if proj_arg != 'auto':
-                                # Specific project path provided - check if orchestration exists
-                                try:
-                                    state = self.session_state_manager.load_session_state(project_name)
-                                    should_resume = state is not None and state.session_name
-                                    if should_resume:
-                                        logger.info(f"Found existing orchestration for {project_name} - will resume")
-                                    else:
-                                        logger.info(f"No existing orchestration for {project_name} - will create new")
-                                except Exception as e:
-                                    logger.warning(f"Could not check session state for {project_name}: {e}")
-                                    should_resume = False
-                            else:
-                                # Auto-detect mode - never resume, always create new
-                                logger.info(f"Auto-detect mode for {project_name} - will create new orchestration")
-                                should_resume = False
-                            
-                            # Build command
-                            cmd = [
-                                'uv', 'run', '--quiet', '--script',
-                                str(self.tmux_orchestrator_path / 'auto_orchestrate.py'),
-                                '--spec', next_project['spec_path'],
-                                '--project', proj_arg,
-                                '--project-id', str(next_project['id']),  # FIXED: Pass project ID for completion callback
-                                '--batch',  # Enable non-interactive mode (now works with --project-id fix)
-                                '--daemon',  # Force unattended mode with auto-defaults
-                            ]
-                            
-                            # Add resume flag only if we determined we should resume
-                            if should_resume:
-                                cmd.append('--resume')
-                                logger.info(f"Adding --resume flag for existing project {project_name}")
-                            
-                            # Add --overwrite flag if this is a fresh start request (only for new projects)
-                            if next_project.get('fresh_start', False) and not should_resume:
-                                cmd.append('--overwrite')
-                                logger.info(f"Adding --overwrite flag for fresh start project {project_name}")
-                            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-                            # FIXED: Keep project in 'processing' until actual orchestration work completes
-                            # Project remains 'processing' - will be marked 'completed' by orchestration agents
-                            logger.info(f"Started project {next_project['id']} - orchestration setup completed, project remains in processing")
-                            
-                            # Track started (not completed yet)
-                            completed_projects.append(f"{project_name} (ID: {next_project['id']}) - Setup Complete")
-                            
-                            # Send individual project completion email
-                            # Note: auto_orchestrate.py already sends its own email, 
-                            # but we can send an additional batch notification here
-                            duration = int(time.time() - project_start_time)
-                            
-                        except subprocess.CalledProcessError as e:
-                            error_msg = f"Subprocess failed: {e.stderr}"
-                            self.update_project_status(next_project['id'], 'failed', error_msg)
-                            logger.error(error_msg)
-                            
-                            # Track failure
-                            failed_projects.append(f"{project_name} (ID: {next_project['id']})")
-                            
-                            # Send failure email
+                        # CRITICAL: Determine if this should be resume vs create new
+                        should_resume = False
+                        if proj_arg != 'auto':
+                            # Specific project path provided - check if orchestration exists
                             try:
-                                email_notifier.send_project_completion_email(
-                                    project_name=project_name,
-                                    spec_path=next_project['spec_path'],
-                                    status='failed',
-                                    error_message=error_msg,
-                                    batch_mode=True
-                                )
-                            except Exception as email_err:
-                                logger.debug(f"Failed to send failure email: {email_err}")
-                                
-                        except Exception as e:
-                            self.update_project_status(next_project['id'], 'failed', str(e))
-                            logger.error(f"Failed project {next_project['id']}: {e}")
-                            
-                            # Track failure
-                            failed_projects.append(f"{project_name} (ID: {next_project['id']})")
-                            
-                            # Send failure email
-                            try:
-                                email_notifier.send_project_completion_email(
-                                    project_name=project_name,
-                                    spec_path=next_project['spec_path'],
-                                    status='failed',
-                                    error_message=str(e),
-                                    batch_mode=True
-                                )
-                            except Exception as email_err:
-                                logger.debug(f"Failed to send failure email: {email_err}")
-                    else:
-                        # No more projects in queue
-                        if send_batch_summary and (completed_projects or failed_projects):
-                            # Send batch summary email
-                            try:
-                                total_duration = int(time.time() - batch_start_time)
-                                email_notifier.send_batch_summary_email(
-                                    completed_projects=completed_projects,
-                                    failed_projects=failed_projects,
-                                    total_duration_seconds=total_duration
-                                )
-                                # Reset batch tracking
-                                completed_projects = []
-                                failed_projects = []
-                                batch_start_time = time.time()
+                                state = self.session_state_manager.load_session_state(project_name)
+                                should_resume = state is not None and state.session_name
+                                if should_resume:
+                                    logger.info(f"Found existing orchestration for {project_name} - will resume")
+                                else:
+                                    logger.info(f"No existing orchestration for {project_name} - will create new")
                             except Exception as e:
-                                logger.debug(f"Failed to send batch summary email: {e}")
+                                logger.warning(f"Could not check session state for {project_name}: {e}")
+                                should_resume = False
+                        else:
+                            # Auto-detect mode - never resume, always create new
+                            logger.info(f"Auto-detect mode for {project_name} - will create new orchestration")
+                            should_resume = False
+                        
+                        # Build command - FIXED: Call auto_orchestrate.py directly to avoid nested uv execution
+                        # The script has shebang #!/usr/bin/env -S uv run --quiet --script
+                        cmd = [
+                            str(self.tmux_orchestrator_path / 'auto_orchestrate.py'),
+                            '--spec', next_project['spec_path'],
+                            '--project', proj_arg,
+                            '--project-id', str(next_project['id']),  # FIXED: Pass project ID for completion callback
+                            '--batch',  # Enable non-interactive mode (now works with --project-id fix)
+                            '--daemon',  # Force unattended mode with auto-defaults
+                        ]
+                        
+                        # Add resume flag only if we determined we should resume
+                        if should_resume:
+                            cmd.append('--resume')
+                            logger.info(f"Adding --resume flag for existing project {project_name}")
+                        
+                        # Add --overwrite flag if this is a fresh start request (only for new projects)
+                        if next_project.get('fresh_start', False) and not should_resume:
+                            cmd.append('--overwrite')
+                            logger.info(f"Adding --overwrite flag for fresh start project {project_name}")
+                        # NEW: Use ProcessManager for non-blocking subprocess execution with timeout enforcement
+                        logger.info(f"Starting auto_orchestrate.py for project {next_project['id']}: {' '.join(cmd)}")
+                        
+                        # Create logs directory if needed
+                        logs_dir = self.tmux_orchestrator_path / 'logs' / 'auto_orchestrate'
+                        logs_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # Create log file for this project
+                        log_file = logs_dir / f"project_{next_project['id']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+                        
+                        # Use Popen for non-blocking execution with output capture
+                        with open(log_file, 'w') as log_handle:
+                            log_handle.write(f"=== auto_orchestrate.py output for Project {next_project['id']} ===\n")
+                            log_handle.write(f"Command: {' '.join(cmd)}\n")
+                            log_handle.write(f"Started at: {datetime.now()}\n")
+                            log_handle.write("=" * 80 + "\n\n")
+                            log_handle.flush()
+                            
+                            process = subprocess.Popen(
+                                cmd, 
+                                stdout=log_handle, 
+                                stderr=subprocess.STDOUT,  # Combine stderr with stdout
+                                text=True,
+                                cwd=str(self.tmux_orchestrator_path)
+                            )
+                        
+                        logger.info(f"auto_orchestrate.py output for project {next_project['id']} will be logged to: {log_file}")
+                        
+                        # Register process with ProcessManager for monitoring
+                        cmd_str = ' '.join(cmd[-4:])  # Last 4 args for logging
+                        self.process_manager.register(
+                            project_id=next_project['id'],
+                            pid=process.pid,
+                            cmd=f"auto_orchestrate.py {cmd_str}"
+                        )
+                        
+                        logger.info(f"Registered process {process.pid} for project {next_project['id']} with ProcessManager")
+                        
+                        # Wait for completion with periodic heartbeat
+                        start_time = time.time()
+                        
+                        while True:
+                            # Check if process completed
+                            poll_result = process.poll()
+                            if poll_result is not None:
+                                # Process completed
+                                logger.info(f"auto_orchestrate.py completed for project {next_project['id']} with exit code {poll_result}")
                                 
+                                # Log file has captured all output
+                                if poll_result != 0:
+                                    logger.error(f"auto_orchestrate.py failed for project {next_project['id']}. Check log file: {log_file}")
+                                    # Read last 200 lines from log for error context
+                                    try:
+                                        with open(log_file, 'r') as f:
+                                            lines = f.readlines()
+                                            last_lines = ''.join(lines[-200:])
+                                            logger.debug(f"Last 200 lines of output:\n{last_lines}")
+                                    except:
+                                        pass
+                                    raise subprocess.CalledProcessError(poll_result, cmd, output=str(log_file))
+                                    
+                                break
+                            
+                            # Check if ProcessManager killed the process (timeout)
+                            if not self.process_manager.is_alive(next_project['id']):
+                                logger.error(f"ProcessManager terminated process for project {next_project['id']} (likely timeout)")
+                                try:
+                                    process.terminate()
+                                    process.wait(timeout=5)
+                                except:
+                                    process.kill()
+                                raise subprocess.TimeoutExpired(cmd, self.process_manager.max_runtime)
+                            
+                            # Update heartbeat and sleep
+                            self.process_manager.update_heartbeat(next_project['id'])
+                            time.sleep(5)  # Check every 5 seconds
+                        
+                        # Create result object similar to subprocess.run
+                        class ProcessResult:
+                            def __init__(self, returncode, stdout="", stderr=""):
+                                self.returncode = returncode
+                                self.stdout = stdout
+                                self.stderr = stderr
+                        
+                        result = ProcessResult(poll_result)
+                        if result.stderr:
+                            logger.warning(f"STDERR: {result.stderr[:500]}")
+                        
+                        # CRITICAL: Validate that auto_orchestrate.py actually created a tmux session
+                        # Wait up to 30 seconds for session creation, then verify
+                        session_validated = False
+                        for attempt in range(6):  # 6 attempts, 5 seconds each = 30 seconds total
+                            time.sleep(5)
+                            
+                            # Check if any new tmux sessions were created with project-related names
+                            try:
+                                session_check = subprocess.run(['tmux', 'list-sessions'], 
+                                                             capture_output=True, text=True)
+                                if session_check.returncode == 0:
+                                    sessions = session_check.stdout
+                                    # Look for sessions containing the project name or spec keywords
+                                    project_keywords = [project_name.lower(), 'tmux-orchestrator', 'impl']
+                                    if any(keyword in sessions.lower() for keyword in project_keywords):
+                                        session_validated = True
+                                        logger.info(f"Session validation SUCCESS for project {next_project['id']}")
+                                        break
+                            except Exception as e:
+                                logger.warning(f"Session validation error: {e}")
+                        
+                        if not session_validated:
+                            # Session creation failed - mark project as failed immediately
+                            error_msg = "auto_orchestrate.py completed but no tmux session was created"
+                            self.update_project_status(next_project['id'], 'failed', error_msg)
+                            logger.error(f"SESSION VALIDATION FAILED for project {next_project['id']}: {error_msg}")
+                            failed_projects.append(f"{project_name} (ID: {next_project['id']}) - Session Creation Failed")
+                            continue
+                        
+                        # FIXED: Keep project in 'processing' until actual orchestration work completes
+                        # Project remains 'processing' - will be marked 'completed' by orchestration agents
+                        logger.info(f"Started project {next_project['id']} - orchestration setup and session validation completed")
+                        
+                        # Track started (not completed yet)
+                        completed_projects.append(f"{project_name} (ID: {next_project['id']}) - Setup Complete")
+                        
+                        # Send individual project completion email
+                        # Note: auto_orchestrate.py already sends its own email, 
+                        # but we can send an additional batch notification here
+                        duration = int(time.time() - project_start_time)
+                        
+                    except subprocess.CalledProcessError as e:
+                        error_msg = f"Subprocess failed: {e.stderr}"
+                        self.update_project_status(next_project['id'], 'failed', error_msg)
+                        logger.error(error_msg)
+                        
+                        # Track failure
+                        failed_projects.append(f"{project_name} (ID: {next_project['id']})")
+                        
+                        # Send failure email
+                        try:
+                            email_notifier.send_project_completion_email(
+                                project_name=project_name,
+                                spec_path=next_project['spec_path'],
+                                status='failed',
+                                error_message=error_msg,
+                                batch_mode=True
+                            )
+                        except Exception as email_err:
+                            logger.debug(f"Failed to send failure email: {email_err}")
+                            
+                    except Exception as e:
+                        self.update_project_status(next_project['id'], 'failed', str(e))
+                        logger.error(f"Failed project {next_project['id']}: {e}")
+                        
+                        # Track failure
+                        failed_projects.append(f"{project_name} (ID: {next_project['id']})")
+                        
+                        # Send failure email
+                        try:
+                            email_notifier.send_project_completion_email(
+                                project_name=project_name,
+                                spec_path=next_project['spec_path'],
+                                status='failed',
+                                error_message=str(e),
+                                batch_mode=True
+                            )
+                        except Exception as email_err:
+                            logger.debug(f"Failed to send failure email: {email_err}")
+                else:
+                    # No more projects in queue
+                    if send_batch_summary and (completed_projects or failed_projects):
+                        # Send batch summary email
+                        try:
+                            total_duration = int(time.time() - batch_start_time)
+                            email_notifier.send_batch_summary_email(
+                                completed_projects=completed_projects,
+                                failed_projects=failed_projects,
+                                total_duration_seconds=total_duration
+                            )
+                            # Reset batch tracking
+                            completed_projects = []
+                            failed_projects = []
+                            batch_start_time = time.time()
+                        except Exception as e:
+                            logger.debug(f"Failed to send batch summary email: {e}")
+                            
             except Exception as e:
                 logger.error(f"Daemon error: {e}")
             
@@ -1233,13 +1893,27 @@ These projects require manual review and intervention.
         return True
         
     def _monitor_batches(self):
-        """Background thread to monitor batch completion"""
-        logger.info("Starting batch monitoring loop")
+        """Enhanced background thread with all monitoring functions"""
+        logger.info("Starting enhanced batch monitoring loop")
         
-        while not self._stop_monitoring.wait(300):  # Check every 5 minutes
+        while not self._stop_monitoring.is_set():
             try:
-                # Get all distinct batch_ids with incomplete projects
+                # Check for active projects
                 cursor = self.conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM project_queue WHERE status = 'processing'")
+                active_count = cursor.fetchone()[0]
+                
+                # Adaptive polling interval - faster when projects are active
+                poll_interval = 10 if active_count > 0 else int(os.getenv('POLL_INTERVAL_SEC', '60'))
+                
+                # Run all monitoring functions
+                logger.debug("Running monitoring cycle...")
+                self.process_signal_files()
+                self.check_stuck_projects()
+                self.detect_and_reset_phantom_projects()
+                self.detect_completed_projects()
+                
+                # Original batch monitoring
                 cursor.execute("""
                     SELECT DISTINCT batch_id 
                     FROM project_queue 
@@ -1248,16 +1922,18 @@ These projects require manual review and intervention.
                 """)
                 
                 incomplete_batches = [row[0] for row in cursor.fetchall()]
-                
                 for batch_id in incomplete_batches:
                     if self._is_batch_complete(batch_id):
                         logger.info(f"Detected completion of batch {batch_id}")
                         self._handle_batch_completion(batch_id)
-                        
-            except Exception as e:
-                logger.error(f"Error in batch monitoring: {e}")
                 
-        logger.info("Batch monitoring stopped")
+            except Exception as e:
+                logger.error(f"Error in enhanced batch monitoring: {e}", exc_info=True)
+            
+            # Wait for next cycle with adaptive polling
+            self._stop_monitoring.wait(poll_interval)
+        
+        logger.info("Enhanced batch monitoring stopped")
         
     def _on_project_complete(self, event_data: Dict):
         """Handle project completion events"""
@@ -1283,6 +1959,32 @@ These projects require manual review and intervention.
         if hasattr(self, '_stop_monitoring'):
             self._stop_monitoring.set()
             logger.info("Batch monitoring stop requested")
+    
+    def shutdown(self):
+        """Clean shutdown of scheduler and all managed processes"""
+        logger.info("Scheduler shutdown initiated...")
+        
+        # Stop monitoring threads
+        self.stop_monitoring()
+        
+        # Shutdown ProcessManager (kills all tracked processes)
+        if hasattr(self, 'process_manager'):
+            self.process_manager.shutdown()
+        
+        # Release process lock
+        self._release_process_lock()
+        
+        # Close database connection
+        if hasattr(self, 'conn'):
+            self.conn.close()
+        
+        logger.info("Scheduler shutdown complete")
+    
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals gracefully"""
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        self.shutdown()
+        sys.exit(0)
 
 # CLI interface for managing tasks
 def main():
@@ -1376,6 +2078,24 @@ if __name__ == '__main__':
                 project_id = int(sys.argv[2])
                 scheduler = TmuxOrchestratorScheduler()
                 scheduler.check_and_reset_specific_project(project_id, force=False)
+                sys.exit(0)
+            except ValueError:
+                print("❌ Invalid project ID")
+                sys.exit(1)
+        elif sys.argv[1] == '--delegated-reset' and len(sys.argv) > 2:
+            # Non-blocking reset via signal file (works even when daemon is active)
+            try:
+                project_id = int(sys.argv[2])
+                signal_dir = Path('signals')
+                signal_dir.mkdir(exist_ok=True)
+                
+                signal_file = signal_dir / f'reset_project_{project_id}.signal'
+                with open(signal_file, 'w') as f:
+                    f.write(f'{{"project_id": {project_id}, "timestamp": "{datetime.now().isoformat()}", "force": true}}')
+                
+                print(f"✅ Reset signal created for project {project_id}")
+                print(f"   Signal file: {signal_file}")
+                print(f"   The daemon will process this reset within 60 seconds")
                 sys.exit(0)
             except ValueError:
                 print("❌ Invalid project ID")
