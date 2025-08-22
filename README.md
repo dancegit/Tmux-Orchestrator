@@ -9,6 +9,15 @@
 - **Persist** - Work continues even when you close your laptop
 - **Scale** - Run multiple teams working on different projects simultaneously
 
+## 🚀 Latest Updates (v3.3.0)
+
+### Major Fixes
+- **Scheduler Infinite Loop** - Fixed critical bug where tasks with `interval_minutes=0` would reschedule infinitely
+- **Message Flooding Prevention** - Resolved issue causing 700+ duplicate messages to flood the orchestrator
+- **Event Bus System** - Implemented centralized event bus with rate limiting (10 messages/minute)
+- **Extended Timeouts** - Added configurable timeouts for long-running projects (2 hours runtime, 1 hour phantom grace)
+- **Improved Monitoring** - Enhanced state management and compliance monitoring with file-based logging
+
 ## 🏗️ Architecture
 
 The Tmux Orchestrator uses a streamlined architecture with focused roles:
