@@ -1,0 +1,59 @@
+# Tmux Orchestrator Central Configuration
+# All intervals in seconds unless noted
+
+general:
+  log_level: INFO  # DEBUG, INFO, WARNING, ERROR
+  log_file: logs/orchestrator.log
+  max_log_size_mb: 100  # Rotate logs above this size
+  tmux_session: elliott-wave-5-options-trading-report-generation-mvp-impl-619fd1c8  # Default session
+
+monitoring:
+  enabled: true
+  check_interval: 300  # 5 minutes for git/compliance checks
+  max_messages_per_minute: 10  # Global rate limit for ALL messages
+  disable_tmux_messages: true  # Enforce no tmux send-keys for status/monitoring
+  use_file_logging: true  # All monitoring output to files only
+  log_dir: logs/monitoring  # Base directory for monitor logs
+  violation_severity_threshold: high  # Only notify orchestrator for 'high' severity
+
+git:
+  mode: local  # local (default, fast) or github (legacy, slow)
+  commit_interval: 1800  # 30 minutes - enforce for all agents
+  parent_branch: main  # Default - detect and override per project
+  use_worktrees: true  # Enable isolated worktrees
+  monitor_enabled: true  # Enable git compliance monitoring
+  max_branch_divergence: 20  # Max commits behind parent before alert
+
+credit_management:
+  enabled: true
+  check_interval: 300  # 5 minutes
+  auto_resume: true  # Automatically resume after reset
+  fallback_cycle_hours: 5  # Default cycle if UI parsing fails
+  grace_period_minutes: 2  # Buffer after reset before resume
+  low_credit_threshold: 20  # % remaining to warn
+
+process_management:
+  max_concurrent: 5  # Max simultaneous monitored processes
+  health_check_interval: 60  # 1 minute
+  timeout_seconds: 3600  # 1 hour per process
+  auto_kill_on_failure: true  # Kill unhealthy processes
+
+event_bus:
+  enabled: true
+  queue_size: 100  # Max queued events before dropping
+  rate_limit: 10  # Max events per minute (non-critical)
+  rate_period: 60  # Rate limit window in seconds
+  critical_types:  # Event types that bypass rate limits
+    - critical_violation
+    - system_failure
+    - credit_critical
+  log_dir: logs/events  # Event logging directory
+
+roles:
+  default_team: [orchestrator, project_manager, developer, tester]  # Base roles
+  system_deployment: [orchestrator, sysadmin, devops, securityops]  # Specialized
+
+# Integration with session_state.py
+session_state:
+  update_interval: 300  # Auto-update state every 5 minutes
+  auto_sync: true  # Enable automatic git sync on state load

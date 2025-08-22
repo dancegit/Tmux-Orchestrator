@@ -489,7 +489,27 @@ class TmuxOrchestratorScheduler:
                 
                 # Skip if project just started (configurable grace period for Claude analysis)
                 grace_period = self.phantom_grace_period  # Use configurable value
-                elapsed = time.time() - float(started_at) if started_at else 0
+                
+                # Handle both timestamp and datetime string formats
+                if started_at:
+                    if isinstance(started_at, str):
+                        # Convert datetime string to timestamp
+                        try:
+                            from datetime import datetime
+                            dt = datetime.strptime(started_at, '%Y-%m-%d %H:%M:%S')
+                            started_timestamp = dt.timestamp()
+                        except ValueError:
+                            # Try to parse as float if it's a string representation of a number
+                            try:
+                                started_timestamp = float(started_at)
+                            except ValueError:
+                                logger.error(f"Invalid started_at format for project {project_id}: {started_at}")
+                                started_timestamp = 0
+                    else:
+                        started_timestamp = float(started_at)
+                    elapsed = time.time() - started_timestamp
+                else:
+                    elapsed = 0
                 
                 if started_at and elapsed < grace_period:
                     logger.debug(f"Project {project_id} is within grace period ({grace_period}s), skipping (elapsed: {elapsed:.0f}s)")
@@ -1454,13 +1474,23 @@ class TmuxOrchestratorScheduler:
             success = self.run_task(task_id, session_name, agent_role, window_index, note)
             
             if success:
-                # Reschedule for next interval
-                next_run = now + (interval_minutes * 60)
-                self.conn.execute("""
-                    UPDATE tasks 
-                    SET next_run = ?, retry_count = 0 
-                    WHERE id = ?
-                """, (next_run, task_id))
+                # Skip rescheduling if interval_minutes == 0 (one-time task)
+                if interval_minutes == 0:
+                    logger.info(f"Task {task_id} has interval_minutes=0; not rescheduling (one-time task)")
+                    # Mark as completed/inactive by setting next_run far in the future
+                    self.conn.execute("""
+                        UPDATE tasks 
+                        SET next_run = ?, retry_count = 0 
+                        WHERE id = ?
+                    """, (time.time() + 31536000, task_id))  # 1 year in the future
+                else:
+                    # Reschedule for next interval
+                    next_run = now + (interval_minutes * 60)
+                    self.conn.execute("""
+                        UPDATE tasks 
+                        SET next_run = ?, retry_count = 0 
+                        WHERE id = ?
+                    """, (next_run, task_id))
             else:
                 # Increment retry count
                 self.conn.execute("""

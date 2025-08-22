@@ -17,6 +17,15 @@ from typing import Dict, List, Any, Set
 import sys
 import signal
 import os
+import logging
+
+# Add parent directory to path for imports
+sys.path.append(str(Path(__file__).parent.parent))
+
+# NEW: Import event bus and config loader
+from event_bus import EventBus  # Assuming event_bus.py is in root or PATH
+
+logger = logging.getLogger(__name__)
 
 class ComplianceMonitor:
     def __init__(self):
@@ -28,6 +37,9 @@ class ComplianceMonitor:
         self.orchestrator_session = self._find_orchestrator_session()
         self.rules = self._load_rules()
         self.rules_mtime = self._get_rules_mtime()
+        
+        # NEW: Initialize event bus
+        self.event_bus = EventBus()  # Loads from orchestrator_config.yaml automatically
         
     def _find_orchestrator_session(self) -> str:
         """Find the orchestrator's tmux session"""
@@ -107,6 +119,7 @@ class ComplianceMonitor:
         """Handle shutdown signals"""
         print("\nShutting down compliance monitor...")
         self.running = False
+        self.event_bus.shutdown()  # NEW: Graceful event bus shutdown
         sys.exit(0)
         
     def _check_rules_trigger(self):
@@ -240,38 +253,37 @@ class ComplianceMonitor:
         violation_entry['notification_sent'] = True
         
     def _notify_orchestrator(self, message: Dict[str, Any], analysis: Dict[str, Any]):
-        """Notify orchestrator of compliance violation"""
+        """Publish violation to event bus instead of tmux (file logging handled by bus)"""
         
-        # Build notification message
+        # Extract violation details
         violations = analysis.get('violations', [])
         if not violations:
             return
             
-        # Create concise notification
-        sender = message['sender']['pane']
-        recipient = message['recipient']['pane']
+        # Determine severity based on violations
+        severity = 'low'
+        for v in violations:
+            if v.get('severity', 'low') == 'high':
+                severity = 'high'
+                break
         
-        notification = f"⚠️  COMPLIANCE ALERT: {sender} → {recipient}\\n"
+        # Prepare event data
+        event_data = {
+            'message': message,
+            'analysis': analysis,
+            'severity': severity,
+            'sender': message.get('sender', {}).get('pane', 'unknown'),
+            'recipient': message.get('recipient', {}).get('pane', 'unknown'),
+            'violations': violations,
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        }
         
-        for v in violations[:3]:  # Limit to first 3 violations
-            notification += f"• {v['rule_description']} ({v['severity']})\\n"
-            
-        if len(violations) > 3:
-            notification += f"• ... and {len(violations) - 3} more violations\\n"
-            
-        notification += f"\\nCorrection: {violations[0].get('correction', 'Follow hub-and-spoke model')}"
-        
-        # Send notification using send-claude-message.sh
-        send_script = self.script_dir.parent / "send-claude-message.sh"
-        if send_script.exists():
-            try:
-                subprocess.run(
-                    [str(send_script), self.orchestrator_session, notification],
-                    capture_output=True
-                )
-                print(f"Notified orchestrator about violation: {sender} → {recipient}")
-            except Exception as e:
-                print(f"Failed to notify orchestrator: {e}")
+        # Publish to event bus (rate-limited, logged automatically)
+        priority = 'critical' if severity == 'high' else 'normal'
+        if self.event_bus.publish('violation', event_data, priority=priority):
+            logger.info(f"Published violation event: {event_data['sender']} → {event_data['recipient']}")
+        else:
+            logger.warning(f"Violation event dropped due to rate limit: {event_data['sender']} → {event_data['recipient']}")
                 
 def main():
     """Run the compliance monitoring service"""
