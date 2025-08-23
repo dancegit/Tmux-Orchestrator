@@ -608,6 +608,31 @@ class TmuxOrchestratorScheduler:
         except:
             return False
     
+    def _is_session_ready(self, session_name: str, window_index: int) -> bool:
+        """Validate if session exists and is running Claude (not bash)."""
+        # Check existence
+        if not self._session_exists(session_name):
+            logger.warning(f"Session {session_name} does not exist")
+            return False
+        
+        # Check pane command (should not be bash/sh)
+        target = f"{session_name}:{window_index}"
+        try:
+            result = subprocess.run(
+                ['tmux', 'display-message', '-p', '-t', target, '#{pane_current_command}'],
+                capture_output=True, text=True, check=True
+            )
+            command = result.stdout.strip().lower()
+            if 'bash' in command or 'sh' in command:
+                logger.warning(f"Target {target} is running {command}, not Claude")
+                return False
+            # Optional: Check for 'claude' or expected command
+            # Note: Claude might show as 'python' or other process names
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to check pane command for {target}: {e}")
+            return False
+    
     def get_active_tmux_sessions(self):
         """Helper to get active tmux sessions (for sequential processing check)."""
         try:
@@ -1375,6 +1400,11 @@ class TmuxOrchestratorScheduler:
         try:
             import shlex
             
+            # NEW: Validate session before sending
+            if not self._is_session_ready(session_name, window_index):
+                logger.warning(f"Skipping task {task_id}: Session {session_name}:{window_index} not ready")
+                return False  # Will trigger retry logic
+            
             # Extract project name from session name (format: project-impl-uuid)
             project_name = session_name.split('-impl')[0]
             
@@ -1465,6 +1495,17 @@ class TmuxOrchestratorScheduler:
         for row in cursor.fetchall():
             task_id, session_name, agent_role, window_index, next_run, \
             interval_minutes, note, last_run, retry_count = row
+            
+            # NEW: Check retry cap before attempting
+            max_retries = int(os.getenv('MAX_TASK_RETRIES', 5))  # Configurable via env var
+            if retry_count >= max_retries:
+                logger.error(f"Task {task_id} exceeded max retries ({retry_count}/{max_retries}) - disabling permanently")
+                self.conn.execute("""
+                    UPDATE tasks 
+                    SET next_run = ?, retry_count = -1  -- Negative indicates permanent failure
+                    WHERE id = ?
+                """, (time.time() + 31536000, task_id))  # 1 year in future
+                continue  # Skip this task
             
             # Check if task was missed (overdue by more than 2x interval)
             if last_run and (now - last_run) > (interval_minutes * 60 * 2):
