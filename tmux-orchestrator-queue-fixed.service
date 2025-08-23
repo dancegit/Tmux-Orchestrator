@@ -1,15 +1,24 @@
 [Unit]
 Description=Tmux Orchestrator Queue Daemon
 After=network.target
-StartLimitIntervalSec=0
+# Add rate limiting to prevent spawn loops
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
-Restart=always
-RestartSec=5
+# Changed to on-failure for safer restarts
+Restart=on-failure
+RestartSec=10
 User=clauderun
 WorkingDirectory=/home/clauderun/Tmux-Orchestrator
+
+# Clean up before starting
+ExecStartPre=/bin/bash -c 'pkill -f "scheduler.py.*--queue-daemon" || true; rm -f /home/clauderun/Tmux-Orchestrator/locks/project_queue.lock || true'
+
+# Use the correct scheduler.py file
 ExecStart=/usr/bin/python3 /home/clauderun/Tmux-Orchestrator/scheduler.py --queue-daemon
+
 Environment=PATH=/home/clauderun/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/home/clauderun
 
@@ -25,5 +34,13 @@ ProtectSystem=strict
 ReadWritePaths=/home/clauderun/Tmux-Orchestrator
 ReadWritePaths=/home/clauderun
 
+# Resource limits to prevent exhaustion
+LimitNOFILE=1024
+LimitNPROC=100
+
+# Kill only the main process
+KillMode=process
+
 [Install]
 WantedBy=multi-user.target
+EOF < /dev/null
