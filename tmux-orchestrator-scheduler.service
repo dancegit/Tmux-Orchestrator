@@ -1,0 +1,20 @@
+[Unit]
+Description=Tmux Orchestrator Scheduler
+After=network.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/bash -c 'pkill -f "scheduler.py" || true; pkill -f "scheduler_new.py" || true; rm -f /home/clauderun/Tmux-Orchestrator/locks/project_queue.lock || true'
+ExecStart=/usr/bin/env -S uv run /home/clauderun/Tmux-Orchestrator/scheduler.py --queue-daemon
+WorkingDirectory=/home/clauderun/Tmux-Orchestrator
+Restart=always
+RestartSec=10s
+User=clauderun
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+Environment="PATH=/home/clauderun/.cargo/bin:/home/clauderun/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HOME=/home/clauderun"
+
+[Install]
+WantedBy=multi-user.target

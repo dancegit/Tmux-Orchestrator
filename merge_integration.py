@@ -11,34 +11,45 @@
 """
 Merge Integration Tool
 
-Merges the latest integration from worktrees back to the main project directory.
-If the main project directory doesn't have a .git repository, it will be initialized.
+Merges completed worktree integrations from agent orchestrations back to the main project directory.
+Only processes projects that are marked as 'completed' in the scheduler database, ensuring
+that only finalized work is integrated.
 
 This tool consolidates the final results from agent worktrees into the main project,
 creating a clean integration history with proper git tags and backup branches.
 
 Usage Examples:
-    ./merge_integration.py --list                                    # Show available integrations
-    ./merge_integration.py --project "mcp server" --dry-run          # Preview merge for MCP Server project
-    ./merge_integration.py --commit 36d7e425 --dry-run               # Preview merge by commit hash
+    ./merge_integration.py --list                                    # Show last 4 completed integrations
+    ./merge_integration.py --list --all                              # Show all completed integrations
+    ./merge_integration.py --list --page 2                           # Show page 2 of integrations
+    ./merge_integration.py --list-progress                           # Show last 10 in-progress projects
+    ./merge_integration.py --list-progress --all                     # Show all in-progress projects
+    ./merge_integration.py --project "web server" --dry-run          # Preview merge for Web Server project
+    ./merge_integration.py --commit da20996a --dry-run               # Preview merge by commit hash
     ./merge_integration.py --project "web server" --force            # Auto-merge Web Server project
-    ./merge_integration.py --commit da20996a --force                 # Auto-merge by commit hash
     ./merge_integration.py --from /path/to/worktree --to /path/to/project  # Direct path merge
 
-Features:
+Enhanced Features:
+    - Filters to completed projects only (database validation)
+    - Shows in-progress projects for monitoring (--list-progress)
+    - Pagination support for large numbers of projects (completed and in-progress)
+    - Sorted by completion/activity timestamp (most recent first)
+    - Rich table display with status indicators and session info
     - Auto-detects integration worktrees with latest commits
     - Creates backup branches before merging
     - Initializes git repositories if needed
     - Tags successful integrations with timestamps
-    - Handles merge conflicts gracefully
+    - Handles merge conflicts gracefully with detailed error reporting
+    - Prevents conflicts by managing .mcp.json and CLAUDE.md files
     - Dry-run mode for safe preview
-    - Project name auto-completion
+    - Project name fuzzy matching and commit hash selection
 """
 
 import argparse
 import json
 import subprocess
 import shutil
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, Tuple, List
@@ -48,6 +59,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def find_git_root(start_path: Path) -> Optional[Path]:
@@ -118,34 +130,182 @@ def get_latest_integration_info(worktree_path: Path) -> Dict[str, any]:
         return {}
 
 
-def find_available_integrations() -> List[Dict[str, any]]:
-    """Find all available integrations from the orchestrator registry"""
-    integrations = []
-    
-    # Import from list_completed_projects
+def find_progress_projects(page: int = 1, per_page: int = 10, all_items: bool = False) -> List[Dict[str, any]]:
+    """
+    Find in-progress (non-completed) projects from database, with pagination and sorting.
+    Shows projects that are currently being worked on or queued.
+    """
+    projects = []
     try:
-        from list_completed_projects import scan_registry_projects, find_project_locations, analyze_worktree_integration
+        # Import dynamically to avoid circular imports
+        from list_completed_projects import get_completed_projects_from_db
         
-        projects = scan_registry_projects()
+        # Get database path
+        possible_paths = [
+            Path(__file__).parent / 'task_queue.db',
+            Path.home() / '.tmux-orchestrator' / 'scheduler.db',
+            Path(__file__).parent / 'scheduler.db',
+            Path(__file__).parent / 'registry' / 'scheduler.db'
+        ]
         
-        for project in projects:
-            locations = find_project_locations(project['name'], project.get('project_path'))
-            integration_info = analyze_worktree_integration(locations)
+        db_path = None
+        for path in possible_paths:
+            if path.exists():
+                db_path = path
+                break
+        
+        if not db_path:
+            return []
+        
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        
+        # Get non-completed projects (processing, queued, failed)
+        cursor.execute("""
+            SELECT id, spec_path, project_path, status, enqueued_at, started_at, session_name, error_message
+            FROM project_queue
+            WHERE status != 'completed'
+            ORDER BY COALESCE(started_at, enqueued_at) DESC
+        """)
+        
+        for row in cursor.fetchall():
+            spec_path = row[1]
+            name = Path(spec_path).stem.replace('_', ' ').title() if spec_path else f"Project {row[0]}"
             
-            if integration_info['integration_worktree']:
-                integrations.append({
-                    'project_name': project['name'],
-                    'project_path': locations.get('project'),
-                    'integration_worktree': integration_info['integration_worktree'],
-                    'integration_branch': integration_info['integration_branch'],
-                    'latest_commit_hash': integration_info['latest_commit_hash'],
-                    'latest_commit_message': integration_info['latest_commit_message'],
-                    'latest_commit_time': integration_info['latest_commit_time']
-                })
-    except ImportError:
-        console.print("[yellow]Warning: Could not import project listing functions[/yellow]")
+            # Determine timing info
+            enqueued_at = row[4]
+            started_at = row[5]
+            session_name = row[6]
+            error_message = row[7]
+            
+            project = {
+                'id': row[0],
+                'project_name': name,
+                'spec_path': spec_path,
+                'project_path': row[2],
+                'status': row[3],
+                'enqueued_at': enqueued_at,
+                'started_at': started_at,
+                'session_name': session_name,
+                'error_message': error_message,
+                'is_active': bool(session_name),  # Has active session
+                'display_time': started_at or enqueued_at
+            }
+            projects.append(project)
+        
+        conn.close()
+        
+        # Sort by most recent activity (started_at or enqueued_at)
+        projects.sort(
+            key=lambda p: datetime.fromisoformat(p.get('display_time') or '1970-01-01') if isinstance(p.get('display_time'), str) else p.get('display_time') or 0,
+            reverse=True
+        )
+        
+        if all_items:
+            return projects
+        
+        # Apply pagination
+        start = (page - 1) * per_page
+        end = start + per_page
+        if start >= len(projects) and projects:
+            logger.warning(f"Page {page} is out of range (total items: {len(projects)})")
+            return []
+        
+        return projects[start:end]
+        
+    except Exception as e:
+        console.print(f"[red]Error getting in-progress projects: {e}[/red]")
+        return []
+
+
+def find_available_integrations(page: int = 1, per_page: int = 4, all_items: bool = False) -> List[Dict[str, any]]:
+    """
+    Find available integrations from completed projects only, with pagination and sorting.
+    Filters to completed projects via DB/session state, sorts by recency.
+    """
+    integrations = []
+    try:
+        # Import dynamically to avoid circular imports
+        from list_completed_projects import get_completed_integrations
+        
+        # Fetch paginated, sorted integrations (new function from list_completed_projects.py)
+        integrations = get_completed_integrations(page=page, per_page=per_page, all_items=all_items)
+        
+        # Cross-validate with session state for each integration (optional validation)
+        try:
+            from session_state import SessionStateManager
+            state_manager = SessionStateManager(Path(__file__).parent)
+            validated = []
+            for integration in integrations:
+                state = state_manager.load_session_state(integration['project_name'])
+                if state and state.completion_status == 'completed':
+                    # Add completion details from state if available
+                    integration['completion_time'] = state.completion_time
+                    integration['failure_reason'] = state.failure_reason  # For display if needed
+                    validated.append(integration)
+                elif state and state.completion_status != 'completed':
+                    # Skip projects that have session state but are not completed
+                    logger.warning(f"Skipping {integration['project_name']}: Session state shows status '{state.completion_status}'")
+                else:
+                    # No session state found - trust database completion status
+                    logger.info(f"Including {integration['project_name']}: No session state found, but database shows completed")
+                    validated.append(integration)
+            
+            return validated
+        except ImportError:
+            logger.warning("SessionStateManager not available - using DB data only")
+            return integrations
     
-    return integrations
+    except ImportError as e:
+        logger.warning(f"Could not import listing functions: {e} - Falling back to manual scan")
+        # Fallback: Manual scan with session state filtering (no pagination in fallback)
+        from list_completed_projects import scan_registry_projects, find_project_locations, analyze_worktree_integration
+        try:
+            from session_state import SessionStateManager
+            state_manager = SessionStateManager(Path(__file__).parent)
+            projects = scan_registry_projects()
+            for project in projects:
+                state = state_manager.load_session_state(project['name'])
+                if state and state.completion_status == 'completed':
+                    locations = find_project_locations(project['name'], project.get('project_path'))
+                    integration_info = analyze_worktree_integration(locations)
+                    if integration_info['integration_worktree']:
+                        integration = {
+                            'project_name': project['name'],
+                            'project_path': locations.get('project'),
+                            'integration_worktree': integration_info['integration_worktree'],
+                            'integration_branch': integration_info['integration_branch'],
+                            'latest_commit_hash': integration_info['latest_commit_hash'],
+                            'latest_commit_message': integration_info['latest_commit_message'],
+                            'latest_commit_time': integration_info['latest_commit_time'],
+                            'completed_at': state.completion_time or 'N/A',
+                            'completion_time': state.completion_time,
+                            'failure_reason': state.failure_reason
+                        }
+                        integrations.append(integration)
+            
+            # Sort by completion_time in fallback
+            integrations.sort(key=lambda i: datetime.fromisoformat(i.get('completion_time') or '1970-01-01'), reverse=True)
+            return integrations
+        except ImportError:
+            logger.warning("SessionStateManager not available - showing all projects")
+            # Final fallback: show all projects (original behavior)
+            projects = scan_registry_projects()
+            for project in projects:
+                locations = find_project_locations(project['name'], project.get('project_path'))
+                integration_info = analyze_worktree_integration(locations)
+                if integration_info['integration_worktree']:
+                    integrations.append({
+                        'project_name': project['name'],
+                        'project_path': locations.get('project'),
+                        'integration_worktree': integration_info['integration_worktree'],
+                        'integration_branch': integration_info['integration_branch'],
+                        'latest_commit_hash': integration_info['latest_commit_hash'],
+                        'latest_commit_message': integration_info['latest_commit_message'],
+                        'latest_commit_time': integration_info['latest_commit_time']
+                    })
+            return integrations
 
 
 def initialize_git_repo(project_path: Path, worktree_path: Path) -> bool:
@@ -182,6 +342,73 @@ def initialize_git_repo(project_path: Path, worktree_path: Path) -> bool:
         
     except Exception as e:
         console.print(f"[red]Error initializing git repo: {e}[/red]")
+        return False
+
+
+def prepare_files_for_merge(project_path: Path) -> bool:
+    """
+    Prepare .mcp.json and CLAUDE.md files to prevent merge conflicts by:
+    1. Adding them to .gitignore if not already present
+    2. Running git rm --cached to untrack them
+    3. Committing these changes
+    """
+    try:
+        gitignore_path = project_path / '.gitignore'
+        files_to_ignore = ['.mcp.json', 'CLAUDE.md']
+        
+        # Read existing .gitignore
+        existing_ignore = set()
+        if gitignore_path.exists():
+            with open(gitignore_path, 'r') as f:
+                existing_ignore = set(line.strip() for line in f if line.strip() and not line.startswith('#'))
+        
+        # Add files to .gitignore if not already present
+        files_added = []
+        for file_to_ignore in files_to_ignore:
+            if file_to_ignore not in existing_ignore:
+                files_added.append(file_to_ignore)
+        
+        if files_added:
+            console.print(f"[yellow]Adding {', '.join(files_added)} to .gitignore[/yellow]")
+            with open(gitignore_path, 'a') as f:
+                f.write('\n# Auto-added by merge_integration.py to prevent merge conflicts\n')
+                for file_to_ignore in files_added:
+                    f.write(f'{file_to_ignore}\n')
+        
+        # Remove files from git tracking if they exist
+        files_to_untrack = []
+        for file_name in files_to_ignore:
+            file_path = project_path / file_name
+            if file_path.exists():
+                files_to_untrack.append(file_name)
+        
+        if files_to_untrack:
+            console.print(f"[yellow]Removing {', '.join(files_to_untrack)} from git tracking[/yellow]")
+            result = run_git_command(['rm', '--cached'] + files_to_untrack, str(project_path))
+            if result.returncode != 0 and 'did not match any files' not in result.stderr:
+                console.print(f"[yellow]Warning: Could not untrack some files: {result.stderr}[/yellow]")
+        
+        # Stage .gitignore changes if any were made
+        if files_added:
+            result = run_git_command(['add', '.gitignore'], str(project_path))
+            if result.returncode != 0:
+                console.print(f"[red]Failed to stage .gitignore: {result.stderr}[/red]")
+                return False
+        
+        # Commit the changes if there are any staged changes
+        result = run_git_command(['diff', '--cached', '--quiet'], str(project_path))
+        if result.returncode != 0:  # There are staged changes
+            commit_message = f"Prepare for merge: ignore {', '.join(files_to_ignore)} to prevent conflicts"
+            result = run_git_command(['commit', '-m', commit_message], str(project_path))
+            if result.returncode != 0:
+                console.print(f"[red]Failed to commit .gitignore changes: {result.stderr}[/red]")
+                return False
+            console.print(f"[green]✓ Committed changes to prepare for merge[/green]")
+        
+        return True
+        
+    except Exception as e:
+        console.print(f"[red]Error preparing files for merge: {e}[/red]")
         return False
 
 
@@ -254,6 +481,12 @@ def merge_worktree_to_project(worktree_path: Path, project_path: Path, dry_run: 
         run_git_command(['branch', backup_branch], str(project_path))
         console.print(f"[green]Created backup branch: {backup_branch}[/green]")
         
+        # Handle .mcp.json and CLAUDE.md files to prevent merge conflicts
+        console.print(f"[yellow]Preparing files to prevent merge conflicts...[/yellow]")
+        if not prepare_files_for_merge(project_path):
+            console.print(f"[red]Failed to prepare files for merge[/red]")
+            return False
+        
         # Merge from worktree
         worktree_branch = f"{remote_name}/{integration_info['current_branch']}"
         console.print(f"[yellow]Merging {worktree_branch} into {current_branch}...[/yellow]")
@@ -263,7 +496,27 @@ def merge_worktree_to_project(worktree_path: Path, project_path: Path, dry_run: 
                                str(project_path))
         
         if result.returncode != 0:
-            console.print(f"[red]Merge failed: {result.stderr}[/red]")
+            console.print(f"[red]Merge failed with return code: {result.returncode}[/red]")
+            if result.stderr.strip():
+                console.print(f"[red]Error: {result.stderr}[/red]")
+            if result.stdout.strip():
+                console.print(f"[yellow]Output: {result.stdout}[/yellow]")
+            
+            # Get current git status to show conflicts
+            status_result = run_git_command(['status', '--porcelain'], str(project_path))
+            if status_result.stdout.strip():
+                console.print(f"[yellow]Git status shows conflicts in:[/yellow]")
+                for line in status_result.stdout.strip().split('\n'):
+                    if line.startswith('UU ') or line.startswith('AA '):
+                        console.print(f"  • {line}")
+            
+            # Show merge conflict info
+            conflict_result = run_git_command(['diff', '--name-only', '--diff-filter=U'], str(project_path))
+            if conflict_result.stdout.strip():
+                console.print(f"[red]Conflicted files:[/red]")
+                for file in conflict_result.stdout.strip().split('\n'):
+                    console.print(f"  • {file}")
+            
             console.print("[yellow]You may need to resolve conflicts manually[/yellow]")
             return False
         
@@ -283,18 +536,109 @@ def merge_worktree_to_project(worktree_path: Path, project_path: Path, dry_run: 
         return False
 
 
-def list_available_integrations():
-    """List all available integrations"""
+def list_progress_projects(projects: List[Dict[str, any]], args):
+    """Display in-progress projects with rich table and status indicators."""
     console.print(Panel.fit(
-        "[bold cyan]Available Integration Sources[/bold cyan]\n"
-        "Projects with worktree integrations ready for merge",
+        "[bold yellow]In-Progress Projects[/bold yellow]\n"
+        "Showing projects currently being worked on, queued, or failed",
+        border_style="yellow"
+    ))
+    
+    if not projects:
+        if args.all:
+            console.print("[yellow]No in-progress projects found.[/yellow]")
+        else:
+            per_page = args.per_page or 10
+            console.print(f"[yellow]No in-progress projects on page {args.page}. Use --all to see everything.[/yellow]")
+        return
+    
+    # Create rich table
+    table = Table(title=f"In-Progress Projects ({len(projects)} shown)", show_lines=True)
+    table.add_column(" # ", style="cyan", width=4)
+    table.add_column("Project Name", style="blue", width=25)
+    table.add_column("Status", style="yellow", width=12)
+    table.add_column("Activity", style="bright_blue", width=20)
+    table.add_column("Session", style="green", width=15)
+    table.add_column("Error/Notes", style="red", width=30)
+    
+    for i, project in enumerate(projects, 1):
+        # Status with color coding
+        status = project['status']
+        if status == 'processing':
+            status_display = "[green]⚙️ Processing[/green]"
+        elif status == 'queued':
+            status_display = "[yellow]⏳ Queued[/yellow]"
+        elif status == 'failed':
+            status_display = "[red]❌ Failed[/red]"
+        else:
+            status_display = f"[dim]{status}[/dim]"
+        
+        # Activity time
+        display_time = project.get('display_time')
+        activity_time = 'N/A'
+        if display_time:
+            try:
+                if isinstance(display_time, str):
+                    dt = datetime.fromisoformat(display_time)
+                else:
+                    dt = datetime.fromtimestamp(display_time)
+                activity_time = dt.strftime('%Y-%m-%d %H:%M')
+            except:
+                activity_time = str(display_time)[:16] if str(display_time) else 'N/A'
+        
+        # Session status
+        session_name = project.get('session_name')
+        if session_name:
+            session_display = f"[green]✓ {session_name[:12]}...[/green]" if len(session_name) > 15 else f"[green]✓ {session_name}[/green]"
+        elif project.get('is_active'):
+            session_display = "[green]✓ Active[/green]"
+        else:
+            session_display = "[dim]No Session[/dim]"
+        
+        # Error message or notes
+        error_msg = project.get('error_message', '') or ''
+        if error_msg:
+            error_display = error_msg[:27] + '...' if len(error_msg) > 30 else error_msg
+        else:
+            error_display = '[dim]—[/dim]'
+        
+        table.add_row(
+            str(i),
+            project['project_name'],
+            status_display,
+            activity_time,
+            session_display,
+            error_display
+        )
+    
+    console.print(table)
+    
+    # Pagination info
+    if not args.all:
+        per_page = args.per_page or 10
+        console.print(f"[dim]Showing page {args.page} ({per_page} per page). Use --page {args.page + 1} for more or --all for everything.[/dim]")
+    
+    # Quick info
+    console.print(f"\n[bold blue]Status Legend:[/bold blue]")
+    console.print(f"• [green]⚙️ Processing[/green]: Currently being worked on")
+    console.print(f"• [yellow]⏳ Queued[/yellow]: Waiting to be started")
+    console.print(f"• [red]❌ Failed[/red]: Encountered errors")
+    console.print(f"• [green]✓ Session[/green]: Has active tmux session")
+
+
+def list_available_integrations(integrations: List[Dict[str, any]], args):
+    """Enhanced display with rich table, completion indicators, and pagination info."""
+    console.print(Panel.fit(
+        "[bold cyan]Available Completed Integrations[/bold cyan]\n"
+        "Showing most recent completed projects ready for merge",
         border_style="cyan"
     ))
     
-    integrations = find_available_integrations()
-    
     if not integrations:
-        console.print("[yellow]No integrations found[/yellow]")
+        if args.all:
+            console.print("[yellow]No completed integrations found.[/yellow]")
+        else:
+            console.print(f"[yellow]No completed integrations on page {args.page}. Use --all to see everything or check with ./list_completed_projects.py.[/yellow]")
         return
     
     # Group integrations by unique project paths to avoid duplicates
@@ -306,76 +650,119 @@ def list_available_integrations():
     
     integrations = list(unique_integrations.values())
     
-    # Display integrations in a clean, readable list format
-    console.print(f"\n[bold cyan]Available Integrations ({len(integrations)} found):[/bold cyan]\n")
+    # Create rich table
+    table = Table(title=f"Completed Integrations ({len(integrations)} shown)", show_lines=True)
+    table.add_column(" # ", style="cyan", width=4)
+    table.add_column("Project Name", style="green", width=25)
+    table.add_column("Status", style="yellow", width=15)
+    table.add_column("Completed At", style="bright_blue", width=20)
+    table.add_column("Latest Commit", style="magenta", width=30)
+    table.add_column("Merge Command", style="white", width=45)
     
     for i, integration in enumerate(integrations, 1):
-        # Get all the details
-        project_name = integration['project_name']
-        branch_name = integration['integration_branch'] or 'N/A'
-        commit_msg = integration.get('latest_commit_message', 'N/A')
-        commit_hash = integration['latest_commit_hash'][:8] if integration['latest_commit_hash'] else 'N/A'
+        status = "[green]✓ Completed[/green]" if integration.get('completed_at') else "[yellow]Completed (time N/A)[/yellow]"
+        completed_at = integration.get('completed_at') or integration.get('completion_time') or 'N/A'
+        if completed_at != 'N/A':
+            try:
+                # Format timestamp nicely
+                dt = datetime.fromisoformat(completed_at)
+                completed_at = dt.strftime('%Y-%m-%d %H:%M')
+            except:
+                pass  # Keep original if parsing fails
         
-        # Display in a clean, boxed format
-        console.print(f"[bold cyan]#{i}[/bold cyan] [green]{project_name}[/green]")
-        console.print(f"    [yellow]Commit:[/yellow] {commit_hash}")
-        console.print(f"    [magenta]Branch:[/magenta] {branch_name}")
-        console.print(f"    [blue]Message:[/blue] {commit_msg}")
-        console.print()  # Empty line between entries
-    
-    # Show copy-friendly commands
-    console.print(f"\n[bold green]Copy-Paste Commands:[/bold green]")
-    console.print("[dim]Choose a number and copy the corresponding command:[/dim]\n")
-    
-    for i, integration in enumerate(integrations, 1):
-        # Extract key parts of project name for easier identification
-        project_parts = integration['project_name'].lower().split()
-        if 'mcp' in project_parts and 'server' in project_parts:
-            short_name = 'mcp-server'
-        elif 'web' in project_parts and 'server' in project_parts:
-            short_name = 'web-server'
-        elif 'mobile' in project_parts and 'app' in project_parts:
-            short_name = 'mobile-app'
-        else:
-            short_name = integration['project_name'].lower().replace(' ', '-')[:15]
+        commit_info = f"{integration['latest_commit_hash'][:8]}: {integration['latest_commit_message'][:35]}..." if integration.get('latest_commit_message') else 'N/A'
+        merge_cmd = f"./merge_integration.py --project \"{integration['project_name'][:20]}\" --dry-run"
         
-        commit_hash = integration['latest_commit_hash'][:8] if integration['latest_commit_hash'] else 'N/A'
-        
-        # Show all three options: project-based, commit-based, and direct paths
-        console.print(f"[bold cyan]{i}.[/bold cyan] [green]{short_name}[/green] [yellow]({commit_hash})[/yellow]")
-        console.print(f"   [blue]# Project-based (recommended):[/blue]")
-        console.print(f"   ./merge_integration.py --project \"{integration['project_name'][:30]}\" --dry-run")
-        console.print(f"   ./merge_integration.py --project \"{integration['project_name'][:30]}\" --force")
-        console.print(f"   [blue]# Commit-based (precise):[/blue]")
-        console.print(f"   ./merge_integration.py --commit {commit_hash} --dry-run")
-        console.print(f"   ./merge_integration.py --commit {commit_hash} --force")
-        console.print(f"   [blue]# Direct paths:[/blue]")
-        console.print(f"   ./merge_integration.py --from {integration['integration_worktree']} --to {integration['project_path']}")
-        console.print()
+        table.add_row(
+            str(i),
+            integration['project_name'],
+            status,
+            completed_at,
+            commit_info,
+            merge_cmd
+        )
     
-    console.print(f"[bold yellow]Quick Start Options:[/bold yellow]")
-    console.print(f"1. By project name: [green]./merge_integration.py --project \"mcp server\" --dry-run[/green]")
-    console.print(f"2. By commit hash: [green]./merge_integration.py --commit 36d7e425 --dry-run[/green]")
-    console.print(f"3. If happy with preview, replace --dry-run with --force")
-    console.print(f"4. Check result in project directory")
+    console.print(table)
     
-    console.print(f"\n[bold]Found {len(integrations)} unique integration(s) ready for merge[/bold]")
+    # Pagination info
+    if not args.all:
+        console.print(f"[dim]Showing page {args.page} ({args.per_page} per page). Use --page {args.page + 1} for more or --all for everything.[/dim]")
+    
+    # Quick start hints
+    console.print(f"\n[bold green]Quick Start Commands:[/bold green]")
+    console.print(f"• Preview: ./merge_integration.py --project \"project-name\" --dry-run")
+    console.print(f"• Merge: ./merge_integration.py --project \"project-name\" --force")
+    console.print(f"• By commit: ./merge_integration.py --commit abc12345 --force")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Merge worktree integrations to main project directories")
-    parser.add_argument('--from', dest='from_path', help='Source worktree path')
-    parser.add_argument('--to', dest='to_path', help='Target project path')
-    parser.add_argument('--project', help='Project name (auto-detect paths)')
-    parser.add_argument('--commit', help='Commit hash to merge (8+ characters)')
-    parser.add_argument('--list', action='store_true', help='List available integrations')
-    parser.add_argument('--dry-run', action='store_true', help='Show what would be done without executing')
-    parser.add_argument('--force', action='store_true', help='Skip confirmation prompts')
+    parser = argparse.ArgumentParser(
+        description="Merge completed worktree integrations from agent worktrees back to main project directories",
+        epilog="""
+Examples:
+  %(prog)s --list                                    # Show last 4 completed integrations
+  %(prog)s --list --all                              # Show all completed integrations  
+  %(prog)s --list --page 2                           # Show page 2 of completed integrations
+  %(prog)s --list-progress                           # Show last 10 in-progress projects
+  %(prog)s --list-progress --all                     # Show all in-progress projects
+  %(prog)s --list-progress --per-page 5              # Show 5 in-progress projects per page
+  %(prog)s --project "web server" --dry-run          # Preview merge for Web Server project
+  %(prog)s --commit da20996a --dry-run               # Preview merge by commit hash
+  %(prog)s --project "web server" --force            # Auto-merge Web Server project
+  %(prog)s --from /path/to/worktree --to /path/to/project  # Direct path merge
+
+Notes: 
+- Only projects marked as 'completed' are available for merge via --list
+- Use --list-progress to monitor currently active projects (queued, processing, failed)
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    # Listing options
+    listing_group = parser.add_argument_group('Listing Options', 'Options for viewing project integrations')
+    listing_group.add_argument('--list', action='store_true', 
+                              help='List available completed integrations ready for merge (default: last 4)')
+    listing_group.add_argument('--list-progress', action='store_true',
+                              help='List non-completed in-progress projects (default: last 10)')
+    listing_group.add_argument('--page', type=int, default=1, metavar='N',
+                              help='Page number for listing (default: 1)')
+    listing_group.add_argument('--per-page', type=int, metavar='N',
+                              help='Items per page (default: 4 for --list, 10 for --list-progress)')
+    listing_group.add_argument('--all', action='store_true',
+                              help='Show all items without pagination (use with --list or --list-progress)')
+    
+    # Selection options
+    selection_group = parser.add_argument_group('Project Selection', 'Choose which integration to merge')
+    selection_group.add_argument('--project', metavar='NAME',
+                                help='Project name or partial name for fuzzy matching (auto-detects paths)')
+    selection_group.add_argument('--commit', metavar='HASH',
+                                help='Commit hash prefix to merge (minimum 8 characters, auto-detects project)')
+    selection_group.add_argument('--from', dest='from_path', metavar='PATH',
+                                help='Source worktree path (manual override, requires --to)')
+    selection_group.add_argument('--to', dest='to_path', metavar='PATH',
+                                help='Target project path (manual override, requires --from)')
+    
+    # Execution options
+    execution_group = parser.add_argument_group('Execution Options', 'Control how the merge is performed')
+    execution_group.add_argument('--dry-run', action='store_true',
+                                help='Preview what would be done without making any changes')
+    execution_group.add_argument('--force', action='store_true',
+                                help='Skip interactive confirmation prompts (auto-select first match for ambiguous names)')
     
     args = parser.parse_args()
     
+    # Set default per_page based on list type
+    if not args.per_page:
+        args.per_page = 10 if args.list_progress else 4
+    
     if args.list:
-        list_available_integrations()
+        integrations = find_available_integrations(page=args.page, per_page=args.per_page, all_items=args.all)
+        list_available_integrations(integrations, args)
+        return
+    
+    if args.list_progress:
+        projects = find_progress_projects(page=args.page, per_page=args.per_page, all_items=args.all)
+        list_progress_projects(projects, args)
         return
     
     # Determine source and target paths
@@ -383,8 +770,8 @@ def main():
     to_path = None
     
     if args.commit:
-        # Find integration by commit hash
-        integrations = find_available_integrations()
+        # Find integration by commit hash - use all items for hash matching
+        integrations = find_available_integrations(all_items=True)
         matching = [i for i in integrations if i['latest_commit_hash'] and i['latest_commit_hash'].startswith(args.commit)]
         
         if not matching:
@@ -421,8 +808,8 @@ def main():
         console.print(f"[green]Selected by commit hash {args.commit}: {selected['project_name']}[/green]")
         
     elif args.project:
-        # Auto-detect paths from project name
-        integrations = find_available_integrations()
+        # Auto-detect paths from project name - use all items for name matching
+        integrations = find_available_integrations(all_items=True)
         matching = [i for i in integrations if args.project.lower() in i['project_name'].lower()]
         
         if not matching:

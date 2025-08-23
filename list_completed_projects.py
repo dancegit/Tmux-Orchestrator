@@ -19,12 +19,15 @@ to find all completed projects and their code locations.
 import json
 import sqlite3
 import subprocess
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+
+logger = logging.getLogger(__name__)
 
 console = Console()
 
@@ -41,8 +44,21 @@ def find_git_root(start_path: Path) -> Optional[Path]:
 
 def get_completed_projects_from_db() -> List[Dict]:
     """Get completed projects from the scheduler database"""
-    db_path = Path.home() / '.tmux-orchestrator' / 'scheduler.db'
-    if not db_path.exists():
+    # Try multiple possible locations for the database
+    possible_paths = [
+        Path(__file__).parent / 'task_queue.db',  # Current Tmux-Orchestrator directory (primary)
+        Path.home() / '.tmux-orchestrator' / 'scheduler.db',  # Original expected location
+        Path(__file__).parent / 'scheduler.db',  # Current Tmux-Orchestrator directory
+        Path(__file__).parent / 'registry' / 'scheduler.db'  # Registry subfolder
+    ]
+    
+    db_path = None
+    for path in possible_paths:
+        if path.exists():
+            db_path = path
+            break
+    
+    if not db_path:
         return []
     
     completed_projects = []
@@ -51,16 +67,20 @@ def get_completed_projects_from_db() -> List[Dict]:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT id, name, spec_path, project_path, status, completed_at
-            FROM projects
+            SELECT id, spec_path, spec_path, project_path, status, completed_at
+            FROM project_queue
             WHERE status = 'completed'
             ORDER BY completed_at DESC
         """)
         
         for row in cursor.fetchall():
+            # Extract project name from spec_path
+            spec_path = row[1]
+            name = Path(spec_path).stem.replace('_', ' ').title() if spec_path else f"Project {row[0]}"
+            
             completed_projects.append({
                 'id': row[0],
-                'name': row[1],
+                'name': name,
                 'spec_path': row[2],
                 'project_path': row[3],
                 'status': row[4],
@@ -491,6 +511,56 @@ def main():
     
     console.print("\n[bold]Note:[/bold] Final integration is determined by analyzing git history across all agent worktrees.")
     console.print("Use the Integration Path to examine the complete development history of the project.")
+
+
+def get_completed_integrations(page: int = 1, per_page: int = 4, all_items: bool = False) -> List[Dict[str, any]]:
+    """
+    Get integrations from completed projects only, sorted by recency, with optional pagination.
+    Returns a list of dicts ready for display/merging.
+    """
+    try:
+        projects = get_completed_projects_from_db()  # Already filters to status='completed', ordered by completed_at DESC
+        
+        integrations = []
+        for project in projects:
+            locations = find_project_locations(project['name'], project.get('project_path'))
+            integration_info = analyze_worktree_integration(locations)
+            
+            if integration_info['integration_worktree']:
+                integration = {
+                    'project_name': project['name'],
+                    'project_path': locations.get('project'),
+                    'integration_worktree': integration_info['integration_worktree'],
+                    'integration_branch': integration_info['integration_branch'],
+                    'latest_commit_hash': integration_info['latest_commit_hash'],
+                    'latest_commit_message': integration_info['latest_commit_message'],
+                    'latest_commit_time': integration_info['latest_commit_time'],
+                    'completed_at': project['completed_at']  # For sorting and display
+                }
+                integrations.append(integration)
+        
+        # Sort by completed_at (DB timestamp) descending (most recent first), fallback to latest_commit_time
+        integrations.sort(
+            key=lambda i: datetime.fromisoformat(i.get('completed_at') or i.get('latest_commit_time') or '1970-01-01'),
+            reverse=True
+        )
+        
+        if all_items:
+            return integrations
+        
+        # Apply pagination
+        start = (page - 1) * per_page
+        end = start + per_page
+        paginated = integrations[start:end]
+        if start >= len(integrations):
+            logger.warning(f"Page {page} is out of range (total items: {len(integrations)})")
+            return []
+        
+        return paginated
+    
+    except sqlite3.Error as e:
+        logger.error(f"DB error in get_completed_integrations: {e}")
+        raise  # Let caller handle fallback
 
 
 if __name__ == "__main__":

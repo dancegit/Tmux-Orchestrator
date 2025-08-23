@@ -85,7 +85,7 @@ Options:
   -h, --help         Show this help
   --conflicts        Only show conflicts
   --active           Show active tmux sessions
-  --reset <id>       Reset project to queued status
+  --reset <id>       Reset project to queued status (delegated to scheduler)
   --fresh <id>       Mark project for fresh start
   --remove <id>      Remove project from queue
   --resume <id>      Resume project by calling auto_orchestrate.py --resume
@@ -107,7 +107,8 @@ Examples:
         return
     
     # NEW: Check if this is a write operation
-    is_write_op = any(opt in sys.argv for opt in ['--reset', '--fresh', '--remove', '--resume', '--cleanup-stale'])
+    # Note: --reset is now delegated to scheduler, so it doesn't need lock
+    is_write_op = any(opt in sys.argv for opt in ['--fresh', '--remove', '--resume', '--cleanup-stale'])
     # Note: --remove uses safe removal logic that checks for processing status
     
     # NEW: Acquire lock only for writes
@@ -156,21 +157,44 @@ Examples:
         project_id = int(sys.argv[2])
         
         if action == '--reset':
-            cursor.execute("""
-                UPDATE project_queue 
-                SET status = 'queued', started_at = NULL, completed_at = NULL, 
-                    error_message = NULL, orchestrator_session = NULL, main_session = NULL
-                WHERE id = ?
-            """, (project_id,))
-            conn.commit()
-            print(f"✅ Project {project_id} reset to queued status")
-            return
+            # Delegate to scheduler instead of direct database manipulation
+            print(f"🔄 Delegating reset of project {project_id} to scheduler...")
+            import subprocess
+            import os
+            try:
+                # Use system python and explicitly disable uv to avoid psutil import issues
+                scheduler_path = Path(__file__).parent / 'scheduler.py'
+                env = os.environ.copy()
+                env['PATH'] = '/usr/bin:/bin:' + env.get('PATH', '')  # Prioritize system python
+                result = subprocess.run([
+                    '/usr/bin/python3', str(scheduler_path), '--delegated-reset', str(project_id)
+                ], capture_output=True, text=True, env=env)
+                
+                if result.returncode == 0:
+                    print(f"✅ Project {project_id} reset successfully via scheduler")
+                    if result.stdout.strip():
+                        print(f"   {result.stdout.strip()}")
+                else:
+                    print(f"❌ Failed to reset project {project_id}")
+                    if result.stderr.strip():
+                        print(f"   Error: {result.stderr.strip()}")
+                return
+            except Exception as e:
+                print(f"❌ Error running scheduler reset command: {e}")
+                return
             
         elif action == '--fresh':
-            cursor.execute("UPDATE project_queue SET fresh_start = 1 WHERE id = ?", (project_id,))
-            conn.commit()
-            print(f"✅ Project {project_id} marked for fresh start")
-            return
+            # This could also be delegated to scheduler, but it's a simple operation
+            # Try direct DB access first, then delegate if lock fails
+            try:
+                cursor.execute("UPDATE project_queue SET fresh_start = 1 WHERE id = ?", (project_id,))
+                conn.commit()
+                print(f"✅ Project {project_id} marked for fresh start")
+                return
+            except Exception as e:
+                print(f"⚠️  Direct update failed: {e}")
+                print(f"🔄 Note: --fresh operation may need scheduler delegation if this persists")
+                return
             
         elif action == '--remove':
             # Use the same logic as scheduler's remove_project_from_queue but without lock contention
@@ -337,7 +361,7 @@ Examples:
     print("-" * 80)
     print("💡 USAGE:")
     print("  queue_status.py --conflicts      # Show only conflicts")
-    print("  queue_status.py --reset <id>     # Reset project to queued")
+    print("  queue_status.py --reset <id>     # Reset project to queued (works even when scheduler active)")
     print("  queue_status.py --fresh <id>     # Mark for fresh start") 
     print("  queue_status.py --remove <id>    # Remove from queue (or use: python3 scheduler.py --remove-project <id>)")
     print("  queue_status.py --cleanup-stale  # Clean stale registries")

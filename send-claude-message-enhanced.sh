@@ -31,14 +31,9 @@ reset_pane_state() {
     local window="$1"
     echo "🔄 Resetting pane state for $window"
     
-    # Only send Ctrl-C if explicitly enabled (to avoid interrupting bash prompts)
-    if [ "${RESET_WITH_CTRL_C:-0}" -eq 1 ]; then
-        # Send Ctrl-C only if explicitly enabled (for debugging stuck states)
-        tmux send-keys -t "$window" C-c 2>/dev/null
-        sleep 0.2
-    else
-        echo "   Skipping Ctrl-C reset to avoid interrupts"
-    fi
+    # Send Ctrl-C to cancel any pending input
+    tmux send-keys -t "$window" C-c 2>/dev/null
+    sleep 0.2
     
     # Send Escape to exit any special modes (vi mode, copy mode, etc)
     tmux send-keys -t "$window" Escape 2>/dev/null
@@ -135,9 +130,8 @@ send_with_retry() {
         
         echo "⚠️  Message not verified, will retry..."
         
-        # Exponential backoff - use bash arithmetic instead of bc
-        delay=$((delay * BACKOFF_MULTIPLIER))  # Integer multiplication (works if BACKOFF_MULTIPLIER is integer)
-        # For float multiplication, use awk: delay=$(awk "BEGIN {print int($delay * $BACKOFF_MULTIPLIER)}")
+        # Exponential backoff
+        delay=$(echo "$delay * $BACKOFF_MULTIPLIER" | bc)
         
         # If not last attempt, wait before retry
         if [ $attempts -lt $MAX_ATTEMPTS ]; then
@@ -150,19 +144,11 @@ send_with_retry() {
     return 1
 }
 
-# Self-referential detection (enhanced)
-if [ -n "$TMUX" ]; then  # Only check if actually inside tmux
-    CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}" 2>/dev/null | tr -d '[:space:]')  # Trim whitespace
-    if [ -z "$CURRENT_WINDOW" ]; then
-        # Failed to get current window - assuming not self
-        :  # No-op
-    elif [ "$CURRENT_WINDOW" = "$WINDOW" ]; then
-        echo "WARNING: Attempting to send message to self ($WINDOW). Skipping."
-        exit 0
-    fi
-else
-    # Not inside tmux - proceeding with send
-    :  # No-op
+# Self-referential detection
+CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}" 2>/dev/null || echo "")
+if [ "$CURRENT_WINDOW" = "$WINDOW" ]; then
+    echo "WARNING: Attempting to send message to self ($WINDOW). Skipping."
+    exit 0
 fi
 
 # Validate target exists
