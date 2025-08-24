@@ -14,6 +14,9 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
+# Set UV_NO_WORKSPACE environment variable for all subprocess calls
+os.environ['UV_NO_WORKSPACE'] = '1'
+
 class GitActivityMonitor:
     def __init__(self, project_dir: Optional[Path] = None):
         self.script_dir = Path(__file__).parent

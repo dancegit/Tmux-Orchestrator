@@ -11,6 +11,10 @@ Tmux Orchestrator Scheduler - Replaces at command with reliable Python-based sch
 Provides persistent task queue, credit exhaustion detection, and missed task recovery
 """
 
+# Set UV_NO_WORKSPACE environment variable for all subprocess calls
+import os
+os.environ['UV_NO_WORKSPACE'] = '1'
+
 import time
 import threading
 import sqlite3
@@ -1460,8 +1464,17 @@ class TmuxOrchestratorScheduler:
                 result_send = subprocess.run(cmd, capture_output=True, text=True)
             else:
                 # Fallback to direct tmux send-keys
-                cmd_send = f"tmux send-keys -t {target_window} {shlex.quote(message)} Enter"
-                result_send = subprocess.run(cmd_send, shell=True, capture_output=True, text=True)
+                # First send the message
+                cmd_msg = ['tmux', 'send-keys', '-t', target_window, message]
+                result_msg = subprocess.run(cmd_msg, capture_output=True, text=True)
+                # Then send Enter key (C-m)
+                cmd_enter = ['tmux', 'send-keys', '-t', target_window, 'C-m']
+                result_enter = subprocess.run(cmd_enter, capture_output=True, text=True)
+                # Combine results
+                result_send = result_msg
+                if result_msg.returncode != 0 or result_enter.returncode != 0:
+                    result_send.returncode = 1
+                    result_send.stderr = (result_msg.stderr or '') + (result_enter.stderr or '')
             
             if result_send.returncode != 0:
                 logger.error(f"Failed to send message to {target_window}: {result_send.stderr}")

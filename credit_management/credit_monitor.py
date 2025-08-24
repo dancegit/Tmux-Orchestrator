@@ -18,6 +18,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple
 import logging
+
+# Set UV_NO_WORKSPACE environment variable for all subprocess calls
+os.environ['UV_NO_WORKSPACE'] = '1'
 import sys
 
 # Setup logging

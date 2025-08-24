@@ -19,6 +19,9 @@ from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+# Set UV_NO_WORKSPACE environment variable for all subprocess calls
+os.environ['UV_NO_WORKSPACE'] = '1'
+
 class ClaudeMdHandler(FileSystemEventHandler):
     def __init__(self, claude_md_path: Path, monitoring_dir: Path):
         self.claude_md_path = claude_md_path

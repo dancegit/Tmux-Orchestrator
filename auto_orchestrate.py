@@ -18,6 +18,10 @@ Analyzes a specification file and automatically sets up a complete
 tmux orchestration environment with Orchestrator, PM, Developer, and Tester.
 """
 
+# Set UV_NO_WORKSPACE environment variable for all subprocess calls
+import os
+os.environ['UV_NO_WORKSPACE'] = '1'
+
 import subprocess
 import json
 import sys
@@ -260,6 +264,107 @@ class PathManager:
             import shutil
             shutil.rmtree(self.legacy_registry)
             console.print(f"[green]✓ Legacy registry cleaned up[/green]")
+    
+    def setup_sandbox_for_role(self, role: str, active_roles: List[str] = None) -> bool:
+        """Set up sandbox symlinks and essential files for a role's worktree.
+        Returns True if successful, False otherwise (for fallback handling).
+        """
+        worktree_path = self.get_worktree_path(role)
+        worktree_path.mkdir(parents=True, exist_ok=True)
+        
+        success = True
+        
+        # Create shared directory for all symlinks
+        shared_dir = worktree_path / 'shared'
+        shared_dir.mkdir(exist_ok=True)
+        
+        # Create relative symlink to main project
+        if not self._create_relative_symlink(
+            shared_dir / 'main-project', 
+            self.project_path, 
+            worktree_path
+        ):
+            success = False
+        
+        # Create symlinks to other agent worktrees (excluding self)
+        if active_roles:
+            for other_role in active_roles:
+                if other_role != role and other_role != 'orchestrator':  # Skip self and orchestrator
+                    other_path = self.get_worktree_path(other_role)
+                    if other_path.exists():
+                        if not self._create_relative_symlink(
+                            shared_dir / other_role, 
+                            other_path, 
+                            worktree_path
+                        ):
+                            logger.warning(f"Failed to create symlink to {other_role} worktree")
+        
+        # Ensure essential files are present
+        for file_name in ['.mcp.json', 'CLAUDE.md']:
+            src = self.orchestrator_root / file_name
+            dest = worktree_path / file_name
+            if src.exists() and not dest.exists():
+                try:
+                    import shutil
+                    shutil.copy(src, dest)
+                    logger.info(f"Copied {file_name} to {worktree_path}")
+                except (OSError, PermissionError) as e:
+                    logger.error(f"Failed to copy {file_name} for {role}: {e}")
+                    success = False
+        
+        return success
+    
+    def _create_relative_symlink(self, link_path: Path, target_path: Path, base_path: Path) -> bool:
+        """Create a relative symlink from link_path to target_path, relative to base_path."""
+        if link_path.exists():
+            return True  # Already exists
+        
+        try:
+            import platform
+            relative_target = os.path.relpath(str(target_path), str(link_path.parent))
+            
+            if platform.system() == 'Windows':
+                # Windows-specific symlink handling
+                try:
+                    # Try directory symlink first
+                    subprocess.run(['cmd', '/c', 'mklink', '/D', str(link_path), relative_target], 
+                                 check=True, capture_output=True)
+                    logger.info(f"Created Windows symlink: {link_path} -> {target_path}")
+                except subprocess.CalledProcessError:
+                    # Fall back to junction for absolute path
+                    try:
+                        subprocess.run(['cmd', '/c', 'mklink', '/J', str(link_path), str(target_path)], 
+                                     check=True, capture_output=True)
+                        logger.info(f"Created Windows junction: {link_path} -> {target_path}")
+                    except subprocess.CalledProcessError as e:
+                        logger.error(f"Failed to create Windows link {link_path}: {e}")
+                        return False
+            else:
+                # Unix-like systems
+                os.symlink(relative_target, str(link_path), target_is_directory=True)
+                logger.info(f"Created symlink: {link_path} -> {target_path}")
+            
+            return True
+        except (OSError, PermissionError) as e:
+            logger.error(f"Failed to create symlink {link_path}: {e}")
+            return False
+    
+    def migrate_sandboxes(self):
+        """Migrate existing worktrees to have sandbox symlinks."""
+        if (self.metadata_root / 'sandbox_migrated.flag').exists():
+            return
+        
+        # Get all existing worktree directories
+        if self.worktree_root.exists():
+            worktree_dirs = [d for d in self.worktree_root.iterdir() if d.is_dir()]
+            role_names = [d.name.replace('-', '_') for d in worktree_dirs]
+            
+            for worktree_dir in worktree_dirs:
+                role = worktree_dir.name.replace('-', '_')
+                self.setup_sandbox_for_role(role, active_roles=role_names)
+        
+        (self.metadata_root / 'sandbox_migrated.flag').touch()
+        logger.info("Sandbox migration complete")
     
     def reconcile_session_state(self, session_state: dict) -> dict:
         """Reconcile missing paths in session state"""
@@ -1485,6 +1590,10 @@ CLAUDE_EOF
             title="📋 Resume Details"
         ))
         
+        # Migrate existing worktrees to have sandbox symlinks
+        console.print("\n[cyan]Checking sandbox setup for existing worktrees...[/cyan]")
+        self.path_manager.migrate_sandboxes()
+        
         # Update agent status
         console.print("\n[cyan]Checking agent status...[/cyan]")
         session_state = self.session_state_manager.update_agent_status(
@@ -2091,6 +2200,16 @@ Please provide a brief status update on your current work and any blockers."""
                 # Enable MCP servers in Claude configuration for this worktree
                 self.enable_mcp_servers_in_claude_config(worktree_path)
                 
+                # Set up sandbox symlinks for this role
+                active_roles = [role for _, role in roles_to_deploy]
+                if not self.path_manager.setup_sandbox_for_role(role_key, active_roles):
+                    console.print(f"[yellow]Warning: Sandbox setup failed for {role_key}. Agent will use cd-free fallback.[/yellow]")
+                    # Store fallback state in session if available
+                    if hasattr(self, 'session_state_manager') and self.session_state_manager:
+                        agent_state = self.session_state_manager.get_agent_state(role_key)
+                        if agent_state:
+                            agent_state['sandbox_mode'] = 'cd_free'
+                
                 progress.update(task, advance=1, description=f"Created worktree for {role_key}")
         
         # Display worktree summary
@@ -2256,6 +2375,26 @@ This file is automatically read by Claude Code when working in this directory.
                     console.print(f"[green]✓ Created CLAUDE.md for {role_key} with orchestrator rules[/green]")
             except Exception as e:
                 console.print(f"[yellow]Warning: Could not update CLAUDE.md for {role_key}: {e}[/yellow]")
+    
+    def setup_agent_uv_environment(self, session_name: str, window_idx: int, role_key: str):
+        """Set up UV environment for an agent's tmux window to work in worktrees"""
+        try:
+            # Set UV_NO_WORKSPACE for this specific tmux window
+            subprocess.run([
+                'tmux', 'set-environment', '-t', f'{session_name}:{window_idx}', 
+                'UV_NO_WORKSPACE', '1'
+            ], check=True, capture_output=True)
+            
+            # Optional: Set a custom cache dir to avoid polluting target
+            cache_dir = f"/tmp/tmux-orchestrator-uv-cache-{session_name}-{role_key}"
+            subprocess.run([
+                'tmux', 'set-environment', '-t', f'{session_name}:{window_idx}',
+                'UV_CACHE_DIR', cache_dir
+            ], check=True, capture_output=True)
+            
+            console.print(f"[green]✓ Set UV environment for {role_key} in window {window_idx}[/green]")
+        except subprocess.CalledProcessError as e:
+            console.print(f"[yellow]Warning: Could not set UV environment for {role_key}: {e}[/yellow]")
     
     def sanitize_session_name(self, name: str) -> str:
         """Sanitize a name to be safe for tmux session names"""
@@ -2586,6 +2725,9 @@ This file is automatically read by Claude Code when working in this directory.
         roles = [(name, idx, role) for idx, (name, role) in enumerate(roles_to_deploy)]
         
         for window_name, window_idx, role_key in roles:
+            # Set up UV environment BEFORE starting Claude
+            self.setup_agent_uv_environment(session_name, window_idx, role_key)
+            
             # Pre-initialize Claude if worktree has .mcp.json
             worktree_path = worktree_paths.get(role_key)
             if worktree_path and (worktree_path / '.mcp.json').exists():
@@ -2749,9 +2891,19 @@ This file is automatically read by Claude Code when working in this directory.
             if pm_idx is not None:
                 channels += f"- Report to PM: `scm {session_name}:{pm_idx} \"Pushed feature branch, ready for review\"`\n"
         elif current_role == 'project_manager':
+            channels += "\n🚨 **CRITICAL FOR PROJECT MANAGERS** 🚨\n"
+            channels += "**DO NOT use MCP tmux commands!** They often fail to send the Enter key.\n"
+            channels += "**ALWAYS use the `scm` command for ALL messaging:**\n\n"
+            
             dev_idx = next((idx for idx, (name, role) in enumerate(roles_deployed) if role == 'developer'), None)
+            test_idx = next((idx for idx, (name, role) in enumerate(roles_deployed) if role == 'tester'), None)
+            
             if dev_idx is not None:
                 channels += f"- Coordinate with Developer: `scm {session_name}:{dev_idx} \"Please resolve merge conflicts\"`\n"
+            if test_idx is not None:
+                channels += f"- Update Tester: `scm {session_name}:{test_idx} \"Developer pushed updates, please verify tests\"`\n"
+            
+            channels += "\n**Why this matters**: MCP's tmux execute-command often requires manual Enter key pressing. The `scm` command ensures your messages are delivered properly.\n"
         elif current_role == 'tester':
             pm_idx = next((idx for idx, (name, role) in enumerate(roles_deployed) if role == 'project_manager'), None)
             if pm_idx is not None:
@@ -2760,7 +2912,9 @@ This file is automatically read by Claude Code when working in this directory.
         channels += "\n**⚠️ Common Mistakes to Avoid:**\n"
         channels += "- ❌ Using role names like `pm:0` - roles don't have fixed numbers!\n"
         channels += "- ❌ Using `developer:0` - the developer might be in window 2!\n"
+        channels += "- ❌ Using MCP tmux execute-command - it often fails to send Enter key!\n"
         channels += "- ✅ Always use the window numbers from the table above\n"
+        channels += "- ✅ Always use `scm` command for messaging (not MCP tools)\n"
         channels += "- ✅ Or use full session:window format\n\n"
         
         return channels
@@ -2845,6 +2999,84 @@ Your worktree location: `{worktree_paths.get(role, 'N/A')}`
             team_description = "\n".join(team_windows)
         else:
             team_description = "- Check 'tmux list-windows' to see your team"
+        
+        # UV Configuration instructions
+        uv_instructions = """
+🔧 **UV CONFIGURATION (CRITICAL)**:
+- `UV_NO_WORKSPACE=1` is set in your environment
+- This allows UV commands to work without workspace detection
+- You can run UV commands normally: `uv run`, `uv pip install`, etc.
+- UV cache is isolated to prevent target project pollution
+
+⚠️ **GIT SAFETY RULES**:
+- NEVER commit `.venv`, `__pycache__`, or UV cache directories
+- Before commits: `git status --porcelain | grep -E '\.venv|__pycache__|uv-cache'`
+- If temp files detected: Add them to `.gitignore` or use `git add -p`
+- ALWAYS review `git status` before committing
+- Use selective staging (`git add -p`) instead of `git add .` or `git add -A`
+
+"""
+        
+        # Add shared directory instructions
+        sandbox_instructions = ""
+        if role != 'orchestrator' and worktree_paths and role in worktree_paths:
+            # Check if sandbox mode is set to cd_free (fallback)
+            agent_state = None
+            if hasattr(self, 'session_state_manager') and self.session_state_manager:
+                agent_state = self.session_state_manager.get_agent_state(role)
+            
+            if agent_state and agent_state.get('sandbox_mode') == 'cd_free':
+                # Fallback: cd-free commands
+                sandbox_instructions = f"""
+⚠️ **IMPORTANT: Symlink setup failed. Use cd-free commands:**
+
+**Git Operations** (without cd):
+- git --work-tree={self.project_path} --git-dir={self.project_path / '.git'} log --oneline -n 10
+- git --work-tree={self.project_path} --git-dir={self.project_path / '.git'} status
+
+**File Access** (use absolute paths):
+- cat {self.project_path}/README.md
+- grep -r "pattern" {self.project_path}/src
+
+Report any issues to the Orchestrator.
+"""
+            else:
+                # Primary: symlink approach
+                sandbox_instructions = """
+📁 **IMPORTANT: Access sibling directories via the 'shared' folder:**
+
+**Directory Structure**:
+./shared/
+├── main-project/     → Main project directory
+├── developer/        → Developer's worktree (if present)
+├── tester/          → Tester's worktree (if present)
+└── [other agents]/  → Other agent worktrees
+
+**Accessing Main Project**:
+- Use: cd ./shared/main-project
+- NOT: cd /absolute/path/to/project
+
+**Accessing Other Agents**:
+- cd ./shared/developer && git log  # View developer's work
+- cd ./shared/tester && ls tests/   # Check tester's files
+
+**Examples**:
+- cd ./shared/main-project && git pull origin main
+- cd ./shared/main-project && git status
+- cat ./shared/developer/src/feature.py
+- diff ./shared/tester/tests/test_feature.py tests/test_feature.py
+
+**Git Remotes** (from main-project):
+- cd ./shared/main-project
+- git remote add developer ../../developer
+- git remote add tester ../../tester
+
+**Safety Note**: Use non-recursive commands to avoid issues:
+- find ./shared -maxdepth 2 -name "*.py"  # Limit depth
+- ls ./shared/*/  # List contents safely
+
+If 'shared' directory is missing or incomplete, report to Orchestrator.
+"""
         
         # Add note about context priming if not available
         context_note = ""
@@ -2931,6 +3163,8 @@ Schedule your first check-in for {role_config.check_in_interval} minutes from th
    - Shared docs: `{self.project_path}/docs/`
    - Team worktrees: See locations above
 
+{self.create_uv_configuration_instructions()}
+
 ## 💳 Credit Management
 Monitor team credit status to ensure continuous operation:
 ```bash
@@ -3010,7 +3244,7 @@ This means context exhaustion is NOT a crisis - it's a routine, self-managed eve
                                'securityops', 'networkops', 'databaseops', 'researcher', 'code_reviewer']:
                     technical_roles_present.append(role_key)
             
-            return f"""{mandatory_reading}{context_note}{team_locations}🚀 **AUTONOMY ACTIVATION - READ FIRST** 🚀
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}🚀 **AUTONOMY ACTIVATION - READ FIRST** 🚀
 
 ⚡ **IMMEDIATE ACTION REQUIRED**: Start working IMMEDIATELY without waiting for permissions!
 🎯 **NO PERMISSION SEEKING**: You have FULL AUTHORIZATION to proceed with all routine tasks
@@ -3128,10 +3362,12 @@ Maintain EXCEPTIONAL quality standards. No compromises.
 
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
 
+{self.create_uv_configuration_instructions()}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'developer':
-            return f"""{mandatory_reading}{context_note}{team_locations}🚀 **AUTONOMY ACTIVATION - START CODING NOW** 🚀
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}🚀 **AUTONOMY ACTIVATION - START CODING NOW** 🚀
 
 ⚡ **BEGIN IMPLEMENTATION IMMEDIATELY**: Start coding within 2 minutes of reading this briefing!
 🎯 **NO APPROVAL NEEDED**: You have FULL AUTHORIZATION to implement all features in the spec
@@ -3221,10 +3457,12 @@ Your commits now trigger automatic notifications to downstream agents:
 
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
 
+{self.create_uv_configuration_instructions()}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'tester':
-            return f"""{mandatory_reading}{context_note}{team_locations}🚀 **AUTONOMY ACTIVATION - START TESTING NOW** 🚀
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}🚀 **AUTONOMY ACTIVATION - START TESTING NOW** 🚀
 
 ⚡ **BEGIN TEST CREATION IMMEDIATELY**: Start writing tests within 2 minutes of reading this briefing!
 🎯 **NO APPROVAL NEEDED**: You have FULL AUTHORIZATION to write and execute all tests
@@ -3297,10 +3535,12 @@ You now receive Developer updates automatically:
 
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
 
+{self.create_uv_configuration_instructions()}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'testrunner':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Test Runner for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the Test Runner for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -3361,10 +3601,12 @@ You now receive Tester updates automatically:
 
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
 
+{self.create_uv_configuration_instructions()}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'logtracker':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Log Tracker for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the Log Tracker for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -3440,10 +3682,12 @@ Start by:
 
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
 
+{self.create_uv_configuration_instructions()}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'devops':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the DevOps Engineer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the DevOps Engineer for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -3477,10 +3721,12 @@ Coordinate with:
 
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
 
+{self.create_uv_configuration_instructions()}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'code_reviewer':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Code Reviewer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the Code Reviewer for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -3519,7 +3765,7 @@ Start by:
 Work with Developer to maintain code excellence."""
 
         elif role == 'researcher':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Technical Researcher for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the Technical Researcher for {spec.project.name}.
 {mcp_tools_info}
 
 {communication_channels}
@@ -3623,10 +3869,12 @@ Report findings to:
 
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
 
+{self.create_uv_configuration_instructions()}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'documentation_writer':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Documentation Writer for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the Documentation Writer for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -3664,7 +3912,7 @@ Coordinate with:
 - Tester on testing procedures"""
 
         elif role == 'sysadmin':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the System Administrator for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the System Administrator for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -3700,7 +3948,7 @@ Start by:
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'securityops':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Security Operations specialist for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the Security Operations specialist for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -3741,7 +3989,7 @@ Coordinate with:
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'networkops':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Network Operations specialist for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the Network Operations specialist for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -3782,7 +4030,7 @@ Coordinate with:
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'monitoringops':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Monitoring Operations specialist for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the Monitoring Operations specialist for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -3823,7 +4071,7 @@ Coordinate with:
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'databaseops':
-            return f"""{mandatory_reading}{context_note}{team_locations}You are the Database Operations specialist for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are the Database Operations specialist for {spec.project.name}.
 {mcp_tools_info}
 
 Your responsibilities:
@@ -3865,7 +4113,7 @@ Coordinate with:
 
         else:
             # Fallback for any undefined roles
-            return f"""{mandatory_reading}{context_note}{team_locations}You are a team member for {spec.project.name}.
+            return f"""{mandatory_reading}{context_note}{team_locations}{sandbox_instructions}You are a team member for {spec.project.name}.
 
 Your role: {role}
 
@@ -4608,6 +4856,24 @@ If you encounter conflicts:
 """
         
         return base_instructions + role_specific + communication
+
+    def create_uv_configuration_instructions(self) -> str:
+        """Create UV configuration instructions for agents working in worktrees"""
+        
+        return """
+🔧 **UV CONFIGURATION (CRITICAL)**:
+- `UV_NO_WORKSPACE=1` is set in your environment
+- This allows UV commands to work without workspace detection
+- You can run UV commands normally: `uv run`, `uv pip install`, etc.
+- UV cache is isolated to prevent target project pollution
+
+⚠️ **GIT SAFETY RULES**:
+- NEVER commit `.venv`, `__pycache__`, or UV cache directories
+- Before commits: `git status --porcelain | grep -E '\.venv|__pycache__|uv-cache'`
+- If temp files detected: Add them to `.gitignore` or use `git add -p`
+- ALWAYS review `git status` before committing
+- Use selective staging (`git add -p`) instead of `git add .` or `git add -A`
+"""
 
     def create_context_management_instructions(self, role: str) -> str:
         """Create context management instructions for agents to self-recover"""
