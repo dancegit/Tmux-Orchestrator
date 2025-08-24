@@ -19,6 +19,9 @@ import signal
 import os
 import logging
 
+# Set UV_NO_WORKSPACE environment variable for all subprocess calls
+os.environ['UV_NO_WORKSPACE'] = '1'
+
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 

@@ -18,6 +18,9 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 import argparse
+
+# Set UV_NO_WORKSPACE environment variable for all subprocess calls
+os.environ['UV_NO_WORKSPACE'] = '1'
 import glob
 
 # Import session state management

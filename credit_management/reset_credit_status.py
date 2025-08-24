@@ -12,6 +12,9 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
+# Set UV_NO_WORKSPACE environment variable for all subprocess calls
+os.environ['UV_NO_WORKSPACE'] = '1'
+
 def kill_stale_resume_processes():
     """Kill any resume processes scheduled for tomorrow"""
     try:

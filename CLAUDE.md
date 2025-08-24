@@ -694,6 +694,59 @@ git merge FETCH_HEAD
 3. **Push Branches**: Share work by pushing to origin
 4. **Regular Commits**: Same 30-minute rule applies
 
+### 📁 Shared Directory Access (NEW!)
+
+Due to Claude's security sandbox restricting `cd` to child directories only, each agent's worktree now includes a `shared` directory with symlinks for easy cross-directory access:
+
+```
+your-worktree/
+└── shared/
+    ├── main-project/     → Main project directory
+    ├── developer/        → Developer's worktree
+    ├── tester/          → Tester's worktree
+    └── [other agents]/  → Other agent worktrees
+```
+
+#### How to Use the Shared Directory
+
+**Accessing the Main Project**:
+```bash
+# ✅ CORRECT: Use relative path through shared
+cd ./shared/main-project
+git pull origin main
+
+# ❌ WRONG: Direct absolute path (blocked by Claude)
+cd /path/to/main-project  # Error: blocked for security
+```
+
+**Accessing Other Agent's Work**:
+```bash
+# Review developer's code
+cd ./shared/developer && git log --oneline -10
+cat ./shared/developer/src/feature.py
+
+# Check tester's test files
+ls -la ./shared/tester/tests/
+
+# Compare files across worktrees
+diff ./shared/developer/src/api.py ./src/api.py
+```
+
+**Git Remotes Setup** (from main-project):
+```bash
+cd ./shared/main-project
+git remote add developer ../../developer
+git remote add tester ../../tester
+git fetch developer
+git merge developer/feature-branch
+```
+
+#### Safety Notes
+- Use depth-limiting flags to avoid infinite loops: `find ./shared -maxdepth 2`
+- If symlinks fail, agents receive cd-free fallback instructions
+- Symlinks are created automatically during setup and resume
+- Report missing/broken symlinks to Orchestrator
+
 ### Role-Specific Directories and Files
 
 Each role typically creates and maintains specific directories:
@@ -2471,6 +2524,28 @@ sleep 5
 # Check what the agent said
 tmux capture-pane -t session:0 -p | tail -50
 ```
+
+### ⚠️ MCP Tmux Execute-Command Issues
+
+**CRITICAL WARNING**: Do NOT use MCP's tmux execute-command for messaging!
+
+**The Problem**: MCP's tmux tools often fail to send the Enter key, leaving messages undelivered. This particularly affects Project Managers who may have MCP tools available.
+
+**Symptoms**:
+- Messages appear in target window but aren't executed
+- PM needs to manually "press enter" in agent windows
+- Communication delays and confusion
+
+**The Solution**: ALWAYS use `scm` command instead:
+```bash
+# ❌ WRONG - MCP tmux execute-command
+# This often fails to send Enter key
+
+# ✅ CORRECT - Use scm command
+scm session:window "Your message"
+```
+
+**Why This Happens**: MCP's tmux integration sometimes sends the message text but fails to send the Enter key (C-m), requiring manual intervention. The `scm` command is specifically designed to handle this correctly.
 
 ## 📊 Compliance Monitoring System
 

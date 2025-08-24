@@ -12,6 +12,10 @@ import sys
 import json
 import subprocess
 from pathlib import Path
+import os
+
+# Set UV_NO_WORKSPACE environment variable for all subprocess calls
+os.environ['UV_NO_WORKSPACE'] = '1'
 
 # Import tmux_utils from the same directory
 sys.path.insert(0, str(Path(__file__).parent))

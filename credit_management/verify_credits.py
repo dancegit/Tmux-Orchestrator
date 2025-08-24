@@ -13,6 +13,10 @@ import subprocess
 import time
 import logging
 from pathlib import Path
+import os
+
+# Set UV_NO_WORKSPACE environment variable for all subprocess calls
+os.environ['UV_NO_WORKSPACE'] = '1'
 
 logging.basicConfig(
     level=logging.INFO,
