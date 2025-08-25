@@ -1,0 +1,29 @@
+[Unit]
+Description=Tmux Orchestrator Queue Daemon
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/Tmux-Orchestrator
+ExecStart=/usr/bin/python3 /path/to/Tmux-Orchestrator/scheduler.py --queue-daemon
+Environment=PATH=/home/YOUR_USERNAME/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/YOUR_USERNAME
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tmux-orchestrator-queue
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/path/to/Tmux-Orchestrator
+ReadWritePaths=/home/YOUR_USERNAME
+
+[Install]
+WantedBy=multi-user.target
