@@ -9,14 +9,50 @@
 - **Persist** - Work continues even when you close your laptop
 - **Scale** - Run multiple teams working on different projects simultaneously
 
-## 🚀 Latest Updates (v3.3.0)
+## 🚀 Latest Updates (v3.5.1)
 
-### Major Fixes
+### Major Improvements
+- **Auto-Orchestrate Reliability** - Fixed critical deployment failures in multi-agent setup
+- **MCP Server Workflow** - Proper Claude initialization sequence with MCP approval
+- **Queue Daemon Stability** - Fixed systemd service configuration issues
+- **Scheduler Enhancements** - Duplicate process prevention with robust locking
+- **Merge Integration Tool** - New tool for streamlined git workflow management
+
+### Recent Fixes (v3.3.0)
 - **Scheduler Infinite Loop** - Fixed critical bug where tasks with `interval_minutes=0` would reschedule infinitely
 - **Message Flooding Prevention** - Resolved issue causing 700+ duplicate messages to flood the orchestrator
 - **Event Bus System** - Implemented centralized event bus with rate limiting (10 messages/minute)
 - **Extended Timeouts** - Added configurable timeouts for long-running projects (2 hours runtime, 1 hour phantom grace)
 - **Improved Monitoring** - Enhanced state management and compliance monitoring with file-based logging
+
+## 🎯 Primary Tools & Entry Points
+
+### Core Orchestration Tools
+
+| Tool | Purpose | Usage |
+|------|---------|-------|
+| **`auto_orchestrate.py`** | Main entry point for project orchestration | Start new projects, resume existing ones, batch processing |
+| **`merge_integration.py`** | Git workflow integration tool | Merge branches, handle conflicts, coordinate git operations |
+| **`scheduler.py --queue-daemon`** | Queue daemon for batch processing | Process multiple projects sequentially, handle retries |
+| **`monitoring_dashboard.py`** | Real-time monitoring interface | Track all active orchestrations via web UI |
+
+### Quick Start with Primary Tools
+```bash
+# Start a new orchestration
+./auto_orchestrate.py --spec /path/to/spec.md
+
+# Process multiple projects
+./auto_orchestrate.py --spec spec1.md --spec spec2.md --spec spec3.md
+
+# Resume after interruption
+./auto_orchestrate.py --project /path/to/project --resume
+
+# Merge integration branches
+./merge_integration.py --project /path/to/project --branch integration
+
+# Monitor everything
+./monitoring_dashboard.py
+```
 
 ## 🏗️ Architecture
 
@@ -72,6 +108,7 @@ The Tmux Orchestrator uses a streamlined architecture with focused roles:
 - **Python** 3.11+ (for utilities)
 - **UV** (for Python script management) - **Required for all Python scripts**
 - **Git** 2.0+ configured with user credentials
+- **SQLite3** (for task queue database)
 - Basic familiarity with tmux commands
 
 **Important**: All Python scripts use UV shebangs for zero-dependency execution. Install UV with:
@@ -79,10 +116,35 @@ The Tmux Orchestrator uses a streamlined architecture with focused roles:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
+### System Services (Optional but Recommended)
+
+#### 1. Queue Daemon Service (systemd)
+For production use, install the queue daemon as a systemd service:
+```bash
+# Install the service
+sudo cp /etc/systemd/system/tmux-orchestrator-queue.service.example /etc/systemd/system/tmux-orchestrator-queue.service
+sudo systemctl daemon-reload
+sudo systemctl enable tmux-orchestrator-queue
+sudo systemctl start tmux-orchestrator-queue
+
+# Check status
+systemctl status tmux-orchestrator-queue
+```
+
+#### 2. Scheduler Monitor (cron)
+Set up automated monitoring:
+```bash
+# Add to crontab
+crontab -e
+# Add this line:
+*/10 * * * * /path/to/Tmux-Orchestrator/cron_scheduler_monitor.sh
+```
+
 ### Recommended Setup
 - **Claude Subscription**: Pro or higher for best performance
 - **Terminal**: Full-featured terminal with 256 color support
 - **Shell**: Bash or Zsh (scripts assume bash-compatible shell)
+- **GitHub CLI** (gh): For automated PR creation in merge_integration.py
 
 ### Initial Setup
 
@@ -164,6 +226,7 @@ sudo ./systemd/uninstall-systemd-service.sh $USER
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
 | **`auto_orchestrate.py`** | Automated setup from specifications | Starting new projects with a spec file |
+| **`merge_integration.py`** | Git workflow and PR management | Merging branches, creating PRs, managing integration |
 | **`send-claude-message.sh`** | Send messages to Claude agents | Basic agent communication |
 | **`send-claude-message-hubspoke.sh`** | Hub-spoke enforced messaging | Critical updates & completions |
 | **`report-completion.sh`** | Report task completions | After completing major tasks |
@@ -648,6 +711,24 @@ The orchestrator can share insights between projects:
 
 # Emergency stop
 ./send-claude-message.sh project-impl:0 "STOP all current work and report status"
+```
+
+#### `merge_integration.py` - Git Workflow Management
+```bash
+# Merge integration branch to main
+./merge_integration.py --project /path/to/project --branch integration
+
+# Create PR without merging
+./merge_integration.py --project /path/to/project --branch feature/auth --pr-only
+
+# Force merge without PR (use with caution)
+./merge_integration.py --project /path/to/project --branch hotfix --no-pr
+
+# Specify custom base branch
+./merge_integration.py --project /path/to/project --branch feature/ui --base develop
+
+# Dry run to see what would happen
+./merge_integration.py --project /path/to/project --branch integration --dry-run
 ```
 
 #### `schedule_with_note.sh` - Task Scheduling
