@@ -415,6 +415,9 @@ class AutoOrchestrator:
         # Initialize PathManager for unified path handling
         self.path_manager = PathManager(self.project_path, self.tmux_orchestrator_path)
         
+        # Set project_name from path
+        self.project_name = self.project_path.name
+        
         # Track start time for duration calculation
         self.start_time = time.time()
         
@@ -668,7 +671,7 @@ class AutoOrchestrator:
                 if session_name in existing_sessions:
                     conflicts.append(session_name)
             
-            if conflicts and not self.args.force:
+            if conflicts and not self.force:
                 console.print(f"\n[yellow]Warning: Potential session name conflicts detected: {', '.join(conflicts)}[/yellow]")
                 console.print("[yellow]Use --force to override, or manually resolve conflicts[/yellow]")
                 # For now, warn but don't fail - conflict resolution is handled separately
@@ -1856,7 +1859,7 @@ CLAUDE_EOF
                 '-n', agent.window_name, '-c', agent.worktree_path
             ], capture_output=True)
             
-        # Start Claude
+        # Start Claude with --dangerously-skip-permissions
         subprocess.run([
             'tmux', 'send-keys', '-t', f'{session_state.session_name}:{agent.window_index}',
             'claude --dangerously-skip-permissions', 'Enter'
@@ -2206,9 +2209,13 @@ Please provide a brief status update on your current work and any blockers."""
                     console.print(f"[yellow]Warning: Sandbox setup failed for {role_key}. Agent will use cd-free fallback.[/yellow]")
                     # Store fallback state in session if available
                     if hasattr(self, 'session_state_manager') and self.session_state_manager:
-                        agent_state = self.session_state_manager.get_agent_state(role_key)
-                        if agent_state:
-                            agent_state['sandbox_mode'] = 'cd_free'
+                        state = self.session_state_manager.load_session_state(self.project_name)
+                        if state and role_key in state.agents:
+                            self.session_state_manager.update_agent_state(
+                                self.project_name, 
+                                role_key, 
+                                {'sandbox_mode': 'cd_free'}
+                            )
                 
                 progress.update(task, advance=1, description=f"Created worktree for {role_key}")
         
@@ -2449,6 +2456,10 @@ This file is automatically read by Claude Code when working in this directory.
             True if conflicts were resolved or no conflicts exist, False if unresolvable
         """
         try:
+            # In batch/daemon mode, clean up similar sessions first
+            if self.daemon_mode or self.batch_mode:
+                self._cleanup_similar_sessions(session_name)
+            
             # Check if session exists
             result = subprocess.run(['tmux', 'has-session', '-t', session_name], capture_output=True)
             if result.returncode != 0:
@@ -2460,7 +2471,7 @@ This file is automatically read by Claude Code when working in this directory.
             # Get session details for analysis
             session_info = self._get_session_info(session_name)
             
-            if self.args.daemon or self.args.batch:
+            if self.daemon_mode or self.batch_mode:
                 # In non-interactive mode, use automatic resolution
                 return self._auto_resolve_conflict(session_name, session_info)
             else:
@@ -2520,6 +2531,25 @@ This file is automatically read by Claude Code when working in this directory.
     def _auto_resolve_conflict(self, session_name: str, session_info: dict) -> bool:
         """Automatically resolve session conflicts in non-interactive mode"""
         try:
+            # In batch/daemon mode, be more aggressive
+            if self.batch_mode or self.daemon_mode:
+                # Strategy 1: If session has been inactive for >30 minutes, kill it
+                if session_info.get('last_activity'):
+                    inactive_time = time.time() - session_info['last_activity']
+                    if inactive_time > 1800:  # 30 minutes (reduced from 1 hour)
+                        console.print(f"[yellow]Auto-resolving: Session inactive for {inactive_time/60:.0f} minutes, terminating[/yellow]")
+                        return self._kill_session_safely(session_name)
+                
+                # Strategy 2: If no active processes, kill it immediately
+                if not session_info.get('has_active_processes', True):
+                    console.print(f"[yellow]Auto-resolving: No active processes detected, terminating session[/yellow]")
+                    return self._kill_session_safely(session_name)
+                
+                # Strategy 3: In batch mode, kill conflicting session anyway
+                console.print(f"[yellow]Auto-resolving: Batch mode - terminating conflicting session[/yellow]")
+                return self._kill_session_safely(session_name)
+            
+            # Normal mode strategies (not batch/daemon)
             # Strategy 1: If session has been inactive for >1 hour, kill it
             if session_info.get('last_activity'):
                 inactive_time = time.time() - session_info['last_activity']
@@ -2533,7 +2563,7 @@ This file is automatically read by Claude Code when working in this directory.
                 return self._kill_session_safely(session_name)
             
             # Strategy 3: If --force flag is used, kill regardless
-            if self.args.force:
+            if self.force:
                 console.print(f"[yellow]Auto-resolving: Force flag enabled, terminating session[/yellow]")
                 return self._kill_session_safely(session_name)
             
@@ -2633,6 +2663,75 @@ This file is automatically read by Claude Code when working in this directory.
         except Exception as e:
             console.print(f"[red]Error killing session '{session_name}': {e}[/red]")
             return False
+    
+    def _cleanup_similar_sessions(self, target_session_name: str) -> None:
+        """
+        Clean up similar or related tmux sessions in batch/daemon mode.
+        This is more aggressive than normal conflict resolution.
+        """
+        try:
+            # Get all existing sessions
+            result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'],
+                                  capture_output=True, text=True)
+            if result.returncode != 0:
+                return  # No sessions exist
+            
+            existing_sessions = result.stdout.strip().split('\n')
+            if not existing_sessions:
+                return
+            
+            # Extract base name from target session (remove -impl, -dev, etc suffixes)
+            base_name = target_session_name.split('-impl')[0].split('-dev')[0]
+            
+            # Find similar sessions
+            similar_sessions = []
+            for session in existing_sessions:
+                if session and session != target_session_name:
+                    # Check if session is similar
+                    if any([
+                        session.startswith(base_name),
+                        f"{base_name}-" in session,
+                        session.endswith(f"-{base_name}"),
+                        # Also check for backup sessions
+                        session.startswith(f"{target_session_name}-backup"),
+                        # Check for numbered variants
+                        any(session == f"{target_session_name}-{i}" for i in range(10))
+                    ]):
+                        similar_sessions.append(session)
+            
+            if similar_sessions:
+                console.print(f"[yellow]Found {len(similar_sessions)} similar sessions to clean up[/yellow]")
+                
+            # Kill similar sessions
+            for session in similar_sessions:
+                session_info = self._get_session_info(session)
+                
+                # Be aggressive in batch mode - kill if:
+                # 1. No active processes
+                # 2. Inactive for more than 30 minutes
+                # 3. Is a backup session
+                should_kill = False
+                kill_reason = ""
+                
+                if not session_info.get('has_active_processes', True):
+                    should_kill = True
+                    kill_reason = "no active processes"
+                elif 'backup' in session:
+                    should_kill = True
+                    kill_reason = "backup session"
+                elif session_info.get('last_activity'):
+                    inactive_time = time.time() - session_info['last_activity']
+                    if inactive_time > 1800:  # 30 minutes
+                        should_kill = True
+                        kill_reason = f"inactive for {inactive_time/60:.0f} minutes"
+                
+                if should_kill:
+                    console.print(f"[yellow]Cleaning up similar session '{session}' ({kill_reason})[/yellow]")
+                    self._kill_session_safely(session)
+                    
+        except Exception as e:
+            console.print(f"[yellow]Warning: Error during similar session cleanup: {e}[/yellow]")
+            # Don't fail - this is best effort cleanup
     
     def setup_tmux_session(self, spec: ImplementationSpec):
         """Set up the tmux session with roles based on project size using git worktrees"""
@@ -2766,15 +2865,15 @@ This file is automatically read by Claude Code when working in this directory.
                 
                 # Longer delay to ensure window is ready
                 time.sleep(2)
-            
-            # Start Claude with dangerous skip permissions
-            subprocess.run([
-                'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
-                'claude --dangerously-skip-permissions', 'Enter'
-            ])
-            
-            # Wait for Claude to start
-            time.sleep(5)
+                
+                # Start Claude with --dangerously-skip-permissions in the recreated window
+                subprocess.run([
+                    'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
+                    'claude --dangerously-skip-permissions', 'Enter'
+                ])
+                
+                # Wait for Claude to start
+                time.sleep(5)
             
             # Send context priming command if the project supports it
             context_prime_path = spec.project.path.replace('~', str(Path.home()))
@@ -2783,11 +2882,12 @@ This file is automatically read by Claude Code when working in this directory.
             if role_key != 'orchestrator' and context_prime_file.exists():
                 send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
                 context_prime_msg = f'/context-prime "first: run context prime like normal, then: You are about to work on {spec.project.name} at {spec.project.path}. Understand the project structure, dependencies, and conventions."'
+                clean_context_msg = self.clean_message_from_mcp_wrappers(context_prime_msg)
                 try:
                     subprocess.run([
                         str(send_script),
                         f'{session_name}:{window_idx}',
-                        context_prime_msg
+                        clean_context_msg
                     ], capture_output=True)
                     # Wait for context priming to complete
                     time.sleep(8)
@@ -2804,21 +2904,25 @@ This file is automatically read by Claude Code when working in this directory.
                                                 worktree_paths=worktree_paths,
                                                 mcp_categories=getattr(self, 'mcp_categories', {}))
             
+            # Clean briefing of any MCP wrapper commands
+            clean_briefing = self.clean_message_from_mcp_wrappers(briefing)
+            
             # Send briefing using send-claude-message.sh
             send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
             subprocess.run([
                 str(send_script),
                 f'{session_name}:{window_idx}',
-                briefing
+                clean_briefing
             ], capture_output=True)
             
             # Run initial commands
             for cmd in role_config.initial_commands:
                 time.sleep(2)
+                clean_cmd_msg = self.clean_message_from_mcp_wrappers(f"Please run: {cmd}")
                 subprocess.run([
                     str(send_script),
                     f'{session_name}:{window_idx}',
-                    f"Please run: {cmd}"
+                    clean_cmd_msg
                 ], capture_output=True)
             
             # Schedule check-ins
@@ -2835,6 +2939,28 @@ This file is automatically read by Claude Code when working in this directory.
                     f"{window_name} regular check-in",
                     f"{session_name}:{window_idx}"
                 ])
+    
+    def clean_message_from_mcp_wrappers(self, message: str) -> str:
+        """Remove any MCP echo wrapper commands from messages"""
+        import re
+        
+        # Remove echo "TMUX_MCP_START"; prefix
+        message = re.sub(r'^echo\s+"TMUX_MCP_START";\s*', '', message)
+        message = re.sub(r'\s*echo\s+"TMUX_MCP_START";\s*', ' ', message)
+        
+        # Remove ; echo "TMUX_MCP_DONE_$?" suffix
+        message = re.sub(r';\s*echo\s+"TMUX_MCP_DONE_\$\?"\s*$', '', message)
+        message = re.sub(r';\s*echo\s+"TMUX_MCP_DONE_\$\?"', '', message)
+        
+        # Clean up any double semicolons or trailing semicolons
+        message = re.sub(r';;+', ';', message)
+        message = re.sub(r';\s*$', '', message)
+        
+        # Also remove the pattern if it appears in the middle of text
+        message = re.sub(r'echo\s+"TMUX_MCP_START";\s*', '', message)
+        message = re.sub(r'echo\s+"TMUX_MCP_DONE_\$\?"', '', message)
+        
+        return message.strip()
     
     def get_available_mcp_tools(self, worktree_path: Path) -> str:
         """Parse .mcp.json in worktree and return list of available MCP tools"""
@@ -3021,11 +3147,13 @@ Your worktree location: `{worktree_paths.get(role, 'N/A')}`
         sandbox_instructions = ""
         if role != 'orchestrator' and worktree_paths and role in worktree_paths:
             # Check if sandbox mode is set to cd_free (fallback)
-            agent_state = None
+            sandbox_mode = None
             if hasattr(self, 'session_state_manager') and self.session_state_manager:
-                agent_state = self.session_state_manager.get_agent_state(role)
+                state = self.session_state_manager.load_session_state(self.project_name)
+                if state and role in state.agents:
+                    sandbox_mode = getattr(state.agents[role], 'sandbox_mode', None)
             
-            if agent_state and agent_state.get('sandbox_mode') == 'cd_free':
+            if sandbox_mode == 'cd_free':
                 # Fallback: cd-free commands
                 sandbox_instructions = f"""
 ⚠️ **IMPORTANT: Symlink setup failed. Use cd-free commands:**
@@ -3042,8 +3170,27 @@ Report any issues to the Orchestrator.
 """
             else:
                 # Primary: symlink approach
-                sandbox_instructions = """
+                sandbox_instructions = f"""
 📁 **IMPORTANT: Access sibling directories via the 'shared' folder:**
+
+🔍 **FIRST: Verify Your Location (Run These Commands First)**:
+```bash
+pwd  # Should show: {worktree_path}
+ls -la shared/  # Should show symlinks to main-project and other agents
+ls -la shared/main-project/  # Should show main project contents
+readlink shared/main-project  # Should show relative path to main project
+```
+**If ANY of these fail, immediately report to Orchestrator and switch to cd-free mode.**
+
+🔒 **WHY USE SHARED SYMLINKS:**
+Claude Code security prevents direct `cd` to parent directories. This is a safety feature, not a bug.
+- ❌ `cd {self.project_path}` (blocked by security)
+- ✅ `cd ./shared/main-project` (allowed via symlink)
+
+📍 **WHEN TO USE WHICH DIRECTORY:**
+✅ **Your worktree** (current location): Role-specific work, commits, your directories
+✅ **Main project** (cd ./shared/main-project): Project commands, shared files, main git repo
+✅ **Other agents** (cd ./shared/{{role}}): Read-only access to other agents' work
 
 **Directory Structure**:
 ./shared/
@@ -3052,30 +3199,25 @@ Report any issues to the Orchestrator.
 ├── tester/          → Tester's worktree (if present)
 └── [other agents]/  → Other agent worktrees
 
-**Accessing Main Project**:
-- Use: cd ./shared/main-project
-- NOT: cd /absolute/path/to/project
-
-**Accessing Other Agents**:
-- cd ./shared/developer && git log  # View developer's work
-- cd ./shared/tester && ls tests/   # Check tester's files
-
 **Examples**:
 - cd ./shared/main-project && git pull origin main
-- cd ./shared/main-project && git status
+- cd ./shared/main-project && npm install
 - cat ./shared/developer/src/feature.py
-- diff ./shared/tester/tests/test_feature.py tests/test_feature.py
+- git log --oneline -5 ./shared/tester/
 
 **Git Remotes** (from main-project):
 - cd ./shared/main-project
 - git remote add developer ../../developer
 - git remote add tester ../../tester
 
-**Safety Note**: Use non-recursive commands to avoid issues:
-- find ./shared -maxdepth 2 -name "*.py"  # Limit depth
-- ls ./shared/*/  # List contents safely
+⚠️ **If Symlinks Fail:**
+1. Diagnose: ls -la shared/ || echo "shared missing"
+2. Switch to cd-free mode: Use absolute paths with Read/Bash tools
+3. Report immediately: "SYMLINK FAILURE: switched to cd-free mode"
 
-If 'shared' directory is missing or incomplete, report to Orchestrator.
+**Safety Notes**:
+- Use depth-limiting: find ./shared -maxdepth 2 -name "*.py"
+- Always verify location with `pwd` before major operations
 """
         
         # Add note about context priming if not available
@@ -4999,7 +5141,15 @@ Remember: Context management is automatic - focus on creating good checkpoints t
         # Wait for MCP server prompt to appear
         time.sleep(2)
         
-        # Press Enter to accept default selections (all servers selected by default)
+        # Press 'y' to accept MCP servers
+        subprocess.run([
+            'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
+            'y'
+        ])
+        
+        time.sleep(0.5)
+        
+        # Press Enter to confirm
         subprocess.run([
             'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
             'Enter'
