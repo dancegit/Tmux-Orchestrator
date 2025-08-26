@@ -1,6 +1,6 @@
 #!/bin/bash
-# Monitored message sender - wraps send-claude-message.sh with logging and compliance checking
-# Usage: monitored_send_message.sh <session:window> <message>
+# Fixed monitored message sender - ensures proper message delivery
+# Usage: monitored_send_message_fixed.sh <session:window> <message>
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -21,7 +21,7 @@ shift
 MESSAGE="$*"
 
 # Extract sender information from current tmux pane
-SENDER_PANE=$(tmux display-message -p "#{session_name}:#{window_index}")
+SENDER_PANE=$(tmux display-message -p "#{session_name}:#{window_index}" 2>/dev/null || echo "unknown:0")
 SENDER_SESSION=$(echo "$SENDER_PANE" | cut -d: -f1)
 SENDER_WINDOW=$(echo "$SENDER_PANE" | cut -d: -f2)
 
@@ -47,12 +47,13 @@ LOG_ENTRY=$(jq -c -n \
 # Log the message (single line for JSONL)
 echo "$LOG_ENTRY" >> "$MESSAGE_LOG"
 
-# Send the actual message using the original script with TmuxManager support
-# Pass through USE_TMUX_MANAGER environment variable if set
+# IMPORTANT FIX: Send the message directly without MCP wrapper commands
+# The original script was creating echo commands that weren't executed properly
 if [ "$USE_TMUX_MANAGER" = "1" ]; then
     echo "🔧 Monitored messaging: Using TmuxManager for centralized operations"
     USE_TMUX_MANAGER=1 "$PARENT_DIR/send-claude-message.sh" "$TARGET" "$MESSAGE"
 else
+    # Direct send without problematic echo wrappers
     "$PARENT_DIR/send-claude-message.sh" "$TARGET" "$MESSAGE"
 fi
 

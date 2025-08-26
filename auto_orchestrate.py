@@ -398,6 +398,10 @@ class AutoOrchestrator:
         self.batch_mode = batch_mode or self.daemon_mode  # Daemon mode implies batch mode
         self.overwrite = overwrite
         
+        # New flags for bug fixes
+        self.enable_orchestrator_scheduling = False  # Will be set from CLI
+        self.global_mcp_init = False  # Will be set from CLI
+        
         # Auto-detect project path if not provided or set to 'auto'
         if not project_path or project_path.lower() == 'auto':
             detected = find_git_root(self.spec_path.parent)
@@ -2827,9 +2831,30 @@ This file is automatically read by Claude Code when working in this directory.
             # Set up UV environment BEFORE starting Claude
             self.setup_agent_uv_environment(session_name, window_idx, role_key)
             
-            # Pre-initialize Claude if worktree has .mcp.json
+            # Pre-initialize Claude for MCP servers
             worktree_path = worktree_paths.get(role_key)
-            if worktree_path and (worktree_path / '.mcp.json').exists():
+            
+            # Modified for robustness: Check global/system paths first, then worktree
+            mcp_exists = False
+            if self.global_mcp_init:
+                # Check global paths first
+                global_paths = [
+                    Path.home() / '.mcp.json',  # User-level
+                    Path('/etc/mcp.json'),       # System-level (adjust if needed)
+                ]
+                for global_path in global_paths:
+                    if global_path.exists():
+                        mcp_exists = True
+                        console.print(f"[cyan]Global MCP config found at {global_path} for {role_key}[/cyan]")
+                        break
+            
+            # Fallback to worktree if no global or flag is off
+            if not mcp_exists and worktree_path:
+                mcp_exists = (worktree_path / '.mcp.json').exists()
+                if mcp_exists:
+                    console.print(f"[cyan]Worktree MCP config found for {role_key}[/cyan]")
+            
+            if mcp_exists and worktree_path:
                 # Pre-initialize Claude to approve MCP servers
                 self.pre_initialize_claude_in_worktree(session_name, window_idx, role_key, worktree_path)
                 
@@ -2926,19 +2951,28 @@ This file is automatically read by Claude Code when working in this directory.
                 ], capture_output=True)
             
             # Schedule check-ins
-            if role_key != 'orchestrator':  # Orchestrator schedules its own
+            # Modified to conditionally include orchestrator based on flag
+            if role_key == 'orchestrator' and not self.enable_orchestrator_scheduling:
+                # Skip orchestrator scheduling unless flag is enabled
+                console.print(f"[yellow]Skipping orchestrator scheduling (use --enable-orchestrator-scheduling to enable)[/yellow]")
+            else:
+                # Schedule for all other roles, or for orchestrator if flag is enabled
                 # Use credit-aware scheduling if available
                 credit_schedule_script = self.tmux_orchestrator_path / 'credit_management' / 'schedule_credit_aware.sh'
                 regular_schedule_script = self.tmux_orchestrator_path / 'schedule_with_note.sh'
                 
                 schedule_script = credit_schedule_script if credit_schedule_script.exists() else regular_schedule_script
                 
+                check_in_interval = getattr(role_config, 'check_in_interval', 30)  # Default to 30 minutes
+                
                 subprocess.run([
                     str(schedule_script),
-                    str(role_config.check_in_interval),
+                    str(check_in_interval),
                     f"{window_name} regular check-in",
                     f"{session_name}:{window_idx}"
                 ])
+                
+                console.print(f"[green]Scheduled check-in for {window_name} (window {window_idx}) every {check_in_interval} minutes[/green]")
     
     def clean_message_from_mcp_wrappers(self, message: str) -> str:
         """Remove any MCP echo wrapper commands from messages"""
@@ -3136,7 +3170,7 @@ Your worktree location: `{worktree_paths.get(role, 'N/A')}`
 
 ⚠️ **GIT SAFETY RULES**:
 - NEVER commit `.venv`, `__pycache__`, or UV cache directories
-- Before commits: `git status --porcelain | grep -E '\.venv|__pycache__|uv-cache'`
+- Before commits: `git status --porcelain | grep -E '\\.venv|__pycache__|uv-cache'`
 - If temp files detected: Add them to `.gitignore` or use `git add -p`
 - ALWAYS review `git status` before committing
 - Use selective staging (`git add -p`) instead of `git add .` or `git add -A`
@@ -3175,7 +3209,7 @@ Report any issues to the Orchestrator.
 
 🔍 **FIRST: Verify Your Location (Run These Commands First)**:
 ```bash
-pwd  # Should show: {worktree_path}
+pwd  # Should show: {worktree_paths[role]}
 ls -la shared/  # Should show symlinks to main-project and other agents
 ls -la shared/main-project/  # Should show main project contents
 readlink shared/main-project  # Should show relative path to main project
@@ -3500,6 +3534,19 @@ Your Team (based on project size: {spec.project_size.size}):
 - Use specific file paths when discussing code
 - Always report blockers to Orchestrator immediately
 
+**🚨 MANDATORY HUB-AND-SPOKE REPORTING 🚨**:
+- **ALL TASK COMPLETIONS MUST BE REPORTED TO ORCHESTRATOR**
+- When you complete ANY significant task, immediately report:
+  ```
+  STATUS UPDATE: [Your Role]
+  COMPLETED: [Specific tasks completed]
+  READY FOR: [Next steps/review]
+  ```
+- Use ./report-completion.sh when available
+- **NEVER** assume other agents know about your work
+- **FAILURE TO REPORT = WORK DOESN'T EXIST**
+- This is MANDATORY for project success
+
 Maintain EXCEPTIONAL quality standards. No compromises.
 
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
@@ -3585,6 +3632,13 @@ Collaborate with:
 - PM for code reviews (push branches regularly)
 - Researcher for technical guidance and best practices
 - Tester for early testing feedback
+- **ORCHESTRATOR for completion reporting** (MANDATORY)
+
+**🚨 WHEN YOU COMPLETE IMPLEMENTATION 🚨**:
+1. Commit and push all code
+2. Report to Orchestrator: "Developer: Implementation COMPLETE for [features]"
+3. Report to PM: "Code ready for review in [branch/location]"
+4. **DO NOT** assume they will find your work - YOU MUST REPORT
 
 **Remember**: Your code is in `{worktree_paths.get(role, 'your-worktree')}` - PM will review it there!
 
@@ -3665,6 +3719,13 @@ Collaborate with:
 - Developer (access code at: `{worktree_paths.get('developer', 'dev-worktree')}`)
 - Researcher for security vulnerabilities and testing best practices
 - PM for quality standards
+- **ORCHESTRATOR for completion reporting** (MANDATORY)
+
+**🚨 WHEN YOU COMPLETE TEST SUITE 🚨**:
+1. Commit all test files
+2. Report to Orchestrator: "Tester: Test suite COMPLETE with [X] tests"
+3. Report to PM: "Tests ready for review, [X]% coverage achieved"
+4. **MANDATORY**: Report completions or work doesn't count
 
 🚀 **Fast Lane Coordination Enabled**:
 You now receive Developer updates automatically:
@@ -5011,7 +5072,7 @@ If you encounter conflicts:
 
 ⚠️ **GIT SAFETY RULES**:
 - NEVER commit `.venv`, `__pycache__`, or UV cache directories
-- Before commits: `git status --porcelain | grep -E '\.venv|__pycache__|uv-cache'`
+- Before commits: `git status --porcelain | grep -E '\\.venv|__pycache__|uv-cache'`
 - If temp files detected: Add them to `.gitignore` or use `git add -p`
 - ALWAYS review `git status` before committing
 - Use selective staging (`git add -p`) instead of `git add .` or `git add -A`
@@ -5501,9 +5562,14 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='Project ID for queue completion callback (used by scheduler)')
 @click.option('--daemon', is_flag=True,
               help='Run in daemon mode: non-interactive with auto-defaults for all prompts')
+@click.option('--enable-orchestrator-scheduling', is_flag=True, default=False,
+              help='Enable self-scheduling for orchestrator window 0')
+@click.option('--global-mcp-init', is_flag=True, default=False,
+              help='Enable global/system-level MCP initialization for all roles')
 def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, team_type: str, roles: tuple, force: bool, overwrite: bool, plan: str, 
          resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool, new_project: bool,
-         research: Optional[str], restore: Optional[str], continue_batch: bool, git_mode: str, project_id: Optional[int], daemon: bool):
+         research: Optional[str], restore: Optional[str], continue_batch: bool, git_mode: str, project_id: Optional[int], daemon: bool,
+         enable_orchestrator_scheduling: bool, global_mcp_init: bool):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
@@ -5732,6 +5798,9 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
         orchestrator.rebrief_all = rebrief_all
         orchestrator.team_type = team_type if team_type != 'auto' else None
         orchestrator.project_id = project_id  # Store for database update if from queue
+        # Set new flags
+        orchestrator.enable_orchestrator_scheduling = enable_orchestrator_scheduling
+        orchestrator.global_mcp_init = global_mcp_init
         
         # Try to load session state - first by exact name
         session_state = orchestrator.session_state_manager.load_session_state(project_name)
@@ -5799,6 +5868,9 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
     orchestrator.additional_roles = list(roles) if roles else []
     orchestrator.force = force
     orchestrator.plan_type = plan if plan != 'auto' else 'max20'  # Default to max20
+    # Set new flags
+    orchestrator.enable_orchestrator_scheduling = enable_orchestrator_scheduling
+    orchestrator.global_mcp_init = global_mcp_init
     orchestrator.project_id = project_id  # Store for database update if from queue
     
     # Set custom worktree path for new projects (from --new-project processing above)

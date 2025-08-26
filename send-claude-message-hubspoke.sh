@@ -108,7 +108,7 @@ send_message() {
         MSG_WITHOUT_COMPACT=$(echo "$msg" | sed 's|/compact||g' | sed 's/  */ /g' | sed 's/^ *//;s/ *$//')
         
         if [ -n "$MSG_WITHOUT_COMPACT" ] && [ "$MSG_WITHOUT_COMPACT" != " " ]; then
-            tmux send-keys -t "$SESSION:$target_window" "$MSG_WITHOUT_COMPACT"
+            tmux send-keys -t "$SESSION:$target_window" "$MSG_WITHOUT_COMPACT" Enter
             sleep 0.5
             tmux send-keys -t "$SESSION:$target_window" Enter
             echo "Message sent to $SESSION:$target_window: $MSG_WITHOUT_COMPACT"
@@ -116,13 +116,13 @@ send_message() {
         fi
         
         # Send /compact separately
-        tmux send-keys -t "$SESSION:$target_window" "/compact"
+        tmux send-keys -t "$SESSION:$target_window" "/compact" Enter
         sleep 0.5
         tmux send-keys -t "$SESSION:$target_window" Enter
         echo "Compact command sent to $SESSION:$target_window"
     else
         # Normal message
-        tmux send-keys -t "$SESSION:$target_window" "$msg"
+        tmux send-keys -t "$SESSION:$target_window" "$msg" Enter
         sleep 0.5
         tmux send-keys -t "$SESSION:$target_window" Enter
         echo "Message sent to $SESSION:$target_window ($ROLE): $msg"

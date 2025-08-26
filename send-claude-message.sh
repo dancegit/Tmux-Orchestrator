@@ -135,9 +135,11 @@ send_with_retry() {
         
         echo "⚠️  Message not verified, will retry..."
         
-        # Exponential backoff - use bash arithmetic instead of bc
-        delay=$((delay * BACKOFF_MULTIPLIER))  # Integer multiplication (works if BACKOFF_MULTIPLIER is integer)
-        # For float multiplication, use awk: delay=$(awk "BEGIN {print int($delay * $BACKOFF_MULTIPLIER)}")
+        # Exponential backoff - use integer arithmetic
+        # Convert float to integer for bash arithmetic
+        delay_int=${delay%.*}  # Remove decimal part
+        multiplier_int=${BACKOFF_MULTIPLIER%.*}  # Remove decimal part
+        delay=$((delay_int * multiplier_int))
         
         # If not last attempt, wait before retry
         if [ $attempts -lt $MAX_ATTEMPTS ]; then

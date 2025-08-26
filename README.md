@@ -9,9 +9,15 @@
 - **Persist** - Work continues even when you close your laptop
 - **Scale** - Run multiple teams working on different projects simultaneously
 
-## 🚀 Latest Updates (v3.5.1)
+## 🚀 Latest Updates (v3.5.2)
 
-### Major Improvements
+### Bug Fixes
+- **Orchestrator Self-Scheduling** - Fixed bug where orchestrator window 0 never received check-in tasks
+  - Added `--enable-orchestrator-scheduling` flag for orchestrator self-scheduling
+- **MCP Global Initialization** - Fixed MCP config acceptance for all agents, not just those with worktree configs
+  - Added `--global-mcp-init` flag to check system/user-level MCP configurations
+
+### Previous Release (v3.5.1)
 - **Auto-Orchestrate Reliability** - Fixed critical deployment failures in multi-agent setup
 - **MCP Server Workflow** - Proper Claude initialization sequence with MCP approval
 - **Queue Daemon Stability** - Fixed systemd service configuration issues
@@ -284,6 +290,15 @@ uv run scheduler.py --queue-daemon
 
 # With custom team size based on your Claude plan
 ./auto_orchestrate.py --project /path/to/project --spec spec.md --plan max5
+
+# NEW in v3.5.2: Enable orchestrator self-scheduling
+./auto_orchestrate.py --spec spec.md --enable-orchestrator-scheduling
+
+# NEW in v3.5.2: Use global MCP configurations for all agents
+./auto_orchestrate.py --spec spec.md --global-mcp-init
+
+# Both flags together for maximum reliability
+./auto_orchestrate.py --spec spec.md --enable-orchestrator-scheduling --global-mcp-init
 ```
 
 ### Option 2: Basic Setup (Single Project)

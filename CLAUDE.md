@@ -707,6 +707,60 @@ your-worktree/
     └── [other agents]/  → Other agent worktrees
 ```
 
+#### 🔍 FIRST: Verify Your Location (Run These Commands First)
+
+**EVERY agent should start with these verification steps:**
+```bash
+# 1. Confirm you're in your worktree
+pwd  # Should show: /path/to/project-tmux-worktrees/{your-role}
+
+# 2. Verify shared directory exists
+ls -la shared/  # Should show symlinks to main-project and other agents
+
+# 3. Test main project access
+ls -la shared/main-project/  # Should show main project contents
+
+# 4. Confirm symlink target
+readlink shared/main-project  # Should show relative path to main project
+```
+
+**If ANY of these fail, immediately report to Orchestrator and switch to cd-free mode.**
+
+#### 📍 Directory Navigation Decision Tree
+
+**🔒 WHY USE SHARED SYMLINKS:**
+Claude Code security prevents direct `cd` to parent directories. This is a safety feature, not a bug.
+- ❌ `cd /absolute/path/to/project` (blocked by security)
+- ✅ `cd ./shared/main-project` (allowed via symlink)
+
+**WHEN TO USE WHICH DIRECTORY:**
+
+✅ **Your worktree** (`pwd` shows your worktree path):
+```bash
+# For role-specific work
+mkdir my_analysis/
+echo "Developer progress report" > status.md
+git add . && git commit -m "Developer: progress update"
+```
+
+✅ **Main project** (via `cd ./shared/main-project`):
+```bash
+# For shared project operations
+cd ./shared/main-project
+npm install  # Install dependencies
+python setup.py  # Run project commands
+git status  # Check main project git state
+cat README.md  # Read project documentation
+```
+
+✅ **Other agent worktrees** (via `cd ./shared/{role}`):
+```bash
+# Read-only access to other agents' work
+cat ./shared/developer/src/feature.py  # Review code
+git log --oneline -5 ./shared/tester/  # Check their commits
+# ⚠️ NEVER modify other agents' files directly
+```
+
 #### How to Use the Shared Directory
 
 **Accessing the Main Project**:
@@ -741,11 +795,29 @@ git fetch developer
 git merge developer/feature-branch
 ```
 
+#### ⚠️ Symlink Troubleshooting
+
+**If shared directory access fails:**
+```bash
+# 1. Diagnose the problem
+ls -la shared/ || echo "shared directory missing"
+readlink shared/main-project || echo "main-project symlink broken"
+cd shared/main-project && pwd || echo "symlink navigation failed"
+
+# 2. Switch to cd-free fallback mode
+# Use absolute paths with Read tool instead of cd:
+# Read /absolute/path/to/project/file.py
+# Use Bash with absolute paths: python /absolute/path/to/project/script.py
+
+# 3. Report to Orchestrator immediately
+echo "SYMLINK FAILURE: shared directory access failed, switched to cd-free mode"
+```
+
 #### Safety Notes
 - Use depth-limiting flags to avoid infinite loops: `find ./shared -maxdepth 2`
-- If symlinks fail, agents receive cd-free fallback instructions
+- If symlinks fail, use absolute paths with Read/Bash tools (no cd)
 - Symlinks are created automatically during setup and resume
-- Report missing/broken symlinks to Orchestrator
+- Always verify your location with `pwd` before major operations
 
 ### Role-Specific Directories and Files
 
