@@ -540,8 +540,17 @@ def get_completed_integrations(page: int = 1, per_page: int = 4, all_items: bool
                 integrations.append(integration)
         
         # Sort by completed_at (DB timestamp) descending (most recent first), fallback to latest_commit_time
+        def parse_datetime(value):
+            if not value:
+                return datetime.fromisoformat('1970-01-01')
+            if isinstance(value, (int, float)):
+                return datetime.fromtimestamp(value)
+            if isinstance(value, str):
+                return datetime.fromisoformat(value)
+            return datetime.fromisoformat('1970-01-01')
+        
         integrations.sort(
-            key=lambda i: datetime.fromisoformat(i.get('completed_at') or i.get('latest_commit_time') or '1970-01-01'),
+            key=lambda i: parse_datetime(i.get('completed_at') or i.get('latest_commit_time')),
             reverse=True
         )
         

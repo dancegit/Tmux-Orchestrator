@@ -42,7 +42,7 @@ check_context() {
                 # Send compact command properly
                 tmux send-keys -t "$SESSION:$window" C-c  # Cancel any current input
                 sleep 0.5
-                tmux send-keys -t "$SESSION:$window" "/compact"
+                tmux send-keys -t "$SESSION:$window" "/compact" Enter
                 sleep 0.5
                 tmux send-keys -t "$SESSION:$window" Enter
                 

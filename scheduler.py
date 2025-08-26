@@ -100,11 +100,12 @@ class DependencyChecker:
         return dependencies_ok
 
 class TmuxOrchestratorScheduler:
-    def __init__(self, db_path='task_queue.db', tmux_orchestrator_path=None):
+    def __init__(self, db_path='task_queue.db', tmux_orchestrator_path=None, read_only=False):
         self.db_path = db_path
         self.tmux_orchestrator_path = tmux_orchestrator_path or Path(__file__).parent
         self.session_state_manager = SessionStateManager(self.tmux_orchestrator_path)
         self.event_subscribers: Dict[str, List[Callable]] = {}  # Event hook system
+        self.read_only = read_only  # Flag to indicate read-only operations
         
         # Verify critical dependencies before proceeding
         if not DependencyChecker.verify_all_dependencies():
@@ -114,8 +115,9 @@ class TmuxOrchestratorScheduler:
         self.queue_lock = threading.Lock()
         
         # ENHANCED: Use robust lock manager to prevent duplicate schedulers
+        # Only acquire lock for write operations (daemon mode)
         self.lock_manager = SchedulerLockManager(lock_dir="locks", timeout=30)
-        if not self.lock_manager.acquire_lock():
+        if not read_only and not self.lock_manager.acquire_lock():
             logger.error("❌ Another scheduler is already running. Exiting to prevent duplicates.")
             sys.exit(1)
         
@@ -133,14 +135,17 @@ class TmuxOrchestratorScheduler:
         self.tmux_manager = TmuxSessionManager()
         
         # NEW: Initialize ProcessManager for subprocess tracking and timeout enforcement
-        self.process_manager = ProcessManager(
-            max_runtime=int(os.getenv('MAX_AUTO_ORCHESTRATE_RUNTIME_SEC', 1800)),  # Default 30 minutes for Claude analysis
-            monitor_interval=int(os.getenv('PROCESS_MONITOR_INTERVAL_SEC', 30))   # Check every 30 seconds
-        )
+        if not read_only:
+            self.process_manager = ProcessManager(
+                max_runtime=int(os.getenv('MAX_AUTO_ORCHESTRATE_RUNTIME_SEC', 1800)),  # Default 30 minutes for Claude analysis
+                monitor_interval=int(os.getenv('PROCESS_MONITOR_INTERVAL_SEC', 30))   # Check every 30 seconds
+            )
+            logger.info(f"ProcessManager initialized with {self.process_manager.max_runtime}s timeout")
+        else:
+            self.process_manager = None
         
         # Configure phantom detection grace period for long-running Claude analysis
         self.phantom_grace_period = int(os.getenv('PHANTOM_GRACE_PERIOD_SEC', 900))  # Default 15 minutes instead of 2
-        logger.info(f"ProcessManager initialized with {self.process_manager.max_runtime}s timeout")
         
         # NEW: State synchronization configuration
         self.state_sync_interval = int(os.getenv('STATE_SYNC_INTERVAL_SEC', 300))  # 5 minutes default
@@ -154,43 +159,46 @@ class TmuxOrchestratorScheduler:
         
         self.setup_database()
         
-        # Clean stale registry entries on startup
-        self.session_state_manager.cleanup_stale_registries()
+        # Clean stale registry entries on startup (only for write operations)
+        if not read_only:
+            self.session_state_manager.cleanup_stale_registries()
+            
+            # NEW: Reboot recovery - handle projects that were processing before shutdown
+            self._recover_from_reboot()
+            
+            # Auto-subscribe default completion handler
+            self.subscribe('task_complete', self._handle_task_completion)
+            self.subscribe('project_complete', self._on_project_complete)
+            
+            # Add authorization event types (for future use)
+            self.event_subscribers.setdefault('authorization_request', [])
+            self.event_subscribers.setdefault('authorization_response', [])
+            
+            # CRITICAL: Run phantom detection on startup to clean up stuck projects
+            logger.info("Running initial phantom project detection...")
+            self.detect_and_reset_phantom_projects()
         
-        # NEW: Reboot recovery - handle projects that were processing before shutdown
-        self._recover_from_reboot()
-        
-        # Auto-subscribe default completion handler
-        self.subscribe('task_complete', self._handle_task_completion)
-        self.subscribe('project_complete', self._on_project_complete)
-        
-        # Add authorization event types (for future use)
-        self.event_subscribers.setdefault('authorization_request', [])
-        self.event_subscribers.setdefault('authorization_response', [])
-        
-        # CRITICAL: Run phantom detection on startup to clean up stuck projects
-        logger.info("Running initial phantom project detection...")
-        self.detect_and_reset_phantom_projects()
-        
-        # NEW: Register lock release on exit
-        atexit.register(self.lock_manager.release_lock)
+        # NEW: Register lock release on exit (only if not read-only)
+        if not read_only:
+            atexit.register(self.lock_manager.release_lock)
         
         # NEW: Register signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         
-        # Start batch monitoring thread if enabled
+        # Start batch monitoring thread if enabled (only for write operations)
         self._monitoring_enabled = os.getenv('ENABLE_BATCH_MONITORING', 'true').lower() == 'true'
         self._stop_monitoring = threading.Event()
-        if self._monitoring_enabled:
+        if self._monitoring_enabled and not read_only:
             self.retry_thread = threading.Thread(target=self._monitor_batches, daemon=True)
             self.retry_thread.start()
             logger.info("Batch monitoring thread started")
         
-        # NEW: Start heartbeat thread to keep lock fresh
-        self.heartbeat_thread = threading.Thread(target=self._heartbeat_thread, daemon=True)
-        self.heartbeat_thread.start()
-        logger.info("Lock heartbeat thread started")
+        # NEW: Start heartbeat thread to keep lock fresh (only for write operations)
+        if not read_only:
+            self.heartbeat_thread = threading.Thread(target=self._heartbeat_thread, daemon=True)
+            self.heartbeat_thread.start()
+            logger.info("Lock heartbeat thread started")
     
     # NEW: Inter-process lock acquisition
     def _acquire_process_lock(self):
@@ -270,19 +278,43 @@ class TmuxOrchestratorScheduler:
         """Update lock file timestamp every 30 seconds to indicate we're alive"""
         while not self._stop_monitoring.is_set():
             try:
-                if self.lock_fd and not self.lock_fd.closed:
-                    self.lock_fd.seek(0)
+                # Get lock_fd from lock_manager
+                lock_fd = None
+                if hasattr(self, 'lock_manager') and self.lock_manager:
+                    lock_fd = getattr(self.lock_manager, 'lock_fd', None)
+                
+                # NEW: Guard and reacquire if lock_fd is missing or closed
+                if not lock_fd or (hasattr(lock_fd, 'closed') and lock_fd.closed):
+                    logger.warning("lock_fd missing or closed - attempting to reacquire")
+                    # Try to reacquire through the lock manager
+                    if hasattr(self, 'lock_manager') and self.lock_manager:
+                        if self.lock_manager.acquire_lock():
+                            # The lock manager should have set self.lock_manager.lock_fd if successful
+                            logger.info("Successfully reacquired lock through lock manager")
+                            lock_fd = getattr(self.lock_manager, 'lock_fd', None)
+                        else:
+                            logger.error("Failed to reacquire lock - shutting down heartbeat")
+                            break  # Exit thread if reacquire fails
+                    else:
+                        logger.error("No lock_manager available for reacquisition")
+                        break
+                
+                # Original code (with added flush check) - use lock_fd from lock_manager
+                if lock_fd and not lock_fd.closed:
+                    lock_fd.seek(0)
                     lock_data = {
                         'pid': os.getpid(),
                         'timestamp': datetime.now().isoformat(),
                         'hostname': socket.gethostname()
                     }
-                    self.lock_fd.truncate()
-                    self.lock_fd.write(json.dumps(lock_data) + '\n')
-                    self.lock_fd.flush()
+                    lock_fd.truncate()
+                    lock_fd.write(json.dumps(lock_data) + '\n')
+                    lock_fd.flush()
+                    os.fsync(lock_fd.fileno())  # NEW: Ensure write is synced to disk
                     logger.debug(f"Updated lock heartbeat: {lock_data['timestamp']}")
             except Exception as e:
                 logger.error(f"Error updating lock heartbeat: {e}")
+                # NEW: On error, attempt reacquire on next iteration
             
             # Sleep for 30 seconds
             self._stop_monitoring.wait(30)
@@ -1725,12 +1757,9 @@ class TmuxOrchestratorScheduler:
                 # Skip rescheduling if interval_minutes == 0 (one-time task)
                 if interval_minutes == 0:
                     logger.info(f"Task {task_id} has interval_minutes=0; not rescheduling (one-time task)")
-                    # Mark as completed/inactive by setting next_run far in the future
-                    self.conn.execute("""
-                        UPDATE tasks 
-                        SET next_run = ?, retry_count = 0 
-                        WHERE id = ?
-                    """, (time.time() + 31536000, task_id))  # 1 year in the future
+                    # NEW: Delete completed one-time tasks instead of deferring
+                    self.remove_task(task_id)
+                    logger.info(f"Task {task_id} completed and removed (one-time task)")
                 else:
                     # Reschedule for next interval
                     next_run = now + (interval_minutes * 60)
@@ -1816,8 +1845,8 @@ class TmuxOrchestratorScheduler:
         self.conn.commit()
         logger.info(f"Updated project {project_id} to status: {status}")
     
-    def has_active_orchestrations(self) -> bool:
-        """Check if any orchestrations are currently active"""
+    def has_active_orchestrations(self):
+        """Check if there are any active orchestrations"""
         try:
             from concurrent_orchestration import ConcurrentOrchestrationManager
             logger.debug(f"Using tmux_orchestrator_path: {self.tmux_orchestrator_path}")
@@ -1831,15 +1860,59 @@ class TmuxOrchestratorScheduler:
             for i, orch in enumerate(all_orchestrations):
                 logger.debug(f"Orchestration {i}: {orch}")
             
-            active_orchestrations = [orch for orch in all_orchestrations if orch.get('active')]
-            logger.debug(f"Active orchestrations: {len(active_orchestrations)}")
+            # First check JSON-based active orchestrations
+            json_based_active = sum(1 for orch in all_orchestrations if orch.get('active'))
             
-            if active_orchestrations:
-                logger.info(f"Found {len(active_orchestrations)} active orchestration(s): {[o['session_name'] for o in active_orchestrations]}")
-                return True
-            else:
+            # If no JSON-based active orchestrations, check tmux sessions as fallback
+            if json_based_active == 0:
+                logger.info(f"No JSON-based active orchestrations found, checking tmux sessions")
+                try:
+                    tmux_result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name} #{session_activity}'],
+                                               capture_output=True, text=True)
+                    if tmux_result.returncode == 0:
+                        live_sessions = {}
+                        for line in tmux_result.stdout.strip().split('\n'):
+                            if ' ' in line:
+                                parts = line.split(' ', 1)
+                                name = parts[0].strip()
+                                try:
+                                    live_sessions[name] = int(parts[1].strip())
+                                except (ValueError, IndexError):
+                                    continue
+                        
+                        logger.debug(f"Found {len(live_sessions)} tmux sessions: {list(live_sessions.keys())}")
+                        
+                        # Cross-reference: If registry has entry and tmux session exists with recent activity (<6 hours old)
+                        now = int(time.time())
+                        matches_found = 0
+                        for orch in all_orchestrations:
+                            session_name = orch.get('session_name')
+                            if session_name in live_sessions:
+                                last_active = live_sessions[session_name]
+                                age_seconds = now - last_active
+                                logger.debug(f"Checking session {session_name}: age={age_seconds}s, threshold=21600s")
+                                if age_seconds < 21600:  # 6 hour threshold
+                                    orch['active'] = True  # Force active
+                                    matches_found += 1
+                                    logger.info(f"Marked {session_name} as active via tmux fallback (last activity: {age_seconds}s ago)")
+                                else:
+                                    logger.debug(f"Session {session_name} too old: {age_seconds}s > 21600s")
+                        
+                        if matches_found == 0:
+                            logger.warning(f"No matches found between {len(all_orchestrations)} orchestrations and {len(live_sessions)} tmux sessions")
+                
+                except Exception as e:
+                    logger.warning(f"tmux fallback failed: {e}")
+            
+            # Re-count after potential tmux fallback updates
+            active_count = sum(1 for orch in all_orchestrations if orch.get('active'))
+            logger.info(f"Found {active_count} active orchestrations out of {len(all_orchestrations)} total")
+            
+            if active_count == 0:
                 logger.info(f"No active orchestrations found (checked {len(all_orchestrations)} total)")
                 return False
+            
+            return True
         except Exception as e:
             logger.error(f"Error checking active orchestrations: {e}")
             import traceback
@@ -2762,8 +2835,9 @@ These projects require manual review and intervention.
         if hasattr(self, 'process_manager'):
             self.process_manager.shutdown()
         
-        # Release process lock
-        self.lock_manager.release_lock()
+        # Release process lock (only if not read-only)
+        if not self.read_only:
+            self.lock_manager.release_lock()
         
         # Close database connection
         if hasattr(self, 'conn'):
@@ -2796,7 +2870,10 @@ def main():
     
     args = parser.parse_args()
     
-    scheduler = TmuxOrchestratorScheduler()
+    # Determine if this is a read-only operation
+    read_only = args.list or args.queue_list or (args.queue_status is not None)
+    
+    scheduler = TmuxOrchestratorScheduler(read_only=read_only)
     
     if args.daemon:
         scheduler.run()

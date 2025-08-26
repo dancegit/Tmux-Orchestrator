@@ -14,7 +14,7 @@ WINDOW="$1"
 echo "Sending /compact to $WINDOW..."
 
 # Send /compact command
-tmux send-keys -t "$WINDOW" "/compact"
+tmux send-keys -t "$WINDOW" "/compact" Enter
 sleep 0.5
 tmux send-keys -t "$WINDOW" Enter
 

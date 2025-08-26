@@ -50,6 +50,7 @@ import json
 import subprocess
 import shutil
 import logging
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, Tuple, List
@@ -502,6 +503,11 @@ def merge_worktree_to_project(worktree_path: Path, project_path: Path, dry_run: 
             if result.stdout.strip():
                 console.print(f"[yellow]Output: {result.stdout}[/yellow]")
             
+            # Try to resolve the merge conflict automatically
+            if "would be overwritten by merge" in result.stderr:
+                console.print(f"[yellow]Attempting automatic conflict resolution...[/yellow]")
+                return handle_merge_conflict_automatically(project_path, worktree_branch, current_branch, integration_info)
+            
             # Get current git status to show conflicts
             status_result = run_git_command(['status', '--porcelain'], str(project_path))
             if status_result.stdout.strip():
@@ -516,9 +522,27 @@ def merge_worktree_to_project(worktree_path: Path, project_path: Path, dry_run: 
                 console.print(f"[red]Conflicted files:[/red]")
                 for file in conflict_result.stdout.strip().split('\n'):
                     console.print(f"  • {file}")
-            
-            console.print("[yellow]You may need to resolve conflicts manually[/yellow]")
-            return False
+                
+                # Try Claude-based conflict resolution
+                console.print(f"[yellow]Attempting Claude-based conflict resolution...[/yellow]")
+                if resolve_conflicts_with_claude(project_path, conflict_result.stdout.strip().split('\n')):
+                    # Complete the merge after resolution
+                    merge_result = run_git_command(['commit', '--no-edit'], str(project_path))
+                    if merge_result.returncode == 0:
+                        console.print(f"[green]✓ Conflicts resolved and merge completed with Claude![/green]")
+                        # Merge successful - continue to tagging section
+                    else:
+                        console.print(f"[red]Failed to complete merge after conflict resolution[/red]")
+                        return False
+                else:
+                    console.print("[yellow]Claude conflict resolution failed, you may need to resolve conflicts manually[/yellow]")
+                    return False
+            else:
+                console.print("[yellow]You may need to resolve conflicts manually[/yellow]")
+                return False
+        else:
+            # Merge was successful on first try
+            console.print(f"[green]✓ Merge completed successfully![/green]")
         
         # Tag the merge
         tag_name = f"integration-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -533,6 +557,162 @@ def merge_worktree_to_project(worktree_path: Path, project_path: Path, dry_run: 
         
     except Exception as e:
         console.print(f"[red]Error during merge: {e}[/red]")
+        return False
+
+
+def handle_merge_conflict_automatically(project_path: Path, worktree_branch: str, current_branch: str, integration_info: dict) -> bool:
+    """Handle merge conflicts automatically using stash and retry strategy."""
+    try:
+        console.print(f"[yellow]Strategy 1: Stashing local changes and retrying merge...[/yellow]")
+        
+        # Check if there are local changes that can be stashed
+        stash_result = run_git_command(['stash', 'push', '-m', 'Auto-stash before merge integration'], str(project_path))
+        if stash_result.returncode != 0:
+            console.print(f"[red]Failed to stash changes: {stash_result.stderr}[/red]")
+            return False
+            
+        console.print(f"[green]✓ Local changes stashed successfully[/green]")
+        
+        # Retry the merge
+        console.print(f"[yellow]Retrying merge after stashing...[/yellow]")
+        result = run_git_command(['merge', worktree_branch, '--no-ff', '-m', 
+                                f"Merge integration from worktree\n\nCommit: {integration_info['commit_hash_short']}\nMessage: {integration_info['commit_message']}\nAuthor: {integration_info['author']}"], 
+                               str(project_path))
+        
+        if result.returncode == 0:
+            console.print(f"[green]✓ Merge successful after stashing![/green]")
+            
+            # Try to reapply stashed changes
+            console.print(f"[yellow]Reapplying stashed changes...[/yellow]")
+            pop_result = run_git_command(['stash', 'pop'], str(project_path))
+            if pop_result.returncode == 0:
+                console.print(f"[green]✓ Stashed changes reapplied successfully[/green]")
+                
+                # Commit the reapplied changes if needed
+                status_result = run_git_command(['status', '--porcelain'], str(project_path))
+                if status_result.stdout.strip():
+                    console.print(f"[yellow]Committing reapplied changes...[/yellow]")
+                    run_git_command(['add', '.'], str(project_path))
+                    run_git_command(['commit', '-m', 'Reapply local changes after integration merge'], str(project_path))
+                    console.print(f"[green]✓ Local changes committed after merge[/green]")
+                    
+            else:
+                console.print(f"[yellow]Warning: Could not reapply stashed changes automatically[/yellow]")
+                console.print(f"[yellow]Run 'git stash pop' manually in {project_path} to reapply your changes[/yellow]")
+            
+            return True
+        else:
+            console.print(f"[red]Merge still failed after stashing: {result.stderr}[/red]")
+            # Try to restore stashed changes
+            run_git_command(['stash', 'pop'], str(project_path))
+            return False
+            
+    except Exception as e:
+        console.print(f"[red]Error during automatic conflict resolution: {e}[/red]")
+        return False
+
+
+def resolve_conflicts_with_claude(project_path: Path, conflicted_files: List[str]) -> bool:
+    """Resolve merge conflicts using Claude AI and handle common conflict patterns."""
+    try:
+        console.print(f"[yellow]Attempting to resolve {len(conflicted_files)} conflicted files with Claude...[/yellow]")
+        
+        # First check for deletion/modification conflicts using git ls-files --unmerged
+        unmerged_result = run_git_command(['ls-files', '--unmerged'], str(project_path))
+        if unmerged_result.returncode == 0 and unmerged_result.stdout.strip():
+            deletion_conflicts = set()
+            for line in unmerged_result.stdout.strip().split('\n'):
+                if line.strip():
+                    parts = line.split('\t')
+                    if len(parts) >= 2:
+                        stage_info = parts[0].split()
+                        if len(stage_info) >= 3:
+                            stage = stage_info[2]  # Stage number: 1=base, 2=ours, 3=theirs
+                            filename = parts[1]
+                            if stage in ['1', '3']:  # Base or theirs exists
+                                deletion_conflicts.add(filename)
+            
+            # Handle deletion conflicts (deleted by us, modified by them)
+            for filename in deletion_conflicts:
+                console.print(f"[yellow]Handling deletion conflict for: {filename}[/yellow]")
+                
+                # For deleted-by-us, modified-by-them: keep their version (add the file)
+                result = run_git_command(['add', filename], str(project_path))
+                if result.returncode == 0:
+                    console.print(f"[green]✓ Resolved deletion conflict: kept modified version of {filename}[/green]")
+                else:
+                    console.print(f"[red]Failed to resolve deletion conflict for {filename}: {result.stderr}[/red]")
+                    return False
+        
+        for file_path in conflicted_files:
+            if not file_path.strip():
+                continue
+                
+            full_file_path = project_path / file_path.strip()
+            if not full_file_path.exists():
+                console.print(f"[yellow]Conflicted file not found (may have been resolved): {file_path}[/yellow]")
+                continue
+                
+            console.print(f"[yellow]Resolving content conflicts in: {file_path}[/yellow]")
+            
+            # Create a temporary file with conflict resolution prompt
+            with open(full_file_path, 'r') as f:
+                content = f.read()
+            
+            # Check if file has merge conflict markers
+            if '<<<<<<< HEAD' not in content:
+                console.print(f"[yellow]No conflict markers found in {file_path}, skipping[/yellow]")
+                continue
+            
+            # Create prompt for Claude
+            prompt = f"""Please resolve the merge conflicts in this file. Remove all conflict markers (<<<<<<< HEAD, =======, >>>>>>>) and merge the code intelligently.
+
+File: {file_path}
+Content with conflicts:
+{content}
+
+Please output ONLY the resolved file content with no explanation or markdown formatting."""
+            
+            try:
+                # Use Claude via command line
+                claude_process = subprocess.run(['claude', '-p', prompt], 
+                                             capture_output=True, text=True, cwd=str(project_path))
+                
+                if claude_process.returncode == 0 and claude_process.stdout.strip():
+                    resolved_content = claude_process.stdout.strip()
+                    
+                    # Verify the resolved content doesn't have conflict markers
+                    if ('<<<<<<< HEAD' not in resolved_content and 
+                        '=======' not in resolved_content and 
+                        '>>>>>>>' not in resolved_content):
+                        
+                        # Write resolved content back
+                        with open(full_file_path, 'w') as f:
+                            f.write(resolved_content)
+                        
+                        # Stage the resolved file
+                        run_git_command(['add', file_path], str(project_path))
+                        console.print(f"[green]✓ Resolved conflicts in {file_path}[/green]")
+                    else:
+                        console.print(f"[red]Claude resolution still contains conflict markers in {file_path}[/red]")
+                        return False
+                else:
+                    console.print(f"[red]Claude failed to resolve conflicts in {file_path}[/red]")
+                    console.print(f"[red]Error: {claude_process.stderr}[/red]")
+                    return False
+                    
+            except FileNotFoundError:
+                console.print(f"[red]Claude command not found. Install claude CLI or add it to PATH[/red]")
+                return False
+            except Exception as e:
+                console.print(f"[red]Error calling Claude for {file_path}: {e}[/red]")
+                return False
+        
+        console.print(f"[green]✓ All conflicts resolved with Claude[/green]")
+        return True
+        
+    except Exception as e:
+        console.print(f"[red]Error during Claude conflict resolution: {e}[/red]")
         return False
 
 
@@ -626,6 +806,69 @@ def list_progress_projects(projects: List[Dict[str, any]], args):
     console.print(f"• [green]✓ Session[/green]: Has active tmux session")
 
 
+def check_integration_merge_status(integration: Dict[str, any]) -> tuple[str, str]:
+    """
+    Check if an integration has already been merged to the main project.
+    
+    Returns:
+        (status, details): 
+        - status: "merged", "not_merged", "unknown"  
+        - details: descriptive text for display
+    """
+    try:
+        project_path = Path(integration.get('project_path', ''))
+        if not project_path.exists() or not (project_path / '.git').exists():
+            return "unknown", "No git repo"
+            
+        # Check for integration tags (created by successful merges)
+        tag_result = run_git_command(['tag', '--list', 'integration-*'], str(project_path))
+        if tag_result.returncode == 0 and tag_result.stdout.strip():
+            # Check if any recent integration tags exist (within last 7 days)
+            recent_tags = []
+            for tag in tag_result.stdout.strip().split('\n'):
+                if tag.strip():
+                    # Get tag date
+                    tag_date_result = run_git_command(['log', '-1', '--format=%ct', tag.strip()], str(project_path))
+                    if tag_date_result.returncode == 0:
+                        try:
+                            tag_timestamp = int(tag_date_result.stdout.strip())
+                            days_ago = (time.time() - tag_timestamp) / 86400  # seconds to days
+                            if days_ago <= 7:  # Within last week
+                                recent_tags.append((tag.strip(), days_ago))
+                        except ValueError:
+                            pass
+            
+            if recent_tags:
+                most_recent = min(recent_tags, key=lambda x: x[1])
+                days = int(most_recent[1])
+                return "merged", f"Tag: {most_recent[0][:20]} ({days}d ago)"
+        
+        # Check for merge commits in recent history
+        commit_hash = integration.get('latest_commit_hash', '')[:8]
+        if commit_hash:
+            # Search for merge commits that might contain this hash
+            merge_result = run_git_command(['log', '--oneline', '--merges', '-10'], str(project_path))
+            if merge_result.returncode == 0:
+                for line in merge_result.stdout.split('\n'):
+                    if commit_hash.lower() in line.lower() or 'integration' in line.lower():
+                        return "merged", f"Found merge commit"
+        
+        # Check if the worktree branch has been merged
+        worktree_path = Path(integration.get('integration_worktree', ''))
+        if worktree_path.exists():
+            branch_info = integration.get('latest_branch', '')
+            if branch_info:
+                # Check if this branch exists in main project and has been merged
+                branch_result = run_git_command(['branch', '--merged', 'main'], str(project_path))
+                if branch_result.returncode == 0 and branch_info in branch_result.stdout:
+                    return "merged", "Branch merged"
+        
+        return "not_merged", "Ready to merge"
+        
+    except Exception as e:
+        return "unknown", f"Error: {str(e)[:15]}"
+
+
 def list_available_integrations(integrations: List[Dict[str, any]], args):
     """Enhanced display with rich table, completion indicators, and pagination info."""
     console.print(Panel.fit(
@@ -653,30 +896,50 @@ def list_available_integrations(integrations: List[Dict[str, any]], args):
     # Create rich table
     table = Table(title=f"Completed Integrations ({len(integrations)} shown)", show_lines=True)
     table.add_column(" # ", style="cyan", width=4)
-    table.add_column("Project Name", style="green", width=25)
-    table.add_column("Status", style="yellow", width=15)
-    table.add_column("Completed At", style="bright_blue", width=20)
-    table.add_column("Latest Commit", style="magenta", width=30)
-    table.add_column("Merge Command", style="white", width=45)
+    table.add_column("Project Name", style="green", width=22)
+    table.add_column("Status", style="yellow", width=12)
+    table.add_column("Merge Status", style="bright_cyan", width=18)
+    table.add_column("Completed At", style="bright_blue", width=16)
+    table.add_column("Latest Commit", style="magenta", width=25)
+    table.add_column("Merge Command", style="white", width=40)
     
     for i, integration in enumerate(integrations, 1):
         status = "[green]✓ Completed[/green]" if integration.get('completed_at') else "[yellow]Completed (time N/A)[/yellow]"
+        
+        # Check merge status
+        merge_status, merge_details = check_integration_merge_status(integration)
+        if merge_status == "merged":
+            merge_display = f"[green]✓ {merge_details}[/green]"
+        elif merge_status == "not_merged":
+            merge_display = f"[yellow]⏳ {merge_details}[/yellow]"
+        else:  # unknown
+            merge_display = f"[dim]? {merge_details}[/dim]"
+        
         completed_at = integration.get('completed_at') or integration.get('completion_time') or 'N/A'
         if completed_at != 'N/A':
             try:
-                # Format timestamp nicely
-                dt = datetime.fromisoformat(completed_at)
-                completed_at = dt.strftime('%Y-%m-%d %H:%M')
+                # Handle both timestamp (float) and ISO string formats
+                if isinstance(completed_at, (int, float)):
+                    dt = datetime.fromtimestamp(completed_at)
+                else:
+                    dt = datetime.fromisoformat(str(completed_at))
+                completed_at = dt.strftime('%m-%d %H:%M')
             except:
-                pass  # Keep original if parsing fails
+                completed_at = str(completed_at)  # Ensure it's a string for table rendering
         
-        commit_info = f"{integration['latest_commit_hash'][:8]}: {integration['latest_commit_message'][:35]}..." if integration.get('latest_commit_message') else 'N/A'
-        merge_cmd = f"./merge_integration.py --project \"{integration['project_name'][:20]}\" --dry-run"
+        commit_info = f"{integration['latest_commit_hash'][:8]}: {integration['latest_commit_message'][:22]}..." if integration.get('latest_commit_message') else 'N/A'
+        
+        # Adjust merge command based on merge status
+        if merge_status == "merged":
+            merge_cmd = "[dim]Already merged[/dim]"
+        else:
+            merge_cmd = f"./merge_integration.py --commit {integration['latest_commit_hash'][:8]} --force"
         
         table.add_row(
             str(i),
             integration['project_name'],
             status,
+            merge_display,
             completed_at,
             commit_info,
             merge_cmd
@@ -688,11 +951,21 @@ def list_available_integrations(integrations: List[Dict[str, any]], args):
     if not args.all:
         console.print(f"[dim]Showing page {args.page} ({args.per_page} per page). Use --page {args.page + 1} for more or --all for everything.[/dim]")
     
+    # Status legends
+    console.print(f"\n[bold blue]Merge Status Legend:[/bold blue]")
+    console.print(f"• [green]✓ Tag: integration-... (Xd ago)[/green]: Successfully merged with integration tag")
+    console.print(f"• [green]✓ Found merge commit[/green]: Merge commit detected in git history")
+    console.print(f"• [green]✓ Branch merged[/green]: Feature branch has been merged to main")
+    console.print(f"• [yellow]⏳ Ready to merge[/yellow]: Integration completed but not yet merged")
+    console.print(f"• [dim]? No git repo[/dim]: Project directory has no git repository")
+    console.print(f"• [dim]? Error: ...[/dim]: Could not determine merge status")
+
     # Quick start hints
     console.print(f"\n[bold green]Quick Start Commands:[/bold green]")
     console.print(f"• Preview: ./merge_integration.py --project \"project-name\" --dry-run")
     console.print(f"• Merge: ./merge_integration.py --project \"project-name\" --force")
     console.print(f"• By commit: ./merge_integration.py --commit abc12345 --force")
+    console.print(f"• [dim]Note: Already merged integrations are shown for reference but cannot be merged again[/dim]")
 
 
 def main():
