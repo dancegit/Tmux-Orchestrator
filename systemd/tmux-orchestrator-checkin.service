@@ -1,0 +1,27 @@
+[Unit]
+Description=Tmux Orchestrator Check-in Scheduler
+After=multi-user.target
+Conflicts=tmux-orchestrator-scheduler.service
+
+[Service]
+Type=simple
+User=clauderun
+Group=clauderun
+WorkingDirectory=/home/clauderun/Tmux-Orchestrator
+ExecStart=/usr/bin/python3 /home/clauderun/Tmux-Orchestrator/scheduler.py --daemon --mode checkin
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+KillMode=process
+TimeoutStopSec=30
+
+# Security hardening (relaxed for tmux access)
+PrivateDevices=no
+NoNewPrivileges=yes
+ProtectSystem=false
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target

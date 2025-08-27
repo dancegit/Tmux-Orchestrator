@@ -100,12 +100,13 @@ class DependencyChecker:
         return dependencies_ok
 
 class TmuxOrchestratorScheduler:
-    def __init__(self, db_path='task_queue.db', tmux_orchestrator_path=None, read_only=False):
+    def __init__(self, db_path='task_queue.db', tmux_orchestrator_path=None, read_only=False, service_mode=None):
         self.db_path = db_path
         self.tmux_orchestrator_path = tmux_orchestrator_path or Path(__file__).parent
         self.session_state_manager = SessionStateManager(self.tmux_orchestrator_path)
         self.event_subscribers: Dict[str, List[Callable]] = {}  # Event hook system
         self.read_only = read_only  # Flag to indicate read-only operations
+        self.service_mode = service_mode  # Service mode for systemd (checkin/queue)
         
         # Verify critical dependencies before proceeding
         if not DependencyChecker.verify_all_dependencies():
@@ -116,7 +117,9 @@ class TmuxOrchestratorScheduler:
         
         # ENHANCED: Use robust lock manager to prevent duplicate schedulers
         # Only acquire lock for write operations (daemon mode)
-        self.lock_manager = SchedulerLockManager(lock_dir="locks", timeout=30)
+        # Use mode-specific locking to prevent conflicts between checkin and queue services
+        lock_mode = service_mode if service_mode else "default"
+        self.lock_manager = SchedulerLockManager(lock_dir="locks", timeout=30, mode=lock_mode)
         if not read_only and not self.lock_manager.acquire_lock():
             logger.error("❌ Another scheduler is already running. Exiting to prevent duplicates.")
             sys.exit(1)
@@ -1753,6 +1756,10 @@ class TmuxOrchestratorScheduler:
             else:
                 message = "SCHEDULED CHECK-IN: Time for your regular status update"
             
+            # For orchestrators, add reminder to check project completion
+            if agent_role and agent_role.lower() == 'orchestrator':
+                message += "\n\nREMINDER: Please check if your project has reached completion. If all success criteria are met, call the CompletionManager to mark the project complete and trigger proper decommissioning."
+            
             # Target window for tmux commands
             target_window = f"{session_name}:{window_index}"
             
@@ -2945,6 +2952,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Tmux Orchestrator Scheduler')
     parser.add_argument('--daemon', action='store_true', help='Run as daemon')
+    parser.add_argument('--mode', choices=['checkin', 'queue'], help='Service mode for systemd (checkin scheduler or queue processor)')
     parser.add_argument('--add', nargs=5, metavar=('SESSION', 'ROLE', 'WINDOW', 'INTERVAL', 'NOTE'),
                        help='Add a scheduled task')
     parser.add_argument('--list', action='store_true', help='List all tasks')
@@ -2961,10 +2969,23 @@ def main():
     # Determine if this is a read-only operation
     read_only = args.list or args.queue_list or (args.queue_status is not None)
     
-    scheduler = TmuxOrchestratorScheduler(read_only=read_only)
+    # FIXED: Ensure daemon mode is not read-only so it uses the lock manager
+    if args.daemon or args.queue_daemon:
+        read_only = False
+    
+    # Set service mode for systemd integration
+    service_mode = args.mode if args.mode else None
+    
+    scheduler = TmuxOrchestratorScheduler(read_only=read_only, service_mode=service_mode)
     
     if args.daemon:
-        scheduler.run()
+        # Handle --daemon with --mode parameter for systemd services
+        if args.mode == 'queue':
+            print("Starting project queue daemon (systemd mode)...")
+            scheduler.run_queue_daemon()
+        else:
+            # Default daemon mode is checkin scheduler
+            scheduler.run()
     elif args.add:
         session, role, window, interval, note = args.add
         task_id = scheduler.enqueue_task(session, role, int(window), int(interval), note)

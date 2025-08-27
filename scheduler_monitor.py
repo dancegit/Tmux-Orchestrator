@@ -20,47 +20,79 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def cmd_status():
-    """Show detailed scheduler status"""
-    print("🔍 Scheduler Process Status")
-    print("=" * 50)
+    """Show detailed scheduler status for dual-service architecture"""
+    print("🔍 Scheduler Process Status (Dual-Service Architecture)")
+    print("=" * 60)
     
-    lock_manager = SchedulerLockManager()
-    status = lock_manager.get_status()
+    # Check both service modes
+    services = [
+        {"name": "Check-in Scheduler", "mode": "checkin"},
+        {"name": "Queue Processor", "mode": "queue"}
+    ]
     
-    print(f"Current PID: {status['current_pid']}")
-    print(f"Lock file exists: {status['lock_file_exists']}")
-    print(f"Process file exists: {status['process_file_exists']}")
+    total_valid = 0
     
-    if 'lock_data' in status:
-        lock_data = status['lock_data']
-        print(f"Lock holder PID: {lock_data.get('pid', 'unknown')}")
-        print(f"Lock timestamp: {lock_data.get('timestamp', 'unknown')}")
-        print(f"Lock hostname: {lock_data.get('hostname', 'unknown')}")
+    for service in services:
+        print(f"\n📋 {service['name']} (mode: {service['mode']})")
+        print("-" * 40)
+        
+        lock_manager = SchedulerLockManager(mode=service['mode'])
+        status = lock_manager.get_status()
+        
+        print(f"Lock file exists: {status['lock_file_exists']}")
+        print(f"Process file exists: {status['process_file_exists']}")
+        
+        if 'lock_data' in status:
+            lock_data = status['lock_data']
+            print(f"Lock holder PID: {lock_data.get('pid', 'unknown')}")
+            print(f"Lock timestamp: {lock_data.get('timestamp', 'unknown')}")
+            print(f"Lock hostname: {lock_data.get('hostname', 'unknown')}")
+        
+        schedulers = status['existing_schedulers']
+        
+        if not schedulers:
+            print("  ❌ No processes running for this service")
+        else:
+            for scheduler in schedulers:
+                status_icon = "✅" if scheduler['valid'] else "❌"
+                print(f"  {status_icon} PID {scheduler['pid']}")
+                print(f"     Command: {scheduler['cmdline']}")
+                print(f"     Directory: {scheduler['cwd']}")
+                print(f"     Started: {scheduler['create_time']}")
+                print(f"     Status: {scheduler['reason']}")
+                if scheduler['valid']:
+                    total_valid += 1
     
-    schedulers = status['existing_schedulers']
-    print(f"\nFound {len(schedulers)} scheduler process(es):")
+    # Check systemd services
+    print(f"\n🔧 Systemd Service Status")
+    print("-" * 40)
+    try:
+        import subprocess
+        checkin_status = subprocess.run(['systemctl', 'is-active', 'tmux-orchestrator-checkin'], 
+                                       capture_output=True, text=True)
+        queue_status = subprocess.run(['systemctl', 'is-active', 'tmux-orchestrator-queue'], 
+                                     capture_output=True, text=True)
+        
+        checkin_active = checkin_status.returncode == 0
+        queue_active = queue_status.returncode == 0
+        
+        print(f"  tmux-orchestrator-checkin: {'✅ active' if checkin_active else '❌ inactive'}")
+        print(f"  tmux-orchestrator-queue: {'✅ active' if queue_active else '❌ inactive'}")
+        
+    except Exception as e:
+        print(f"  ⚠️  Could not check systemd status: {e}")
     
-    if not schedulers:
-        print("  ✅ No scheduler processes detected")
-        return 0
+    print(f"\n📊 Summary: {total_valid} valid scheduler process(es) running")
     
-    for i, scheduler in enumerate(schedulers, 1):
-        status_icon = "✅" if scheduler['valid'] else "❌"
-        print(f"\n  {i}. {status_icon} PID {scheduler['pid']}")
-        print(f"     Command: {scheduler['cmdline']}")
-        print(f"     Directory: {scheduler['cwd']}")
-        print(f"     Started: {scheduler['create_time']}")
-        print(f"     Status: {scheduler['reason']}")
-    
-    valid_count = sum(1 for s in schedulers if s['valid'])
-    if valid_count == 0:
-        print("\n✅ No valid schedulers running")
-        return 0
-    elif valid_count == 1:
-        print("\n✅ Single scheduler running (normal)")
+    # Updated validation for dual services
+    if total_valid == 0:
+        print("❌ No scheduler services running")
+        return 1
+    elif total_valid == 2:
+        print("✅ Both scheduler services running (optimal)")
         return 0
     else:
-        print(f"\n⚠️  WARNING: {valid_count} schedulers running (DUPLICATE DETECTED!)")
+        print(f"⚠️  WARNING: Only {total_valid}/2 scheduler services running")
         return 1
 
 def cmd_cleanup():

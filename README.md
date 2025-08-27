@@ -15,26 +15,85 @@
 
 **What MUST Run for Proper Operation:**
 
-#### 1. Scheduler Daemon (REQUIRED)
-The scheduler daemon is **CRITICAL** for orchestrator check-ins and preventing project stalls:
-```bash
-# Option A: Persistent daemon (RECOMMENDED)
-nohup timeout 7200 python3 -c "
-from scheduler import TmuxOrchestratorScheduler
-import time
-scheduler = TmuxOrchestratorScheduler()
-while True:
-    scheduler.check_and_run_tasks()
-    time.sleep(60)
-" > persistent_scheduler.log 2>&1 &
+The Tmux Orchestrator uses **two different scheduler services** for different purposes:
 
-# Option B: Start manual check for immediate needs
-python3 -c "
-from scheduler import TmuxOrchestratorScheduler
-scheduler = TmuxOrchestratorScheduler()
-scheduler.check_and_run_tasks()
-scheduler.close()
-"
+#### 1. Check-in Scheduler Service (REQUIRED for Orchestrator Messages)
+**Purpose**: Sends scheduled check-ins to orchestrators with completion reminders
+**Status**: ✅ Enhanced with completion detection reminders
+**Recommended**: Use systemd service (see section 3 below)
+
+```bash
+# Manual start (development only - use systemd for production)
+python3 scheduler.py --daemon --mode checkin > scheduler_checkin.log 2>&1 &
+
+# Check if running
+ps aux | grep "scheduler.py.*--mode checkin" | grep -v grep
+```
+
+#### 2. Queue Processor Service (REQUIRED for Batch Projects)
+**Purpose**: Processes multiple projects sequentially from the project queue
+**Status**: ✅ Independent service with separate lock management
+**Recommended**: Use systemd service (see section 3 below)
+
+```bash
+# Manual start (development only - use systemd for production)  
+python3 scheduler.py --daemon --mode queue > scheduler_queue.log 2>&1 &
+
+# Check if running
+ps aux | grep "scheduler.py.*--mode queue" | grep -v grep
+```
+
+#### 3. Systemd Services (RECOMMENDED for Production)
+**New Dual-Service Architecture**: Separate systemd services for check-in scheduler and queue processor
+
+**Benefits**: 
+- Clean separation of concerns
+- No race conditions between services  
+- Automatic restart on failures
+- Boot-time service activation
+- Centralized logging via journalctl
+
+```bash
+# Install both services
+sudo cp systemd/tmux-orchestrator-checkin.service /etc/systemd/system/
+sudo cp systemd/tmux-orchestrator-queue.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# Enable and start services
+sudo systemctl enable tmux-orchestrator-checkin tmux-orchestrator-queue
+sudo systemctl start tmux-orchestrator-checkin tmux-orchestrator-queue
+
+# Check status
+sudo systemctl status tmux-orchestrator-checkin
+sudo systemctl status tmux-orchestrator-queue
+
+# View logs
+journalctl -u tmux-orchestrator-checkin -f
+journalctl -u tmux-orchestrator-queue -f
+```
+
+#### Quick Health Check
+
+**For systemd services (recommended)**:
+```bash
+# Check service status
+sudo systemctl status tmux-orchestrator-checkin tmux-orchestrator-queue
+
+# Check processes
+ps aux | grep scheduler | grep -v grep
+# Should show:
+# - python3 scheduler.py --daemon --mode checkin   (check-ins)
+# - python3 scheduler.py --daemon --mode queue     (batch processing)
+```
+
+**For manual processes**:
+```bash  
+# Verify both schedulers are running
+ps aux | grep scheduler | grep -v grep
+
+# Should show:
+# - python3 scheduler.py --daemon --mode checkin   (check-ins)  
+# - python3 scheduler.py --daemon --mode queue     (batch processing)
 ```
 
 #### 2. Database Schema Verification (AUTO-FIXED)
@@ -67,6 +126,7 @@ CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
 - **Health Check System**: Continuous monitoring of system dependencies (bc, tmux, git)
 - **Automatic Recovery**: Processes overdue tasks and creates fallback states
 - **Race Condition Handling**: Improved lock management for concurrent scheduler instances
+- **🆕 Completion Reminders**: Check-in messages now remind orchestrators to call CompletionManager when projects reach completion
 
 #### File Organization & Cleanup
 - **Documentation Structure**: Organized all docs into `docs/` subdirectories
@@ -255,20 +315,30 @@ tail -20 persistent_scheduler.log | grep -E "(Message verified|Task.*completed)"
 python3 scheduler.py --list | head -20
 ```
 
-### System Services (Optional but Recommended)
+### System Services (RECOMMENDED for Production)
 
-#### 1. Queue Daemon Service (systemd)
-For production use, install the queue daemon as a systemd service:
+#### New Dual-Service Architecture
+The system now uses separate systemd services for better reliability:
+
 ```bash
-# Install the service
-sudo cp /etc/systemd/system/tmux-orchestrator-queue.service.example /etc/systemd/system/tmux-orchestrator-queue.service
+# Install both services (replaces single service approach)
+sudo cp systemd/tmux-orchestrator-checkin.service /etc/systemd/system/
+sudo cp systemd/tmux-orchestrator-queue.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable tmux-orchestrator-queue
-sudo systemctl start tmux-orchestrator-queue
 
-# Check status
-systemctl status tmux-orchestrator-queue
+# Enable and start both services
+sudo systemctl enable tmux-orchestrator-checkin tmux-orchestrator-queue
+sudo systemctl start tmux-orchestrator-checkin tmux-orchestrator-queue
+
+# Check status of both services
+sudo systemctl status tmux-orchestrator-checkin tmux-orchestrator-queue
 ```
+
+**Benefits of Dual Service Architecture:**
+- **No Race Conditions**: Each service uses mode-specific lock files
+- **Independent Restart**: Services restart independently on failure
+- **Clean Separation**: Check-in scheduling separate from queue processing
+- **Better Monitoring**: Service-specific logs and status monitoring
 
 #### 2. Scheduler Monitor (cron)
 Set up automated monitoring:
@@ -487,21 +557,34 @@ The system now automatically enforces hub-spoke communication to prevent agents 
 - Dependencies are tracked and resolved automatically
 - All communications are logged for compliance
 
-### 🔧 Systemd Service (Optional)
-For production deployments, run the scheduler as a systemd service:
+### 🔧 Systemd Services (RECOMMENDED)
+For production deployments, use the new dual-service architecture:
+
 ```bash
-# Install service (run once)
-sudo ./systemd/install-systemd-service.sh $USER
+# Install both services (NEW - replaces single service)
+sudo cp systemd/tmux-orchestrator-checkin.service /etc/systemd/system/
+sudo cp systemd/tmux-orchestrator-queue.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# Enable and start services
+sudo systemctl enable tmux-orchestrator-checkin tmux-orchestrator-queue
+sudo systemctl start tmux-orchestrator-checkin tmux-orchestrator-queue
 
 # Check status
-sudo systemctl status tmux-orchestrator-scheduler@$USER
+sudo systemctl status tmux-orchestrator-checkin tmux-orchestrator-queue
 
 # View logs
-sudo journalctl -u tmux-orchestrator-scheduler@$USER -f
+journalctl -u tmux-orchestrator-checkin -f    # Check-in scheduler
+journalctl -u tmux-orchestrator-queue -f      # Queue processor
 
-# Uninstall
-sudo ./systemd/uninstall-systemd-service.sh $USER
+# Stop services
+sudo systemctl stop tmux-orchestrator-checkin tmux-orchestrator-queue
 ```
+
+**Migration from Single Service:**
+- Old: `tmux-orchestrator-scheduler.service`
+- New: `tmux-orchestrator-checkin.service` + `tmux-orchestrator-queue.service`  
+- Benefits: No race conditions, better reliability, independent restarts
 
 ## 🚀 Main Scripts Overview
 
@@ -715,6 +798,98 @@ parent-directory/
 - **Worktree Isolation**: Each agent has separate workspace
 - **Intelligent Retry System**: Research agent analyzes failures and enhances specs
 
+## 🔄 Project Lifecycle Process
+
+### Complete Project Flow from Start to Finish
+
+The Tmux Orchestrator manages the complete project lifecycle with automated detection, coordination, and cleanup:
+
+#### Phase 1: Project Initialization
+
+1. **Specification Analysis**: `auto_orchestrate.py` analyzes project specs and requirements
+2. **Team Deployment**: Dynamic team configuration based on project type (web app, system deployment, etc.)
+3. **Worktree Creation**: Git worktrees created as siblings to project directory (e.g., `project-tmux-worktrees/`)
+4. **Session Setup**: Tmux sessions created for each agent role with proper window naming
+5. **Database Entry**: Project queued in SQLite database with 'queued' status
+6. **Agent Briefing**: Role-specific briefings sent to each agent with project context
+
+#### Phase 2: Active Development
+
+1. **Status Transition**: Scheduler moves project from 'queued' to 'processing' status
+2. **Regular Check-ins**: Scheduler sends periodic check-ins to orchestrators with completion reminders:
+   ```
+   SCHEDULED CHECK-IN: Time for your regular status update
+   
+   REMINDER: Please check if your project has reached completion. 
+   If all success criteria are met, call the CompletionManager to mark 
+   the project complete and trigger proper decommissioning.
+   ```
+3. **Agent Coordination**: Agents work autonomously, committing every 30 minutes to their branches
+4. **Progress Monitoring**: Multiple detection systems monitor project health:
+   - **Agent-driven**: Agents signal completion via CompletionManager
+   - **Timeout detection**: Projects exceeding 4 hours marked as stuck
+   - **Phantom detection**: Missing tmux sessions or dead processes detected
+   - **State synchronization**: DB-JSON consistency maintained
+
+#### Phase 3: Completion Detection
+
+**Multi-layered Detection System**:
+
+1. **Reactive Detection**: Agents call CompletionManager when success criteria met
+2. **Proactive Monitoring**: `check_stuck_projects` runs every 60 seconds checking for:
+   - Projects exceeding timeout thresholds
+   - Session liveness validation
+   - Process activity monitoring
+3. **Recovery Systems**: `detect_and_reset_phantom_projects` handles:
+   - Missing tmux sessions
+   - Dead auto_orchestrate.py processes
+   - Session name recovery attempts
+
+#### Phase 4: Decommissioning Process
+
+When completion is detected, the system triggers coordinated cleanup:
+
+1. **Status Update**: Database updated to 'completed' or 'failed' with timestamps
+2. **Event Dispatch**: `project_complete` event sent via EventBus to notify subscribers
+3. **Tmux Session Shutdown**: 
+   - TmuxSessionManager kills session using `tmux kill-session`
+   - Pattern matching used if exact session name unavailable
+   - Registry cleanup performed post-shutdown
+4. **State Reconciliation**: 
+   - SessionStateManager updates JSON session states
+   - StateSynchronizer repairs any DB-JSON mismatches
+   - Orphaned session reconciliation runs every 10 minutes
+5. **Resource Management**:
+   - ProcessManager terminates timed-out subprocesses
+   - Lock manager releases project locks
+   - **Worktrees preserved** for manual merge operations (by design)
+
+#### Phase 5: Post-Completion
+
+1. **Integration Ready**: Git worktrees remain for manual code review and merge
+2. **Reporting Available**: `list_completed_projects.py` provides completion analytics
+3. **Cleanup Available**: Manual cleanup with `--force` flag if desired
+4. **Metrics Collection**: Project duration, success rates, and failure reasons logged
+
+### Error Handling & Recovery
+
+**Multi-Level Safety Net**:
+
+- **Tmux Failures**: Logged but don't halt system; graceful degradation
+- **Database Errors**: Wrapped in try-catch with comprehensive logging
+- **Lock Failures**: Cause graceful exit with automatic retry mechanisms  
+- **Event Loops**: Prevented via event locks and processing state tracking
+- **Reboot Recovery**: `_recover_from_reboot` resets processing projects on startup
+- **Race Conditions**: Enhanced lock management prevents multiple scheduler instances
+
+### Key Benefits of This Lifecycle
+
+1. **Autonomous Operation**: Projects run 24/7 without human intervention
+2. **Fault Tolerance**: Multiple detection and recovery mechanisms prevent stuck projects
+3. **Resource Preservation**: Worktrees kept for code review and integration
+4. **Complete Audit Trail**: Every phase logged with timestamps and status transitions
+5. **Scalable Architecture**: Handles multiple concurrent projects efficiently
+
 ## 📋 Best Practices
 
 ### Writing Effective Specifications
@@ -798,6 +973,8 @@ SUCCESS CRITERIA:
 | **Git worktree conflicts** | The scripts handle this automatically with fallback strategies |
 | **"bc: command not found"** | Install bc: `sudo apt install bc` (Linux) or `brew install bc` (macOS) |
 | **Scheduler not processing tasks** | Check daemon is running: `ps aux \| grep scheduler` |
+| **Only queue-daemon running** | Missing check-in scheduler | Start: `python3 scheduler.py --daemon &` |
+| **No completion reminders** | Old scheduler daemon running | Restart check-in daemon to get enhanced version |
 
 ### Common Pitfalls & Solutions
 
