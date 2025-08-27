@@ -387,6 +387,106 @@ class PathManager:
         return session_state
 
 
+class TmuxMessenger:
+    """Unified tmux messaging system with MCP wrapper prevention and guaranteed Enter key"""
+    
+    def __init__(self, orchestrator_path: Path):
+        self.orchestrator_path = orchestrator_path
+        self.send_script = orchestrator_path / 'send-claude-message.sh'
+        
+    def clean_message_from_mcp_wrappers(self, message: str) -> str:
+        """Enhanced MCP wrapper removal to handle all contamination patterns"""
+        import re
+        
+        original = message
+        
+        # Comprehensive MCP wrapper patterns
+        patterns = [
+            # Common MCP wrappers
+            r'^echo\s+[\'"]TMUX_MCP_START[\'"];\s*',
+            r';\s*echo\s+[\'"]TMUX_MCP_DONE_\$\?[\'"]$',
+            r'echo\s+[\'"]TMUX_MCP_START[\'"];\s*',
+            r';\s*echo\s+[\'"]TMUX_MCP_DONE_\$\?[\'"]',
+            
+            # Alternative wrapper patterns  
+            r'echo\s+TMUX_MCP_START;\s*',
+            r';\s*echo\s+TMUX_MCP_DONE_\$\?',
+            r'echo\s+[\'"]MCP_EXECUTE_START[\'"];\s*',
+            r';\s*echo\s+[\'"]MCP_EXECUTE_END_\$\?[\'"]',
+            
+            # Shell execution wrappers
+            r'bash\s+-c\s+[\'"]echo\s+[\'"]?TMUX_MCP_START[\'"]?;\s*',
+            r';\s*echo\s+[\'"]?TMUX_MCP_DONE_\$\?[\'"]?[\'"]',
+            
+            # Command substitution patterns
+            r'\$\(\s*echo\s+[\'"]TMUX_MCP_START[\'"];\s*',
+            r';\s*echo\s+[\'"]TMUX_MCP_DONE_\$\?[\'"]?\s*\)',
+            
+            # Inline wrapper remnants
+            r'TMUX_MCP_START\s*;?\s*',
+            r';\s*TMUX_MCP_DONE_\$\?\s*',
+        ]
+        
+        # Apply patterns iteratively
+        for _ in range(3):
+            before = message
+            for pattern in patterns:
+                message = re.sub(pattern, '', message)
+            if message == before:
+                break
+        
+        # Clean up artifacts
+        message = re.sub(r';\s*;', ';', message)  # Double semicolons
+        message = re.sub(r'^\s*;\s*', '', message)  # Leading semicolon
+        message = re.sub(r'\s*;\s*$', '', message)  # Trailing semicolon
+        message = re.sub(r'\s+', ' ', message)  # Multiple spaces
+        message = message.strip()
+        
+        if len(original) > len(message) + 20:
+            console.print(f"[dim]🧹 Cleaned MCP wrappers: {len(original)} → {len(message)} chars[/dim]")
+        
+        return message
+        
+    def send_message(self, target: str, message: str, retries: int = 3) -> bool:
+        """Send message with guaranteed Enter key and MCP wrapper prevention"""
+        # Clean message first
+        clean_message = self.clean_message_from_mcp_wrappers(message)
+        
+        if not clean_message:
+            console.print(f"[yellow]⚠️ Message was empty after cleaning, skipping send to {target}[/yellow]")
+            return True  # Don't fail on empty messages
+        
+        # Use enhanced send script with proper Enter handling
+        try:
+            result = subprocess.run([
+                str(self.send_script),
+                target,
+                clean_message
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                console.print(f"[dim]📤 Message sent to {target}: {clean_message[:50]}{'...' if len(clean_message) > 50 else ''}[/dim]")
+                return True
+            else:
+                console.print(f"[red]❌ Failed to send to {target}: {result.stderr}[/red]")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            console.print(f"[red]⏰ Message send timeout to {target}[/red]")
+            return False
+        except Exception as e:
+            console.print(f"[red]💥 Exception sending to {target}: {e}[/red]")
+            return False
+    
+    def send_command(self, target: str, command: str) -> bool:
+        """Send a command with 'Please run:' prefix"""
+        return self.send_message(target, f"Please run: {command}")
+        
+    def send_briefing(self, target: str, briefing: str) -> bool:
+        """Send a role briefing with enhanced cleaning"""
+        return self.send_message(target, briefing)
+
+
 class AutoOrchestrator:
     def __init__(self, project_path: str, spec_path: str, batch_mode: bool = False, overwrite: bool = False, daemon: bool = False):
         self.spec_path = Path(spec_path).resolve()
@@ -415,6 +515,9 @@ class AutoOrchestrator:
             
         self.tmux_orchestrator_path = Path(__file__).parent
         self.implementation_spec: Optional[ImplementationSpec] = None
+        
+        # Initialize TmuxMessenger for standardized messaging
+        self.messenger = TmuxMessenger(self.tmux_orchestrator_path)
         
         # Initialize PathManager for unified path handling
         self.path_manager = PathManager(self.project_path, self.tmux_orchestrator_path)
@@ -1884,12 +1987,11 @@ Please:
 3. Report to the Project Manager with your current status
 4. Continue with your assigned tasks"""
         
-        send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
-        subprocess.run([
-            str(send_script),
+        # Use unified messenger for standardized communication
+        self.messenger.send_briefing(
             f'{session_state.session_name}:{agent.window_index}',
             briefing
-        ], capture_output=True)
+        )
         
         # Update agent state
         agent.is_alive = True
@@ -1930,12 +2032,11 @@ You are the {agent.window_name} for the {session_state.project_name} project.
 
 Please provide a brief status update on your current work and any blockers."""
         
-        send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
-        subprocess.run([
-            str(send_script),
+        # Use unified messenger for standardized communication
+        self.messenger.send_message(
             f'{session_state.session_name}:{agent.window_index}',
             rebrief_msg
-        ], capture_output=True)
+        )
         
         agent.last_briefing_time = datetime.now().isoformat()
         
@@ -2905,15 +3006,10 @@ This file is automatically read by Claude Code when working in this directory.
             context_prime_file = Path(context_prime_path) / '.claude' / 'commands' / 'context-prime.md'
             
             if role_key != 'orchestrator' and context_prime_file.exists():
-                send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
                 context_prime_msg = f'/context-prime "first: run context prime like normal, then: You are about to work on {spec.project.name} at {spec.project.path}. Understand the project structure, dependencies, and conventions."'
-                clean_context_msg = self.clean_message_from_mcp_wrappers(context_prime_msg)
                 try:
-                    subprocess.run([
-                        str(send_script),
-                        f'{session_name}:{window_idx}',
-                        clean_context_msg
-                    ], capture_output=True)
+                    # Use unified messenger for context priming
+                    self.messenger.send_message(f'{session_name}:{window_idx}', context_prime_msg)
                     # Wait for context priming to complete
                     time.sleep(8)
                 except Exception as e:
@@ -2929,26 +3025,13 @@ This file is automatically read by Claude Code when working in this directory.
                                                 worktree_paths=worktree_paths,
                                                 mcp_categories=getattr(self, 'mcp_categories', {}))
             
-            # Clean briefing of any MCP wrapper commands
-            clean_briefing = self.clean_message_from_mcp_wrappers(briefing)
-            
-            # Send briefing using send-claude-message.sh
-            send_script = self.tmux_orchestrator_path / 'send-claude-message.sh'
-            subprocess.run([
-                str(send_script),
-                f'{session_name}:{window_idx}',
-                clean_briefing
-            ], capture_output=True)
+            # Send briefing using unified messenger
+            self.messenger.send_briefing(f'{session_name}:{window_idx}', briefing)
             
             # Run initial commands
             for cmd in role_config.initial_commands:
                 time.sleep(2)
-                clean_cmd_msg = self.clean_message_from_mcp_wrappers(f"Please run: {cmd}")
-                subprocess.run([
-                    str(send_script),
-                    f'{session_name}:{window_idx}',
-                    clean_cmd_msg
-                ], capture_output=True)
+                self.messenger.send_command(f'{session_name}:{window_idx}', cmd)
             
             # Schedule check-ins
             # Modified to conditionally include orchestrator based on flag
@@ -2976,26 +3059,59 @@ This file is automatically read by Claude Code when working in this directory.
                 console.print(f"[green]Scheduled check-in for {window_name} (window {window_idx}) every {check_in_interval} minutes[/green]")
     
     def clean_message_from_mcp_wrappers(self, message: str) -> str:
-        """Remove any MCP echo wrapper commands from messages"""
+        """Enhanced MCP wrapper removal to handle all contamination patterns"""
         import re
         
-        # Remove echo "TMUX_MCP_START"; prefix
-        message = re.sub(r'^echo\s+"TMUX_MCP_START";\s*', '', message)
-        message = re.sub(r'\s*echo\s+"TMUX_MCP_START";\s*', ' ', message)
+        # Store original for comparison
+        original = message
         
-        # Remove ; echo "TMUX_MCP_DONE_$?" suffix
-        message = re.sub(r';\s*echo\s+"TMUX_MCP_DONE_\$\?"\s*$', '', message)
-        message = re.sub(r';\s*echo\s+"TMUX_MCP_DONE_\$\?"', '', message)
+        # Remove exact MCP wrapper patterns (comprehensive)
+        patterns = [
+            # Common MCP wrappers
+            r'^echo\s+[\'"]TMUX_MCP_START[\'"];\s*',
+            r';\s*echo\s+[\'"]TMUX_MCP_DONE_\$\?[\'"]$',
+            r'echo\s+[\'"]TMUX_MCP_START[\'"];\s*',
+            r';\s*echo\s+[\'"]TMUX_MCP_DONE_\$\?[\'"]',
+            
+            # Alternative wrapper patterns
+            r'echo\s+TMUX_MCP_START;\s*',
+            r';\s*echo\s+TMUX_MCP_DONE_\$\?',
+            r'echo\s+[\'"]MCP_EXECUTE_START[\'"];\s*',
+            r';\s*echo\s+[\'"]MCP_EXECUTE_END_\$\?[\'"]',
+            
+            # Shell execution wrappers
+            r'bash\s+-c\s+[\'"]echo\s+[\'"]?TMUX_MCP_START[\'"]?;\s*',
+            r';\s*echo\s+[\'"]?TMUX_MCP_DONE_\$\?[\'"]?[\'"]',
+            
+            # Command substitution patterns
+            r'\$\(\s*echo\s+[\'"]TMUX_MCP_START[\'"];\s*',
+            r';\s*echo\s+[\'"]TMUX_MCP_DONE_\$\?[\'"]?\s*\)',
+            
+            # Inline wrapper remnants
+            r'TMUX_MCP_START\s*;?\s*',
+            r';\s*TMUX_MCP_DONE_\$\?\s*',
+        ]
         
-        # Clean up any double semicolons or trailing semicolons
-        message = re.sub(r';;+', ';', message)
-        message = re.sub(r';\s*$', '', message)
+        # Apply all patterns iteratively until no more changes
+        for _ in range(3):  # Maximum 3 passes to handle nested patterns
+            before = message
+            for pattern in patterns:
+                message = re.sub(pattern, '', message)
+            if message == before:
+                break  # No more changes
         
-        # Also remove the pattern if it appears in the middle of text
-        message = re.sub(r'echo\s+"TMUX_MCP_START";\s*', '', message)
-        message = re.sub(r'echo\s+"TMUX_MCP_DONE_\$\?"', '', message)
+        # Clean up artifacts
+        message = re.sub(r';\s*;', ';', message)  # Double semicolons
+        message = re.sub(r'^\s*;\s*', '', message)  # Leading semicolon
+        message = re.sub(r'\s*;\s*$', '', message)  # Trailing semicolon
+        message = re.sub(r'\s+', ' ', message)  # Multiple spaces
+        message = message.strip()
         
-        return message.strip()
+        # Log significant changes for debugging
+        if len(original) > len(message) + 20:  # Significant wrapper removal
+            console.print(f"[dim]🧹 Cleaned MCP wrappers: {len(original)} → {len(message)} chars[/dim]")
+        
+        return message
     
     def get_available_mcp_tools(self, worktree_path: Path) -> str:
         """Parse .mcp.json in worktree and return list of available MCP tools"""
