@@ -42,7 +42,7 @@ from email_notifier import get_email_notifier
 from process_manager import ProcessManager  # NEW: Import ProcessManager for subprocess tracking
 from state_synchronizer import StateSynchronizer  # NEW: Import for proactive null session repair
 from project_lock import ProjectLock  # NEW: Import for cross-project interference prevention
-from tmux_session_manager import TmuxSessionManager  # NEW: Import for tmux session management
+from tmux_session_manager import TmuxSessionManager  # Required for safe tmux operations
 
 # Setup logging
 logging.basicConfig(
@@ -131,7 +131,7 @@ class TmuxOrchestratorScheduler:
         self.processing_events = set()
         self._event_lock = threading.Lock()
         
-        # NEW: Initialize TmuxSessionManager for session management
+        # Initialize TmuxSessionManager for session management
         self.tmux_manager = TmuxSessionManager()
         
         # NEW: Initialize ProcessManager for subprocess tracking and timeout enforcement
@@ -1543,7 +1543,7 @@ class TmuxOrchestratorScheduler:
         # Check for recent duplicates (within 10 minutes)
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT task_id, next_run FROM tasks 
+            SELECT id, next_run FROM tasks 
             WHERE session_name = ? AND agent_role = ? AND window_index = ? 
             AND note LIKE ? AND next_run > ? AND next_run < ?
             ORDER BY next_run DESC LIMIT 1

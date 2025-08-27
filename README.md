@@ -9,27 +9,74 @@
 - **Persist** - Work continues even when you close your laptop
 - **Scale** - Run multiple teams working on different projects simultaneously
 
-## 🚀 Latest Updates (v3.5.2)
+## 🚀 Latest Updates (v3.6.0) - Critical Scheduling Reliability Fixes
 
-### Bug Fixes
-- **Orchestrator Self-Scheduling** - Fixed bug where orchestrator window 0 never received check-in tasks
-  - Added `--enable-orchestrator-scheduling` flag for orchestrator self-scheduling
-- **MCP Global Initialization** - Fixed MCP config acceptance for all agents, not just those with worktree configs
-  - Added `--global-mcp-init` flag to check system/user-level MCP configurations
+### 🛠️ System Requirements & Essential Services
 
-### Previous Release (v3.5.1)
-- **Auto-Orchestrate Reliability** - Fixed critical deployment failures in multi-agent setup
-- **MCP Server Workflow** - Proper Claude initialization sequence with MCP approval
-- **Queue Daemon Stability** - Fixed systemd service configuration issues
-- **Scheduler Enhancements** - Duplicate process prevention with robust locking
-- **Merge Integration Tool** - New tool for streamlined git workflow management
+**What MUST Run for Proper Operation:**
 
-### Recent Fixes (v3.3.0)
-- **Scheduler Infinite Loop** - Fixed critical bug where tasks with `interval_minutes=0` would reschedule infinitely
-- **Message Flooding Prevention** - Resolved issue causing 700+ duplicate messages to flood the orchestrator
-- **Event Bus System** - Implemented centralized event bus with rate limiting (10 messages/minute)
-- **Extended Timeouts** - Added configurable timeouts for long-running projects (2 hours runtime, 1 hour phantom grace)
-- **Improved Monitoring** - Enhanced state management and compliance monitoring with file-based logging
+#### 1. Scheduler Daemon (REQUIRED)
+The scheduler daemon is **CRITICAL** for orchestrator check-ins and preventing project stalls:
+```bash
+# Option A: Persistent daemon (RECOMMENDED)
+nohup timeout 7200 python3 -c "
+from scheduler import TmuxOrchestratorScheduler
+import time
+scheduler = TmuxOrchestratorScheduler()
+while True:
+    scheduler.check_and_run_tasks()
+    time.sleep(60)
+" > persistent_scheduler.log 2>&1 &
+
+# Option B: Start manual check for immediate needs
+python3 -c "
+from scheduler import TmuxOrchestratorScheduler
+scheduler = TmuxOrchestratorScheduler()
+scheduler.check_and_run_tasks()
+scheduler.close()
+"
+```
+
+#### 2. Database Schema Verification (AUTO-FIXED)
+The task database schema is now automatically verified and fixed:
+- ✅ Column name mismatch (`task_id` vs `id`) - **FIXED**
+- ✅ Orchestrator scheduling logic bug - **FIXED**
+- ✅ Idempotent task addition to prevent loops - **IMPLEMENTED**
+
+#### 3. Self-Scheduling Check (MANDATORY FOR ORCHESTRATORS)
+Every orchestrator MUST verify self-scheduling on startup:
+```bash
+# Test scheduling capability
+CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
+./schedule_with_note.sh 1 "Test schedule for $CURRENT_WINDOW" "$CURRENT_WINDOW"
+```
+
+### 🔧 Critical Bug Fixes (v3.6.0)
+
+#### Orchestrator Self-Scheduling (RESOLVED)
+- **Issue**: Orchestrators weren't receiving scheduled check-ins, causing project stalls
+- **Root Cause**: Database schema mismatch (`task_id` vs `id`) + inverted scheduling logic
+- **Fix**: 
+  - Fixed SQL queries to use correct column names
+  - Corrected orchestrator scheduling condition in `auto_orchestrate.py`
+  - Added database schema validation
+- **Impact**: Prevents "22:21 check-in never happened" situations
+
+#### Scheduler Reliability Improvements
+- **Idempotent Task Addition**: Prevents scheduling loops using composite keys
+- **Health Check System**: Continuous monitoring of system dependencies (bc, tmux, git)
+- **Automatic Recovery**: Processes overdue tasks and creates fallback states
+- **Race Condition Handling**: Improved lock management for concurrent scheduler instances
+
+#### File Organization & Cleanup
+- **Documentation Structure**: Organized all docs into `docs/` subdirectories
+- **Cleanup System**: Removed 49+ unused/duplicate files
+- **Essential File Restoration**: Restored `tmux_session_manager.py` (actively used)
+
+### Previous Release (v3.5.2)
+- **Orchestrator Self-Scheduling** - Added `--enable-orchestrator-scheduling` flag 
+- **MCP Global Initialization** - Added `--global-mcp-init` flag for system MCP configs
+- **Auto-Orchestrate Reliability** - Fixed critical deployment failures
 
 ## 🎯 Primary Tools & Entry Points
 
@@ -115,11 +162,97 @@ The Tmux Orchestrator uses a streamlined architecture with focused roles:
 - **UV** (for Python script management) - **Required for all Python scripts**
 - **Git** 2.0+ configured with user credentials
 - **SQLite3** (for task queue database)
+- **bc** calculator utility (for time calculations)
 - Basic familiarity with tmux commands
 
 **Important**: All Python scripts use UV shebangs for zero-dependency execution. Install UV with:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### 🚨 MANDATORY: Scheduler Daemon Operation
+
+The scheduler daemon is **ESSENTIAL** for system operation. Without it, orchestrators won't receive check-ins and projects will stall.
+
+#### Quick Start (Persistent Scheduler)
+```bash
+# 1. Verify dependencies are working
+python3 -c "
+from scheduler import TmuxOrchestratorScheduler
+print('✅ Scheduler imports successfully')
+"
+
+# 2. Start persistent daemon (runs for 2 hours, checks every minute)
+nohup timeout 7200 python3 -c "
+from scheduler import TmuxOrchestratorScheduler
+import time
+import signal
+import sys
+
+def signal_handler(signum, frame):
+    print('Daemon received shutdown signal, exiting gracefully...')
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+scheduler = TmuxOrchestratorScheduler()
+print('Starting persistent scheduler daemon...')
+print(f'Monitoring tasks - will run for 2 hours')
+
+try:
+    while True:
+        scheduler.check_and_run_tasks()
+        time.sleep(60)  # Check every minute
+except KeyboardInterrupt:
+    print('Daemon stopped by user')
+except Exception as e:
+    print(f'Daemon error: {e}')
+    
+print('Scheduler daemon shutting down')
+" > persistent_scheduler.log 2>&1 &
+
+# 3. Verify daemon is running
+ps aux | grep python3 | grep scheduler
+
+# 4. Monitor daemon activity
+tail -f persistent_scheduler.log
+```
+
+#### Verification Commands
+```bash
+# Check if tasks are scheduled correctly
+python3 scheduler.py --list | tail -10
+
+# Manual processing for immediate needs
+python3 -c "
+from scheduler import TmuxOrchestratorScheduler
+scheduler = TmuxOrchestratorScheduler()
+print('Processing overdue tasks manually...')
+scheduler.check_and_run_tasks()
+print('Manual processing complete')
+"
+
+# Check orchestrator self-scheduling capability
+CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
+echo "Testing scheduling for: $CURRENT_WINDOW"
+./schedule_with_note.sh 1 "Test schedule" "$CURRENT_WINDOW"
+```
+
+#### Daemon Monitoring & Health Checks
+```bash
+# Check daemon health
+if pgrep -f "scheduler.*check_and_run_tasks" > /dev/null; then
+    echo "✅ Scheduler daemon is running"
+else
+    echo "❌ Scheduler daemon is NOT running - orchestrators may stall!"
+fi
+
+# Check recent activity
+tail -20 persistent_scheduler.log | grep -E "(Message verified|Task.*completed)"
+
+# View upcoming tasks
+python3 scheduler.py --list | head -20
 ```
 
 ### System Services (Optional but Recommended)
@@ -178,6 +311,83 @@ crontab -e
    ```bash
    export PROJECTS_DIR="$HOME/your-projects-folder"
    ```
+
+### 📋 Pre-Operation Checklist
+
+Before starting any orchestration, verify these critical components:
+
+#### ✅ System Health Check
+```bash
+# 1. Verify all dependencies
+python3 -c "from scheduler import TmuxOrchestratorScheduler; print('✅ Scheduler OK')"
+which tmux bc git uv || echo "❌ Missing dependencies"
+
+# 2. Check scheduler daemon status
+if pgrep -f "scheduler.*check_and_run_tasks" > /dev/null; then
+    echo "✅ Scheduler daemon running"
+else
+    echo "❌ START SCHEDULER DAEMON NOW!"
+fi
+
+# 3. Test scheduling capability
+CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
+./schedule_with_note.sh 1 "Health check" "$CURRENT_WINDOW" && echo "✅ Scheduling works"
+
+# 4. Verify database schema
+python3 scheduler.py --list | head -5 && echo "✅ Database accessible"
+```
+
+#### 🚀 Start Essential Services
+```bash
+# Start persistent scheduler daemon (MANDATORY)
+nohup timeout 7200 python3 -c "
+from scheduler import TmuxOrchestratorScheduler
+import time
+scheduler = TmuxOrchestratorScheduler()
+while True:
+    scheduler.check_and_run_tasks()
+    time.sleep(60)
+" > persistent_scheduler.log 2>&1 &
+
+echo "Scheduler daemon PID: $!"
+echo "Monitor with: tail -f persistent_scheduler.log"
+```
+
+#### 🔍 Daily Maintenance
+```bash
+# Check system health (run daily)
+./health_check.sh() {
+    echo "=== Tmux Orchestrator Health Check ==="
+    echo "Date: $(date)"
+    echo
+    
+    # Daemon check
+    if pgrep -f "scheduler.*check_and_run_tasks" > /dev/null; then
+        echo "✅ Scheduler daemon: RUNNING"
+    else
+        echo "❌ Scheduler daemon: NOT RUNNING - CRITICAL!"
+    fi
+    
+    # Database check
+    task_count=$(python3 scheduler.py --list 2>/dev/null | wc -l)
+    echo "📊 Scheduled tasks: $task_count"
+    
+    # Recent activity
+    recent_activity=$(tail -20 persistent_scheduler.log 2>/dev/null | grep -c "Message verified" || echo "0")
+    echo "📨 Recent deliveries: $recent_activity"
+    
+    # Active sessions
+    active_sessions=$(tmux ls 2>/dev/null | wc -l || echo "0")
+    echo "🖥️  Active tmux sessions: $active_sessions"
+    
+    echo
+    echo "Next scheduled tasks:"
+    python3 scheduler.py --list 2>/dev/null | head -5
+}
+
+# Run it
+health_check.sh
+```
 
 ## 📁 Project Directory Structure
 
@@ -568,6 +778,15 @@ SUCCESS CRITERIA:
 
 ## 🚨 Common Issues & Solutions
 
+### Critical Issues & Resolutions (v3.6.0)
+
+| Issue | Symptoms | Root Cause | Solution |
+|-------|----------|------------|----------|
+| **Orchestrator doesn't self-schedule** | No check-ins received, projects stall | Database schema mismatch + inverted logic | ✅ **AUTO-FIXED** in v3.6.0 |
+| **Tasks fail with "no such column: task_id"** | SQLite errors in scheduler | Incorrect column name in SQL | ✅ **RESOLVED** - Uses correct `id` column |
+| **Scheduler daemon won't start** | "Another scheduler is already running" | Race condition in lock detection | Use persistent daemon command from docs |
+| **Orchestrators go silent** | No messages after specific times | Missing scheduler daemon | Start persistent scheduler daemon |
+
 ### Quick Troubleshooting
 
 | Issue | Solution |
@@ -577,6 +796,8 @@ SUCCESS CRITERIA:
 | **Agent exhausted credits** | Wait for reset or use: `./auto_orchestrate.py --resume` |
 | **Tmux session not found** | Check with: `tmux ls` and use correct session name |
 | **Git worktree conflicts** | The scripts handle this automatically with fallback strategies |
+| **"bc: command not found"** | Install bc: `sudo apt install bc` (Linux) or `brew install bc` (macOS) |
+| **Scheduler not processing tasks** | Check daemon is running: `ps aux \| grep scheduler` |
 
 ### Common Pitfalls & Solutions
 
