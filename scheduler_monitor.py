@@ -169,20 +169,22 @@ def cmd_stop_all():
     return 0
 
 def cmd_restart():
-    """Restart scheduler safely"""
-    print("🔄 Restarting Scheduler")
+    """Restart scheduler safely using systemd"""
+    print("🔄 Restarting Scheduler Services")
     print("=" * 50)
     
-    # Stop all existing
-    print("Step 1: Stopping existing schedulers...")
-    cmd_stop_all()
+    # Stop systemd services
+    print("Step 1: Stopping systemd services...")
+    os.system("sudo systemctl stop tmux-orchestrator-checkin")
+    os.system("sudo systemctl stop tmux-orchestrator-queue")
     
     # Wait a moment
     time.sleep(2)
     
-    # Start new one
-    print("\nStep 2: Starting new scheduler...")
-    os.system("python3 start_scheduler_safe.py --daemon")
+    # Start systemd services
+    print("\nStep 2: Starting systemd services...")
+    os.system("sudo systemctl start tmux-orchestrator-checkin")
+    os.system("sudo systemctl start tmux-orchestrator-queue")
     
     # Verify startup
     time.sleep(3)

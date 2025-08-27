@@ -1,0 +1,57 @@
+[Unit]
+Description=Tmux Orchestrator Scheduler
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+# FIXED: Proper cleanup sequence to avoid race conditions
+ExecStartPre=/bin/bash -c 'set -e; \
+  echo "Stopping existing schedulers..."; \
+  pkill -f "scheduler.py.*--daemon" || true; \
+  pkill -f "scheduler.py.*queue-daemon" || true; \
+  sleep 2; \
+  echo "Cleaning up lock files..."; \
+  rm -f /home/clauderun/Tmux-Orchestrator/locks/scheduler.lock || true; \
+  rm -f /home/clauderun/Tmux-Orchestrator/locks/scheduler_process.info || true; \
+  rm -f /home/clauderun/Tmux-Orchestrator/locks/project_queue.lock || true; \
+  echo "Waiting for cleanup to complete..."; \
+  sleep 1; \
+  echo "Ready to start scheduler"'
+
+# FIXED: Use the daemon mode instead of queue-daemon for task scheduling
+ExecStart=/usr/bin/python3 /home/clauderun/Tmux-Orchestrator/scheduler.py --daemon
+WorkingDirectory=/home/clauderun/Tmux-Orchestrator
+
+# FIXED: More aggressive restart policy for critical service
+Restart=always
+RestartSec=5s
+
+# Process management
+User=clauderun
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tmux-orchestrator-scheduler
+
+# Environment
+Environment="PATH=/home/clauderun/.cargo/bin:/home/clauderun/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HOME=/home/clauderun"
+Environment="PYTHONUNBUFFERED=1"
+
+# Security (less restrictive for tmux operations)
+NoNewPrivileges=true
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=/home/clauderun
+
+# Resource limits
+MemoryMax=512M
+TasksMax=100
+
+[Install]
+WantedBy=multi-user.target

@@ -12,6 +12,7 @@ ExecStart=/usr/bin/python3 /home/clauderun/Tmux-Orchestrator/scheduler.py --daem
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/clauderun/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 StandardOutput=journal
 StandardError=journal
 KillMode=process
