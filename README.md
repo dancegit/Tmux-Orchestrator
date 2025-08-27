@@ -179,6 +179,74 @@ crontab -e
    export PROJECTS_DIR="$HOME/your-projects-folder"
    ```
 
+## 📁 Project Directory Structure
+
+The Tmux Orchestrator follows a clean, organized structure. Here's where everything belongs:
+
+### Core Directories
+
+```
+Tmux-Orchestrator/
+├── docs/                    # All documentation (except README.md)
+│   ├── INDEX.md            # Documentation index and guide
+│   ├── architecture/       # System design, specs, architectural decisions
+│   ├── guides/            # How-to guides, briefings, implementation instructions
+│   ├── investigations/    # Deep dives, root cause analyses, research
+│   └── troubleshooting/   # Solutions, fixes, issue resolutions
+│
+├── monitoring/             # Monitoring and compliance tools
+│   ├── compliance_monitor.py
+│   ├── monitored_send_message.sh
+│   └── workflow_monitor.py
+│
+├── registry/               # Runtime data and state
+│   ├── projects/          # Active project registrations
+│   ├── logs/             # System and agent logs
+│   ├── sessions.json     # Active session tracking
+│   └── notes/           # Orchestrator notes
+│
+├── locks/                 # Lock files for process coordination
+├── session_states/        # Agent session state persistence
+├── systemd/              # Systemd service configurations
+└── Examples/             # Screenshots and usage examples
+```
+
+### File Organization Guidelines
+
+**Python Scripts** - Core functionality
+- `auto_orchestrate.py` - Main orchestration entry point
+- `scheduler.py` - Task scheduling daemon
+- `*_manager.py` - Various system managers
+- `*_monitor.py` - Monitoring utilities
+
+**Shell Scripts** - Tmux and system operations
+- `send-claude-message*.sh` - Agent communication variants
+- `schedule_with_note.sh` - Task scheduling interface
+- `*_monitor.sh` - Shell-based monitors
+
+**Configuration Files**
+- `config.sh` / `config.local.sh` - System configuration
+- `*.service` - Systemd service definitions
+- `task_queue.db` - SQLite task database
+
+**What Goes Where:**
+- 📚 **New documentation** → `docs/` (choose appropriate subdirectory)
+- 🔧 **Bug fixes/solutions** → `docs/troubleshooting/`
+- 🏗️ **Design decisions** → `docs/architecture/`
+- 📋 **How-to guides** → `docs/guides/`
+- 🔍 **Research/investigations** → `docs/investigations/`
+- 🧪 **Test scripts** → Create `tests/` directory (not in main dir)
+- 🗑️ **Temporary files** → Use `/tmp` or `~/.trash/`
+- 📊 **Logs** → `registry/logs/`
+
+### Development Best Practices
+
+1. **Keep root directory clean** - Only essential scripts at root level
+2. **Document in docs/** - All markdown files except README.md
+3. **Use meaningful names** - Avoid `*_fixed.py`, `*_enhanced.py`, etc.
+4. **No test files at root** - Create `tests/` if needed
+5. **Clean up regularly** - Use `cleanup_unused_files.sh` for maintenance
+
 ## 🚀 Quick Reference
 
 ### Most Common Commands
