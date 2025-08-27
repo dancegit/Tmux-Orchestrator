@@ -21,6 +21,20 @@ next_check_note.txt
 # Registry directory (logs and session data)
 registry/
 
+# Trash directory for deprecated files
+.trash/
+
+# Project-specific files and directories
+# Lock files with PIDs and hostnames
+locks/
+
+# Database files with project data
+task_queue.db*
+
+# Session-specific files
+orchestration_metadata.json
+session_state.json
+
 # Python cache and build artifacts
 __pycache__/
 *.py[cod]

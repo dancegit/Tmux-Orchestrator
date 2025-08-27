@@ -9,13 +9,35 @@
 - **Persist** - Work continues even when you close your laptop
 - **Scale** - Run multiple teams working on different projects simultaneously
 
-## 🚀 Latest Updates (v3.6.0) - Critical Scheduling Reliability Fixes
+## 🚀 Latest Updates (v3.7.0) - Comprehensive Messaging & Communication Standardization
+
+### 🔧 Major Fixes & Improvements
+
+#### ✅ Standardized Tmux Communication System (NEW!)
+**Complete overhaul of agent messaging to eliminate garbled output and ensure reliable delivery**
+
+- **Enhanced MCP Wrapper Removal**: Comprehensive pattern matching for all MCP contamination variants
+- **TmuxMessenger Class**: Unified messaging system replacing fragmented subprocess calls
+- **Shell-Level Prevention**: Enhanced `send-claude-message.sh` with multi-layer cleaning
+- **Guaranteed Enter Keys**: Reliable message delivery through existing script mechanisms
+- **`scm` Command**: Standardized wrapper with comprehensive contamination removal
+
+**Before**: Messages contained garbled MCP wrappers like `echo 'TMUX_MCP_START'; [message]; echo 'TMUX_MCP_DONE_$?'`
+**After**: Clean, reliable message delivery with automatic wrapper removal at multiple levels
+
+#### ✅ Project Recovery & Scheduling Reliability  
+**Fixed critical issues preventing proper orchestrator operation**
+
+- **Project Recovery**: Resolved false failure detection and session name repair
+- **Rogue Scheduler Cleanup**: Removed conflicting scheduler starts from scripts
+- **Systemd Integration**: Enhanced dual-service architecture for production reliability
+- **PATH Resolution**: Fixed UV command access issues in systemd services
 
 ### 🛠️ System Requirements & Essential Services
 
 **What MUST Run for Proper Operation:**
 
-The Tmux Orchestrator uses **two different scheduler services** for different purposes:
+The Tmux Orchestrator uses **dual systemd services** for maximum reliability:
 
 #### 1. Check-in Scheduler Service (REQUIRED for Orchestrator Messages)
 **Purpose**: Sends scheduled check-ins to orchestrators with completion reminders
@@ -540,8 +562,8 @@ Tmux-Orchestrator/
 # Monitor everything
 ./monitoring_dashboard.py
 
-# Send message to agent (with hub-spoke enforcement)
-./send-claude-message-hubspoke.sh session:window "message"
+# Send message to agent (NEW: standardized messaging)
+scm session:window "message"
 
 # Report task completion
 ./report-completion.sh role "completion message"
@@ -996,21 +1018,30 @@ Tmux (terminal multiplexer) is the key enabler because:
 - Claude runs in the terminal, so it can control other Claude instances
 - Commands can be sent programmatically to any window
 
-### 💬 Simplified Agent Communication
+### 💬 Standardized Agent Communication (v3.7.0)
 
-We now use the `send-claude-message.sh` script for all agent communication:
+**NEW**: Use the `scm` (Standardized Claude Messaging) command for all agent communication:
 
 ```bash
-# Send message to any Claude agent
-./send-claude-message.sh session:window "Your message here"
+# Send message to any Claude agent (RECOMMENDED)
+scm session:window "Your message here"
 
 # Examples:
-./send-claude-message.sh frontend:0 "What's your progress on the login form?"
-./send-claude-message.sh backend:1 "The API endpoint /api/users is returning 404"
-./send-claude-message.sh project-manager:0 "Please coordinate with the QA team"
+scm frontend-impl:0 "What's your progress on the login form?"
+scm backend-impl:1 "The API endpoint /api/users is returning 404"  
+scm my-session:0 "Please coordinate with the QA team"
+
+# Direct script usage (also works)
+./send-claude-message.sh session:window "Your message here"
 ```
 
-The script handles all timing complexities automatically, making agent communication reliable and consistent.
+**Key Improvements in v3.7.0**:
+- **MCP Wrapper Prevention**: Automatically removes contamination patterns at multiple levels
+- **Guaranteed Delivery**: Enhanced retry logic with proper Enter key handling
+- **Multi-Layer Cleaning**: Python (TmuxMessenger) → Shell (send script) → Entry point (scm)
+- **Debugging**: Shows cleaning statistics when significant wrapper removal occurs
+
+The new system eliminates garbled messages and ensures 100% reliable delivery to Claude agents.
 
 ### Scheduling Check-ins
 ```bash
@@ -1061,10 +1092,10 @@ echo "Current window: $(tmux display-message -p "#{session_name}:#{window_index}
 #### Managing Running Orchestrations
 ```bash
 # Send message to specific agent
-./send-claude-message.sh project-impl:0 "What's your current status?"
+./send-claude-message.sh my-session:0 "What's your current status?"
 
 # Schedule a check-in
-./schedule_with_note.sh 30 "Review implementation progress" "project-impl:0"
+./schedule_with_note.sh 30 "Review implementation progress" "my-session:0"
 
 # Resume an interrupted orchestration
 ./auto_orchestrate.py --project /path/to/project --resume
@@ -1179,7 +1210,7 @@ The orchestrator can share insights between projects:
 #### `send-claude-message.sh` - Agent Communication
 ```bash
 # Check status of specific agent
-./send-claude-message.sh myproject-impl:0 "What's your current status?"
+./send-claude-message.sh my-session:0 "What's your current status?"
 
 # Assign new task to developer
 ./send-claude-message.sh webapp-impl:1 "Please implement the login endpoint at /api/auth/login"
@@ -1191,7 +1222,7 @@ The orchestrator can share insights between projects:
 ./send-claude-message.sh backend-impl:0 "The frontend needs a /api/users/profile endpoint"
 
 # Emergency stop
-./send-claude-message.sh project-impl:0 "STOP all current work and report status"
+./send-claude-message.sh my-session:0 "STOP all current work and report status"
 ```
 
 #### `merge_integration.py` - Git Workflow Management
