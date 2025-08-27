@@ -1,95 +1,56 @@
-# Tmux Orchestrator Scheduler Investigation Summary
-**Date**: 2025-08-26
-**Context**: Investigation of Project 67 check-ins stopping
+# Scheduler Investigation Summary
 
-## Completed Fixes
+## Issues Found and Fixed
 
-### 1. Scheduler Patches Applied
-All three critical patches from Grok have been successfully applied to `scheduler.py`:
+### 1. **Missing `bc` Command**
+- **Issue**: The send-claude-message.sh script was failing with "bc: command not found"
+- **Impact**: All scheduled messages were failing to send
+- **Solution**: Installed `bc` package using `sudo apt-get install bc`
+- **Status**: ✅ Fixed
 
-1. **lock_fd AttributeError Fix** (Lines 324-340)
-   - Fixed `_heartbeat_thread` to access lock_fd through `self.lock_manager`
-   - Prevents AttributeError: 'TmuxOrchestratorScheduler' object has no attribute 'lock_fd'
+### 2. **Database Clutter**
+- **Issue**: 25 old/invalid tasks were cluttering the database, including:
+  - 8 tasks scheduled more than 1 day in the past
+  - 7 tasks scheduled for 2026 (1 year in the future - likely a timestamp error)
+  - 10 tasks for sessions that no longer exist
+- **Solution**: Created and ran cleanup_old_tasks.py to remove invalid entries
+- **Status**: ✅ Fixed
 
-2. **Active Orchestration Detection Fix** (Lines 1840-1902)
-   - Added tmux fallback detection when no JSON-based active sessions
-   - Checks tmux sessions when `json_based_active == 0`
-   - Activity threshold changed from 1 hour to 6 hours (line 1886: `if age_seconds < 21600`)
+### 3. **Scheduler Daemon Not Running**
+- **Issue**: Only the queue-daemon was running, not the regular task scheduler daemon
+- **Root Cause**: The scheduler lock manager has race condition detection that prevents the scheduler from starting when it detects itself during startup
+- **Impact**: Scheduled tasks (like orchestrator check-ins) were not being processed
+- **Solution**: 
+  - Manually processed 5 overdue tasks using process_overdue_tasks.py
+  - Created a systemd service template for the task scheduler (tmux-orchestrator-tasks.service)
+- **Status**: ⚠️ Partially fixed - tasks were processed manually, but daemon startup issue remains
 
-3. **2026 Date Bug Fix** (Lines 414-417)
-   - Fixed one-time tasks being scheduled for year 2026
-   - Now properly calls `remove_task()` for one-time tasks
+### 4. **Overdue Tasks**
+- **Issue**: 5 tasks were overdue and hadn't been processed:
+  - Task 4251: Mobile app tester check-in (overdue by 15 hours)
+  - Task 4255: MCP server PM check-in (overdue by 11 hours)
+  - Task 4256: MCP server Developer check-in (overdue by 11 hours)
+  - Task 4257: MCP server Tester check-in (overdue by 11 hours)
+  - Task 4258: MCP server Orchestrator check-in (overdue by 10 hours)
+- **Solution**: Manually processed all overdue tasks and rescheduled them
+- **Status**: ✅ Fixed
 
-### 2. Service Configuration
-- Systemd service (`tmux-orchestrator-queue.service`) updated to remove restrictive security settings
-- Service now running successfully at `/etc/systemd/system/tmux-orchestrator-queue.service`
-- Removed `PrivateTmp` and `ProtectSystem` to allow tmux access
+## Time Discrepancy Note
+The orchestrator mentioned expecting a "22:21" check-in, but task 4258 was scheduled for 23:12. This ~51-minute difference might be due to:
+- The task being rescheduled after a previous run
+- Time zone differences in display vs storage
+- Manual scheduling adjustments
 
-## Current Status
+## Recommendations
 
-### Project 67 Elliott Wave Session
-- **Original Session**: `elliott-wave-mvp-wave-5-detection-implementation-impl-6604a61f`
-  - Was inactive for 10+ hours (last activity: 2025-08-25 23:55:57)
-  - Lost during server reboot due to 100% CPU
-  
-- **New Session**: `elliott-wave-mvp-wave-5-detection-enhancement-impl-d7293152`
-  - Created via `./qs --reset 67` at 2025-08-26 11:00:55
-  - Currently in 15-minute grace period (scheduler shows "Project 67 is within grace period")
+1. **Start Task Scheduler Service**: Consider running the task scheduler separately from the queue daemon
+2. **Monitor Scheduler Health**: Regularly check for overdue tasks
+3. **Fix Lock Manager**: The scheduler lock manager needs adjustment to handle the startup race condition
+4. **Regular Cleanup**: Implement automatic cleanup of old tasks (the scheduler already has a 24-hour cleanup cycle built in)
 
-### Scheduler Status
-- Running as systemd service
-- Detecting tmux sessions correctly (found 1 session after reboot)
-- Activity threshold increased to 6 hours (from 1 hour)
-- Tasks rescheduled to start at 10:52 on 2025-08-26
-
-### Task Queue Status
-Found 7 overdue tasks for the old elliott-wave session:
-- All targeting orchestrator role with different windows
-- Intervals: 20-45 minutes
-- Were scheduled for 2025-08-25 19:26-19:51
-
-## Pending Issues
-
-### 1. Incomplete Fixes
-- **State Synchronizer AttributeError** (Todo #5)
-  - NoneType error still needs investigation
-  
-- **Scheduler --list Lock Issue** (Todo #29)
-  - Need to make `scheduler.py --list` work when another scheduler is running
-  - Currently blocked by file lock
-
-### 2. Monitoring Tasks
-- Continue monitoring Project 67 check-ins after grace period expires
-- Verify scheduled tasks run properly for new session ID `d7293152`
-
-## Key Learnings
-
-1. **Session Persistence**: Tmux sessions don't survive reboots
-2. **Activity Threshold**: 1-hour threshold was too aggressive for long-running projects
-3. **Systemd Restrictions**: Security settings can prevent tmux access
-4. **Grace Period**: New projects have a 15-minute grace period before monitoring
-
-## Next Steps
-
-1. Wait for Project 67 grace period to expire (~15 minutes from creation)
-2. Monitor if scheduled check-ins resume automatically
-3. Verify the new session ID is properly registered in orchestration registry
-4. Consider implementing session persistence across reboots
-5. Fix remaining todo items (#5 and #29)
-
-## Relevant Files Modified
-- `/home/clauderun/Tmux-Orchestrator/scheduler.py` - All three patches applied
-- `/etc/systemd/system/tmux-orchestrator-queue.service` - Security restrictions removed
-- Task queue database updated with rescheduled tasks
-
-## Commands for Monitoring
-```bash
-# Check scheduler logs
-sudo journalctl -u tmux-orchestrator-queue -f
-
-# List tmux sessions
-tmux list-sessions
-
-# Check scheduled tasks
-python3 -c "import sqlite3; conn = sqlite3.connect('task_queue.db'); cursor = conn.cursor(); cursor.execute('SELECT * FROM tasks WHERE session_name LIKE \"%elliott-wave%\" ORDER BY next_run LIMIT 10'); print(cursor.fetchall())"
-```
+## Scripts Created
+- `cleanup_old_tasks.py`: Removes invalid/old tasks from database
+- `process_overdue_tasks.py`: Manually processes and reschedules overdue tasks
+- `start_scheduler_safe.py`: Attempts to start scheduler with race condition handling
+- `test_scheduler_detection.py`: Diagnostic tool for checking scheduler processes
+- `tmux-orchestrator-tasks.service`: Systemd service for task scheduler daemon
