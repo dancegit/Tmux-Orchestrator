@@ -128,28 +128,21 @@ if [ -f "$SCRIPT_DIR/scheduler.py" ]; then
         # Enhanced daemon management with PID file
         PID_FILE="$SCRIPT_DIR/scheduler.pid"
         
-        # Check if daemon is running by PID file
-        if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
-            echo "Scheduler daemon already running (PID: $(cat "$PID_FILE"))"
+        # Check if systemd services are running
+        if systemctl is-active --quiet tmux-orchestrator-checkin && systemctl is-active --quiet tmux-orchestrator-queue; then
+            echo "Scheduler services running via systemd (checkin + queue)"
         else
-            echo "WARNING: Scheduler daemon not running. Starting it now..."
-            # Clean up stale PID file if exists
-            [ -f "$PID_FILE" ] && rm "$PID_FILE"
-            
-            # Start daemon and save PID
-            nohup python3 "$SCRIPT_DIR/scheduler.py" --daemon > "$SCRIPT_DIR/scheduler_daemon.log" 2>&1 &
-            DAEMON_PID=$!
-            echo $DAEMON_PID > "$PID_FILE"
-            
-            # Verify daemon started successfully
-            sleep 2
-            if kill -0 $DAEMON_PID 2>/dev/null; then
-                echo "Scheduler daemon started successfully (PID: $DAEMON_PID)"
-            else
-                echo "ERROR: Scheduler daemon failed to start. Check scheduler_daemon.log for details."
-                rm "$PID_FILE"
-            fi
+            echo "WARNING: Scheduler services not running. Please check systemd services:"
+            echo "  sudo systemctl status tmux-orchestrator-checkin"
+            echo "  sudo systemctl status tmux-orchestrator-queue"
+            echo ""
+            echo "To start services:"
+            echo "  sudo systemctl start tmux-orchestrator-checkin"
+            echo "  sudo systemctl start tmux-orchestrator-queue"
         fi
+        
+        # Clean up any stale PID file from old implementation
+        [ -f "$PID_FILE" ] && rm "$PID_FILE" 2>/dev/null
     else
         echo "Failed to schedule with Python scheduler, falling back to legacy method"
         # Fallback to old method

@@ -1,0 +1,8 @@
+{
+  "pid": 301172,
+  "timestamp": "2025-08-27T14:09:41.106410",
+  "hostname": "vps-debian12.local",
+  "signature": "e69c9919b4816d7b",
+  "cmdline": "/home/clauderun/Tmux-Orchestrator/scheduler.py --daemon --mode queue",
+  "cwd": "/home/clauderun/Tmux-Orchestrator"
+}
