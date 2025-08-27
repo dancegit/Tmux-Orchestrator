@@ -20,10 +20,12 @@ logger = logging.getLogger(__name__)
 class SchedulerLockManager:
     """Robust scheduler process lock manager with enhanced duplicate detection"""
     
-    def __init__(self, lock_dir: str = "locks", timeout: int = 30):
+    def __init__(self, lock_dir: str = "locks", timeout: int = 30, mode: str = None):
         self.lock_dir = Path(lock_dir)
-        self.lock_file = self.lock_dir / "scheduler.lock"
-        self.process_file = self.lock_dir / "scheduler_process.info"
+        self.mode = mode or "default"
+        # Use mode-specific lock files to prevent conflicts
+        self.lock_file = self.lock_dir / f"scheduler-{self.mode}.lock"
+        self.process_file = self.lock_dir / f"scheduler-{self.mode}_process.info"
         self.timeout = timeout
         self.lock_fd = None
         self.process_signature = self._generate_process_signature()
@@ -83,13 +85,20 @@ class SchedulerLockManager:
             return False, f"Error checking process {pid}: {e}"
     
     def _find_existing_schedulers(self) -> list[dict]:
-        """Find all running scheduler processes on the system"""
+        """Find all running scheduler processes on the system with same mode"""
         schedulers = []
         
         for process in psutil.process_iter(['pid', 'cmdline', 'create_time', 'cwd']):
             try:
                 cmdline = ' '.join(process.info['cmdline'] or [])
                 if 'scheduler.py' in cmdline and '--daemon' in cmdline:
+                    # Only consider processes with same mode as conflicting
+                    if self.mode != "default":
+                        if f'--mode {self.mode}' not in cmdline:
+                            continue  # Skip processes with different modes
+                    elif '--mode' in cmdline:
+                        continue  # Skip processes with explicit modes when we're in default mode
+                    
                     is_valid, reason = self._is_scheduler_process(process.pid)
                     schedulers.append({
                         'pid': process.pid,
@@ -162,23 +171,96 @@ class SchedulerLockManager:
         
         return cleaned
     
+    def _detect_systemd_restart(self) -> bool:
+        """
+        Detect if we're being started by systemd in a restart scenario
+        Returns True if systemd restart detected, False otherwise
+        """
+        try:
+            # Check if we're running under systemd
+            ppid = os.getppid()
+            if ppid == 1:  # Direct systemd child
+                return True
+                
+            # Check if parent process is systemd
+            try:
+                parent_process = psutil.Process(ppid)
+                parent_name = parent_process.name()
+                if 'systemd' in parent_name.lower():
+                    logger.debug(f"Detected systemd parent process: {parent_name}")
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            
+            # Check environment variables that indicate systemd
+            systemd_indicators = [
+                'SYSTEMD_EXEC_PID',
+                'INVOCATION_ID', 
+                'JOURNAL_STREAM'
+            ]
+            
+            for indicator in systemd_indicators:
+                if os.getenv(indicator):
+                    logger.debug(f"Detected systemd environment variable: {indicator}")
+                    return True
+            
+            # Check if lock files were recently cleaned (indicates systemd ExecStartPre ran)
+            if not self.lock_file.exists() and not self.process_file.exists():
+                # Check if there are recent logs indicating systemd cleanup
+                logger.debug("Lock files absent - possible systemd cleanup")
+                return True
+                
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error detecting systemd restart: {e}")
+            return False
+    
     def acquire_lock(self) -> bool:
         """
-        Acquire exclusive scheduler lock with enhanced duplicate detection
+        Acquire exclusive scheduler lock with enhanced duplicate detection and systemd-aware startup
         Returns True if lock acquired successfully, False otherwise
         """
         try:
+            # Step 0: Check if we're being started by systemd (detect restart scenario)
+            systemd_restart = self._detect_systemd_restart()
+            
             # Step 1: Find all existing scheduler processes
             existing_schedulers = self._find_existing_schedulers()
             valid_schedulers = [s for s in existing_schedulers if s['valid']]
             
             if valid_schedulers:
-                logger.error("Found existing scheduler processes:")
-                for scheduler in valid_schedulers:
-                    logger.error(f"  PID {scheduler['pid']}: {scheduler['cmdline']}")
-                    logger.error(f"    CWD: {scheduler['cwd']}")
-                    logger.error(f"    Started: {scheduler['create_time']}")
-                return False
+                # FIXED: Handle systemd restart scenario
+                if systemd_restart:
+                    logger.warning(f"Systemd restart detected - waiting for {len(valid_schedulers)} existing schedulers to shutdown")
+                    # Wait up to 10 seconds for existing schedulers to shutdown
+                    for attempt in range(20):  # 20 attempts * 0.5s = 10 seconds
+                        time.sleep(0.5)
+                        existing_schedulers = self._find_existing_schedulers()
+                        valid_schedulers = [s for s in existing_schedulers if s['valid']]
+                        if not valid_schedulers:
+                            logger.info("Existing schedulers have shut down - proceeding with startup")
+                            break
+                        logger.debug(f"Attempt {attempt + 1}/20: Still waiting for {len(valid_schedulers)} schedulers to exit")
+                    else:
+                        logger.warning("Timeout waiting for existing schedulers - forcing startup")
+                
+                # After wait, check again
+                existing_schedulers = self._find_existing_schedulers()
+                valid_schedulers = [s for s in existing_schedulers if s['valid']]
+                
+                if valid_schedulers:
+                    logger.error("Found existing scheduler processes:")
+                    for scheduler in valid_schedulers:
+                        logger.error(f"  PID {scheduler['pid']}: {scheduler['cmdline']}")
+                        logger.error(f"    CWD: {scheduler['cwd']}")
+                        logger.error(f"    Started: {scheduler['create_time']}")
+                    
+                    # FIXED: Don't fail if we detect systemd context - allow override
+                    if systemd_restart:
+                        logger.warning("Systemd restart scenario - proceeding despite existing processes")
+                    else:
+                        return False
             
             # Step 2: Clean up any stale locks
             self._cleanup_stale_locks()
