@@ -276,6 +276,9 @@ class TmuxOrchestratorScheduler:
     # NEW: Heartbeat thread to keep lock fresh
     def _heartbeat_thread(self):
         """Update lock file timestamp every 30 seconds to indicate we're alive"""
+        last_health_check = 0
+        health_check_interval = 300  # 5 minutes
+        
         while not self._stop_monitoring.is_set():
             try:
                 # Get lock_fd from lock_manager
@@ -316,8 +319,54 @@ class TmuxOrchestratorScheduler:
                 logger.error(f"Error updating lock heartbeat: {e}")
                 # NEW: On error, attempt reacquire on next iteration
             
+            # Perform health check every 5 minutes
+            current_time = time.time()
+            if current_time - last_health_check > health_check_interval:
+                last_health_check = current_time
+                if not self._check_dependencies():
+                    logger.error("Dependency health check failed - critical dependencies missing")
+                    self._dispatch_event('dependency_failure', {
+                        'timestamp': current_time,
+                        'severity': 'critical'
+                    })
+            
             # Sleep for 30 seconds
             self._stop_monitoring.wait(30)
+    
+    def _check_dependencies(self):
+        """Check all required system dependencies"""
+        required_commands = ['bc', 'tmux', 'git', 'python3']
+        missing = []
+        
+        for cmd in required_commands:
+            try:
+                result = subprocess.run(['which', cmd], capture_output=True, text=True)
+                if result.returncode != 0:
+                    missing.append(cmd)
+                    logger.error(f"Missing required dependency: {cmd}")
+            except Exception as e:
+                logger.error(f"Error checking command {cmd}: {e}")
+                missing.append(cmd)
+        
+        # Check tmux server is running
+        if 'tmux' not in missing:
+            try:
+                result = subprocess.run(['tmux', 'list-sessions'], capture_output=True, text=True)
+                if result.returncode != 0:
+                    logger.warning("tmux server not running")
+            except:
+                pass
+        
+        if missing:
+            logger.error(f"Missing dependencies: {', '.join(missing)}")
+            logger.error("To install missing dependencies:")
+            if 'bc' in missing:
+                logger.error("  sudo apt-get install bc  # or brew install bc on macOS")
+            if 'tmux' in missing:
+                logger.error("  sudo apt-get install tmux  # or brew install tmux on macOS")
+            return False
+        
+        return True
     
     def check_stuck_projects(self):
         """Enhanced stuck project detection with configurable timeout and liveness checks"""
@@ -1483,18 +1532,57 @@ class TmuxOrchestratorScheduler:
         self.conn.commit()
         logger.info("Database initialized")
         
-    def enqueue_task(self, session_name, agent_role, window_index, interval_minutes, note=""):
-        """Add a task to the scheduler queue"""
-        next_run = time.time() + (interval_minutes * 60)
+    def enqueue_task(self, session_name, agent_role, window_index, interval_minutes, note="", task_type="standard"):
+        """Add a task to the scheduler queue with idempotent behavior to prevent loops"""
+        import hashlib
+        
+        # Create composite key for deduplication
+        note_hash = hashlib.md5(note.encode()).hexdigest()[:8]
+        task_key = f"{session_name}:{agent_role}:{task_type}:{note_hash}"
+        
+        # Check for recent duplicates (within 10 minutes)
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO tasks (session_name, agent_role, window_index, next_run, interval_minutes, note)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (session_name, agent_role, window_index, next_run, interval_minutes, note))
-        self.conn.commit()
-        task_id = cursor.lastrowid
-        logger.info(f"Enqueued task {task_id} for {session_name}:{window_index} ({agent_role})")
-        return task_id
+            SELECT task_id, next_run FROM tasks 
+            WHERE session_name = ? AND agent_role = ? AND window_index = ? 
+            AND note LIKE ? AND next_run > ? AND next_run < ?
+            ORDER BY next_run DESC LIMIT 1
+        """, (session_name, agent_role, window_index, f"%{note[:20]}%", 
+              time.time() - 600, time.time() + 3600))  # Check past 10min to future 1hr
+        
+        existing = cursor.fetchone()
+        if existing:
+            logger.warning(f"Duplicate task detected (loop prevention): {task_key}")
+            logger.warning(f"Existing task ID: {existing[0]}, scheduled for: {datetime.fromtimestamp(existing[1])}")
+            return existing[0]  # Return existing task ID instead of creating duplicate
+        
+        # Calculate next run time
+        next_run = time.time() + (interval_minutes * 60)
+        
+        # Insert the new task
+        try:
+            cursor.execute("""
+                INSERT INTO tasks (session_name, agent_role, window_index, next_run, interval_minutes, note)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (session_name, agent_role, window_index, next_run, interval_minutes, note))
+            self.conn.commit()
+            task_id = cursor.lastrowid
+            logger.info(f"Enqueued task {task_id} for {session_name}:{window_index} ({agent_role}) - {note}")
+            
+            # Dispatch event for new task
+            if hasattr(self, '_dispatch_event'):
+                self._dispatch_event('task_added', {
+                    'task_id': task_id,
+                    'session': session_name,
+                    'role': agent_role,
+                    'scheduled_time': next_run
+                })
+            
+            return task_id
+        except Exception as e:
+            logger.error(f"Failed to add task: {e}")
+            self.conn.rollback()
+            return None
         
     def get_agent_credit_status(self, project_name, agent_role):
         """Check if agent is credit exhausted from session state"""

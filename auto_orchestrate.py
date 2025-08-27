@@ -399,7 +399,7 @@ class AutoOrchestrator:
         self.overwrite = overwrite
         
         # New flags for bug fixes
-        self.enable_orchestrator_scheduling = False  # Will be set from CLI
+        self.enable_orchestrator_scheduling = True  # Default enabled for reliability
         self.global_mcp_init = False  # Will be set from CLI
         
         # Auto-detect project path if not provided or set to 'auto'
@@ -5562,8 +5562,9 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='Project ID for queue completion callback (used by scheduler)')
 @click.option('--daemon', is_flag=True,
               help='Run in daemon mode: non-interactive with auto-defaults for all prompts')
-@click.option('--enable-orchestrator-scheduling', is_flag=True, default=False,
-              help='Enable self-scheduling for orchestrator window 0')
+@click.option('--enable-orchestrator-scheduling/--disable-orchestrator-scheduling', 
+              default=True,
+              help='Enable self-scheduling for orchestrator window 0 (default: enabled)')
 @click.option('--global-mcp-init', is_flag=True, default=False,
               help='Enable global/system-level MCP initialization for all roles')
 def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, team_type: str, roles: tuple, force: bool, overwrite: bool, plan: str, 

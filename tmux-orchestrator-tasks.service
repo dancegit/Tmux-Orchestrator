@@ -1,0 +1,25 @@
+[Unit]
+Description=Tmux Orchestrator Task Scheduler
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=30
+User=clauderun
+WorkingDirectory=/home/clauderun/Tmux-Orchestrator
+ExecStartPre=/bin/bash -c 'sleep 10'
+ExecStart=/usr/bin/python3 /home/clauderun/Tmux-Orchestrator/scheduler.py --daemon
+Environment=PATH=/home/clauderun/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/clauderun
+Environment=PYTHONUNBUFFERED=1
+Environment=SCHEDULER_SKIP_LOCK_CHECK=1
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tmux-orchestrator-tasks
+
+[Install]
+WantedBy=multi-user.target
