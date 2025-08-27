@@ -2953,10 +2953,11 @@ This file is automatically read by Claude Code when working in this directory.
             # Schedule check-ins
             # Modified to conditionally include orchestrator based on flag
             if role_key == 'orchestrator' and not self.enable_orchestrator_scheduling:
-                # Skip orchestrator scheduling unless flag is enabled
+                # Skip orchestrator scheduling when flag is explicitly disabled
                 console.print(f"[yellow]Skipping orchestrator scheduling (use --enable-orchestrator-scheduling to enable)[/yellow]")
-            else:
-                # Schedule for all other roles, or for orchestrator if flag is enabled
+                continue  # Skip to next role
+            
+            # Schedule for all roles (including orchestrator when enabled, which is default)
                 # Use credit-aware scheduling if available
                 credit_schedule_script = self.tmux_orchestrator_path / 'credit_management' / 'schedule_credit_aware.sh'
                 regular_schedule_script = self.tmux_orchestrator_path / 'schedule_with_note.sh'
