@@ -16,6 +16,31 @@ MESSAGE="$1"
 shift
 PROJECT_ID="${1:-default}"
 
+# Enhanced MCP wrapper prevention at shell level
+clean_message_mcp() {
+    local msg="$1"
+    
+    # Remove common MCP wrapper patterns
+    msg=$(echo "$msg" | sed -E 's/^echo[[:space:]]+[\"'\''"]?TMUX_MCP_START[\"'\''"]?;[[:space:]]*//g')
+    msg=$(echo "$msg" | sed -E 's/;[[:space:]]*echo[[:space:]]+[\"'\''"]?TMUX_MCP_DONE_\$\?[\"'\''"]?[[:space:]]*$//g')
+    msg=$(echo "$msg" | sed -E 's/echo[[:space:]]+[\"'\''"]?TMUX_MCP_START[\"'\''"]?;[[:space:]]*//g')
+    msg=$(echo "$msg" | sed -E 's/;[[:space:]]*echo[[:space:]]+[\"'\''"]?TMUX_MCP_DONE_\$\?[\"'\''"]?//g')
+    msg=$(echo "$msg" | sed -E 's/TMUX_MCP_START[[:space:]]*;?[[:space:]]*//g')
+    msg=$(echo "$msg" | sed -E 's/;[[:space:]]*TMUX_MCP_DONE_\$\?[[:space:]]*//g')
+    
+    # Clean up artifacts
+    msg=$(echo "$msg" | sed -E 's/;[[:space:]]*;/;/g')         # Double semicolons
+    msg=$(echo "$msg" | sed -E 's/^[[:space:]]*;[[:space:]]*//g')  # Leading semicolon
+    msg=$(echo "$msg" | sed -E 's/[[:space:]]*;[[:space:]]*$//g') # Trailing semicolon
+    msg=$(echo "$msg" | sed -E 's/[[:space:]]+/ /g')           # Multiple spaces
+    msg=$(echo "$msg" | sed -E 's/^[[:space:]]*//g; s/[[:space:]]*$//g') # Trim
+    
+    echo "$msg"
+}
+
+# Clean the message before processing
+MESSAGE=$(clean_message_mcp "$MESSAGE")
+
 # Configuration
 MAX_ATTEMPTS=3
 INITIAL_DELAY=1.0
