@@ -159,6 +159,9 @@ class CompletionManager:
                             state.completion_time = datetime.now().isoformat()
                             self.state_mgr.save_session_state(state)
                         
+                        # Update database status via scheduler
+                        self._update_database_status(session_name, status)
+                        
                         break  # Stop monitoring
                     
                     consecutive_failures = 0  # Reset on success
@@ -310,3 +313,33 @@ class CompletionManager:
         except Exception as e:
             logger.error(f"Failure check error: {e}")
             return None
+
+    def _update_database_status(self, session_name: str, status: str):
+        """Update project status in the database via scheduler."""
+        try:
+            # Import scheduler here to avoid circular imports
+            from scheduler import TmuxOrchestratorScheduler
+            
+            # Find project ID by session name
+            scheduler = TmuxOrchestratorScheduler()
+            
+            # Query project_queue to find the project ID by session name
+            cursor = scheduler.conn.cursor()
+            cursor.execute("""
+                SELECT id FROM project_queue 
+                WHERE session_name = ? OR orchestrator_session = ? OR main_session = ?
+            """, (session_name, session_name, session_name))
+            
+            row = cursor.fetchone()
+            if row:
+                project_id = row[0]
+                logger.info(f"Found project ID {project_id} for session {session_name}")
+                
+                # Update the project status
+                scheduler.update_project_status(project_id, status)
+                logger.info(f"Updated database status for project {project_id} to {status}")
+            else:
+                logger.warning(f"Could not find project ID for session {session_name}")
+                
+        except Exception as e:
+            logger.error(f"Failed to update database status: {e}")
