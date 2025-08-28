@@ -71,6 +71,8 @@ Event-driven hooks configured in `.claude/` workspace directories per agent:
 - **SessionEnd**: Cleanup and message requeuing on agent shutdown
 - **UserPromptSubmit**: Additional trigger for queue checking
 
+**Critical Architecture Note**: Agents run in tmux windows (not separate sessions), so agent identification uses `session:window` format (e.g., `project-session:2`) rather than session names alone.
+
 Workspace Structure:
 ```
 {agent_worktree}/
@@ -306,7 +308,7 @@ LIMIT 1;
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${SESSION_NAME}"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent #{session_name}:#{window_index}"
           }
         ]
       }
@@ -317,7 +319,7 @@ LIMIT 1;
         "hooks": [
           {
             "type": "command", 
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${SESSION_NAME} --check-idle"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent #{session_name}:#{window_index} --check-idle"
           }
         ]
       }
@@ -328,7 +330,7 @@ LIMIT 1;
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${SESSION_NAME} --bootstrap"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent #{session_name}:#{window_index} --bootstrap"
           }
         ]
       }
@@ -339,7 +341,7 @@ LIMIT 1;
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/cleanup_agent.py --agent ${SESSION_NAME}"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/cleanup_agent.py --agent #{session_name}:#{window_index}"
           }
         ]
       }
@@ -351,7 +353,8 @@ LIMIT 1;
 **Local Agent Config (`.claude/settings.local.json`):**
 ```json
 {
-  "session_name": "project-agent-uuid",
+  "agent_id": "project-session:2",
+  "session_name": "project-session",
   "db_path": "/path/to/task_queue.db",
   "ready_flag_timeout": 30,
   "direct_delivery_enabled": true
