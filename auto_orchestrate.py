@@ -191,6 +191,74 @@ class ImplementationSpec(BaseModel):
     project_size: ProjectSize = Field(default_factory=ProjectSize)
 
 
+class AgentIdManager:
+    """Manages agent identification using session:window format for multi-window tmux architecture."""
+    
+    def __init__(self, session_name: str):
+        self.session_name = session_name
+        self.id_cache = {}  # role -> 'session:window'
+        self.window_cache = {}  # window_index -> role
+        
+    def get_agent_id(self, role: str, window_index: Optional[int] = None) -> str:
+        """Get agent ID as session:window for a given role."""
+        if role not in self.id_cache:
+            if window_index is None:
+                window_index = self._query_window_index(role)
+                if window_index == -1:
+                    raise ValueError(f"Window not found for role: {role}")
+            
+            agent_id = f"{self.session_name}:{window_index}"
+            self.id_cache[role] = agent_id
+            self.window_cache[window_index] = role
+            
+        return self.id_cache[role]
+    
+    def get_role_from_window(self, window_index: int) -> Optional[str]:
+        """Get role name from window index."""
+        return self.window_cache.get(window_index)
+    
+    def _query_window_index(self, role: str) -> int:
+        """Query tmux to get window index for a role (assumes windows are named by role)."""
+        try:
+            # First try with exact role match
+            result = subprocess.getoutput(
+                f"tmux list-windows -t {self.session_name} -F '#{{window_index}} #{{window_name}}' | grep -w {role} | head -1 | cut -d' ' -f1"
+            ).strip()
+            
+            if result and result.isdigit():
+                return int(result)
+            
+            # Fallback: try case-insensitive match
+            result = subprocess.getoutput(
+                f"tmux list-windows -t {self.session_name} -F '#{{window_index}} #{{window_name}}' | grep -i {role} | head -1 | cut -d' ' -f1"
+            ).strip()
+            
+            if result and result.isdigit():
+                return int(result)
+                
+            return -1  # Not found
+            
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to query window index for role {role}: {e}")
+            return -1
+    
+    def register_agent(self, role: str, window_index: int):
+        """Manually register an agent ID without querying tmux."""
+        agent_id = f"{self.session_name}:{window_index}"
+        self.id_cache[role] = agent_id
+        self.window_cache[window_index] = role
+        return agent_id
+    
+    def get_all_agent_ids(self) -> Dict[str, str]:
+        """Get all cached agent IDs."""
+        return self.id_cache.copy()
+    
+    def clear_cache(self):
+        """Clear the ID cache (useful for session resets)."""
+        self.id_cache.clear()
+        self.window_cache.clear()
+
+
 class PathManager:
     """Centralized path management for consistent worktree and metadata handling"""
     def __init__(self, project_path: Path, orchestrator_root: Path):
@@ -314,7 +382,51 @@ class PathManager:
                     logger.error(f"Failed to copy {file_name} for {role}: {e}")
                     success = False
         
+        # Generate .claude configuration if AgentIdManager is available
+        self._setup_claude_config_for_role(role, worktree_path)
+        
         return success
+    
+    def _setup_claude_config_for_role(self, role: str, worktree_path: Path):
+        """Generate .claude/settings.local.json with agent_id for hooks-based messaging."""
+        try:
+            # Check if we have access to orchestrator's AgentIdManager
+            orchestrator = getattr(self, '_orchestrator_ref', None)
+            if not orchestrator or not hasattr(orchestrator, 'agent_id_manager'):
+                return  # Skip if AgentIdManager not available
+                
+            agent_id = orchestrator.agent_id_manager.get_agent_id(role)
+            
+            # Create .claude directory
+            claude_dir = worktree_path / '.claude'
+            claude_dir.mkdir(exist_ok=True)
+            
+            # Generate settings.local.json
+            config_path = claude_dir / 'settings.local.json'
+            config = {
+                "agent_id": agent_id,
+                "session_name": orchestrator.unique_session_name,
+                "db_path": str(orchestrator.tmux_orchestrator_path / 'task_queue.db'),
+                "ready_flag_timeout": 30,
+                "direct_delivery_enabled": True
+            }
+            
+            # Merge with existing config if it exists
+            if config_path.exists():
+                try:
+                    with open(config_path, 'r') as f:
+                        existing = json.load(f)
+                    config.update(existing)
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON in {config_path}, overwriting")
+            
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+                
+            logger.info(f"Generated .claude/settings.local.json with agent_id: {agent_id}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to setup Claude config for {role}: {e}")
     
     def _create_relative_symlink(self, link_path: Path, target_path: Path, base_path: Path) -> bool:
         """Create a relative symlink from link_path to target_path, relative to base_path."""
@@ -523,6 +635,7 @@ class AutoOrchestrator:
         
         # Initialize PathManager for unified path handling
         self.path_manager = PathManager(self.project_path, self.tmux_orchestrator_path)
+        self.path_manager._orchestrator_ref = self  # Reference for AgentIdManager access
         
         # Set project_name from path
         self.project_name = self.project_path.name
@@ -2854,6 +2967,9 @@ This file is automatically read by Claude Code when working in this directory.
         
         session_name = self.unique_session_name
         
+        # Initialize AgentIdManager for session:window identification
+        self.agent_id_manager = AgentIdManager(session_name)
+        
         # Determine which roles to deploy
         roles_to_deploy = self.get_roles_for_project_size(spec)
         
@@ -2929,6 +3045,10 @@ This file is automatically read by Claude Code when working in this directory.
         
         # Convert roles_to_deploy to include window indices
         roles = [(name, idx, role) for idx, (name, role) in enumerate(roles_to_deploy)]
+        
+        # Register all agents with AgentIdManager
+        for window_name, window_idx, role_key in roles:
+            self.agent_id_manager.register_agent(role_key, window_idx)
         
         for window_name, window_idx, role_key in roles:
             # Set up UV environment BEFORE starting Claude
