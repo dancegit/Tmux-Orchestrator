@@ -9,11 +9,37 @@
 - **Persist** - Work continues even when you close your laptop
 - **Scale** - Run multiple teams working on different projects simultaneously
 
-## 🚀 Latest Updates (v3.7.0) - Comprehensive Messaging & Communication Standardization
+## 🚀 Latest Updates (v3.7.2) - Git Workflow Automation & Session Validation
 
 ### 🔧 Major Fixes & Improvements
 
-#### ✅ Standardized Tmux Communication System (NEW!)
+#### ✅ Git Commit-Tag-Push Automation (NEW!)
+**Automated git workflow with semantic versioning and one-command deployment**
+
+- **`git-ctp` Command**: Simple wrapper for commit-tag-push workflow
+- **Automatic Versioning**: Detects version bump type from commit messages (feat→minor, fix→patch, breaking→major)
+- **GitCommitManager**: Full-featured Python module for git automation
+- **Agent Integration**: All orchestrated agents receive briefing about the feature
+- **Co-Author Attribution**: Automatically adds Tmux Orchestrator as co-author
+
+**Usage**: `./git-ctp "feat: add new feature"` → Commits, tags v1.1.0, and pushes
+
+#### ✅ Scheduler Session Validation (NEW!)
+**Prevents non-project sessions from receiving orchestrator messages**
+
+- **Flexible Pattern Validation**: Accepts any session with hyphens (project-name, project-impl-uuid, etc.)
+- **Smart Filtering**: Rejects numeric sessions ("0", "1"), common shells ("bash", "main"), and very short names
+- **Automatic Cleanup**: Removes invalid tasks targeting regular tmux sessions
+- **Protection**: Personal work sessions are protected from orchestrator messages
+
+#### ✅ Agent Path Resolution Fixes
+**Fixed agent briefing paths for worktree environments**
+
+- **Absolute Path References**: Orchestrator CLAUDE.md now uses absolute paths
+- **Worktree-Aware Commands**: Initial commands check for shared directories first
+- **Fallback Support**: Gracefully handles both worktree and non-worktree environments
+
+#### ✅ Standardized Tmux Communication System
 **Complete overhaul of agent messaging to eliminate garbled output and ensure reliable delivery**
 
 - **Enhanced MCP Wrapper Removal**: Comprehensive pattern matching for all MCP contamination variants
@@ -21,9 +47,6 @@
 - **Shell-Level Prevention**: Enhanced `send-claude-message.sh` with multi-layer cleaning
 - **Guaranteed Enter Keys**: Reliable message delivery through existing script mechanisms
 - **`scm` Command**: Standardized wrapper with comprehensive contamination removal
-
-**Before**: Messages contained garbled MCP wrappers like `echo 'TMUX_MCP_START'; [message]; echo 'TMUX_MCP_DONE_$?'`
-**After**: Clean, reliable message delivery with automatic wrapper removal at multiple levels
 
 #### ✅ Project Recovery & Scheduling Reliability  
 **Fixed critical issues preventing proper orchestrator operation**
@@ -565,6 +588,9 @@ Tmux-Orchestrator/
 # Send message to agent (NEW: standardized messaging)
 scm session:window "message"
 
+# Git commit-tag-push workflow (NEW: automated versioning)
+./git-ctp "feat: implement new feature"
+
 # Report task completion
 ./report-completion.sh role "completion message"
 
@@ -621,6 +647,8 @@ sudo systemctl stop tmux-orchestrator-checkin tmux-orchestrator-queue
 | **`report-completion.sh`** | Report task completions | After completing major tasks |
 | **`schedule_with_note.sh`** | Schedule agent check-ins | Setting up recurring tasks |
 | **`monitoring_dashboard.py`** | Real-time web dashboard | Monitoring system health |
+| **`git-ctp`** | Git commit-tag-push automation | One-command version deployment |
+| **`git_commit_manager.py`** | Git workflow automation module | Advanced git automation |
 
 ### Management & Monitoring Scripts
 
