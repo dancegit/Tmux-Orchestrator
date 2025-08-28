@@ -41,6 +41,16 @@ clean_message_mcp() {
 # Clean the message before processing
 MESSAGE=$(clean_message_mcp "$MESSAGE")
 
+# Debug mode to log wrapped messages
+if [ "${DEBUG_MCP_WRAPPER:-0}" = "1" ]; then
+    if echo "$1" | grep -q "TMUX_MCP"; then
+        echo "[DEBUG] MCP wrapper detected in input: $1" >> /tmp/mcp_wrapper_debug.log
+        echo "[DEBUG] Cleaned to: $MESSAGE" >> /tmp/mcp_wrapper_debug.log
+        echo "[DEBUG] Called from: $(ps -o comm= -p $PPID)" >> /tmp/mcp_wrapper_debug.log
+        echo "---" >> /tmp/mcp_wrapper_debug.log
+    fi
+fi
+
 # Configuration
 MAX_ATTEMPTS=3
 INITIAL_DELAY=1.0
@@ -148,9 +158,21 @@ send_with_retry() {
             return 0
         else
             # Normal message sending with literal flag to handle special characters
-            tmux send-keys -l -t "$window" "$message" 2>/dev/null
+            # Extra cleaning step right before sending
+            local final_msg="$message"
+            final_msg=$(echo "$final_msg" | sed -E 's/^echo[[:space:]]+["'\''"]*TMUX_MCP_START["'\''"]*[[:space:]]*;*[[:space:]]*//g')
+            final_msg=$(echo "$final_msg" | sed -E 's/[[:space:]]*;*[[:space:]]*echo[[:space:]]+["'\''"]*TMUX_MCP_DONE_\$\?["'\''"]*[[:space:]]*$//g')
+            
+            # Send the cleaned message
+            tmux send-keys -l -t "$window" "$final_msg" 2>/dev/null
             sleep $delay
+            # Always ensure Enter key is sent
             tmux send-keys -t "$window" Enter 2>/dev/null
+            # Double-send Enter if message might have been wrapped
+            if echo "$message" | grep -q "TMUX_MCP"; then
+                sleep 0.2
+                tmux send-keys -t "$window" Enter 2>/dev/null
+            fi
         fi
         
         # Verify delivery
