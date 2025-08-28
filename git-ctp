@@ -1,0 +1,51 @@
+#!/bin/bash
+# Git Commit-Tag-Push wrapper script
+
+# Default to current directory
+PROJECT_PATH="."
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -p|--path)
+            PROJECT_PATH="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: git-ctp [OPTIONS] \"commit message\""
+            echo ""
+            echo "Options:"
+            echo "  -p, --path PATH    Project path (default: current directory)"
+            echo "  -h, --help         Show this help message"
+            echo ""
+            echo "Examples:"
+            echo "  git-ctp \"feat: add new feature\""
+            echo "  git-ctp \"fix: resolve bug in authentication\""
+            echo "  git-ctp \"breaking: refactor API endpoints\""
+            echo ""
+            echo "Commit type conventions:"
+            echo "  feat/feature  - Minor version bump (new feature)"
+            echo "  fix/bugfix    - Patch version bump (bug fix)"
+            echo "  breaking      - Major version bump (breaking change)"
+            echo "  other         - Patch version bump"
+            exit 0
+            ;;
+        *)
+            # Assume it's the commit message
+            break
+            ;;
+    esac
+done
+
+# Check if commit message provided
+if [ -z "$1" ]; then
+    echo "Error: No commit message provided"
+    echo "Usage: git-ctp \"commit message\""
+    exit 1
+fi
+
+# Get the directory of this script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Execute the Python script with all arguments
+cd "$PROJECT_PATH" && python3 "$SCRIPT_DIR/git_commit_manager.py" "$@" -a

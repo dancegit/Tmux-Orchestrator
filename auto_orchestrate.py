@@ -60,6 +60,8 @@ from dynamic_team import DynamicTeamComposer
 from email_notifier import get_email_notifier
 # Import completion monitoring
 from completion_manager import CompletionManager
+# Import git commit manager
+from git_commit_manager import GitCommitManager
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -1144,72 +1146,72 @@ Generate a JSON implementation plan with this EXACT structure:
     "project_manager": {{
       "responsibilities": ["Ensure quality", "Track completion", "Review coverage"],
       "check_in_interval": 25,  # Reduced for better coordination
-      "initial_commands": ["cd {self.project_path}", "cat {self.spec_path.relative_to(self.project_path) if self.spec_path.is_relative_to(self.project_path) else self.spec_path}"]
+      "initial_commands": ["cd ./shared/main-project || cd {self.project_path}", "cat {self.spec_path.name}"]
     }},
     "developer": {{
       "responsibilities": ["Implement features", "Write tests", "Fix bugs"],
       "check_in_interval": 30,  # Reduced for faster development cycles
-      "initial_commands": ["cd {self.project_path}", "git status"]
+      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && git status || cd {self.project_path} && git status"]
     }},
     "tester": {{
       "responsibilities": ["Run tests", "Report failures", "Verify coverage"],
       "check_in_interval": 30,  # Reduced to match developer pace
-      "initial_commands": ["cd {self.project_path}", "echo 'Ready to test'"]
+      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && echo 'Ready to test' || cd {self.project_path} && echo 'Ready to test'"]
     }},
     "testrunner": {{
       "responsibilities": ["Execute test suites", "Parallel test management", "Performance testing", "Test infrastructure", "Results analysis"],
       "check_in_interval": 30,  # Same as tester for coordination
-      "initial_commands": ["cd {self.project_path}", "echo 'Setting up test execution framework'"]
+      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && echo 'Setting up test execution framework' || cd {self.project_path} && echo 'Setting up test execution framework'"]
     }},
     "logtracker": {{
       "responsibilities": ["Monitor logs real-time", "Track errors", "Alert critical issues", "Use project monitoring tools", "Generate error reports"],
       "check_in_interval": 15,  # Frequent checks for real-time monitoring
-      "initial_commands": ["cd {self.project_path}", "mkdir -p monitoring/logs monitoring/reports", "echo 'Reading CLAUDE.md for monitoring instructions'"]
+      "initial_commands": ["pwd", "mkdir -p monitoring/logs monitoring/reports", "cd ./shared/main-project && echo 'Reading CLAUDE.md for monitoring instructions' || cd {self.project_path} && echo 'Reading CLAUDE.md for monitoring instructions'"]
     }},
     "devops": {{
       "responsibilities": ["Infrastructure setup", "Deployment pipelines", "Monitor performance"],
       "check_in_interval": 45,  # Reduced but still longer as infra work is less frequent
-      "initial_commands": ["cd {self.project_path}", "echo 'Checking deployment configuration'"]
+      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && echo 'Checking deployment configuration' || cd {self.project_path} && echo 'Checking deployment configuration'"]
     }},
     "code_reviewer": {{
       "responsibilities": ["Review code quality", "Security audit", "Best practices enforcement"],
       "check_in_interval": 40,  # Reduced to review code more frequently
-      "initial_commands": ["cd {self.project_path}", "git log --oneline -10"]
+      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && git log --oneline -10 || cd {self.project_path} && git log --oneline -10"]
     }},
     "researcher": {{
       "responsibilities": ["MCP tool discovery and utilization", "Research best practices", "Security vulnerability analysis", "Performance optimization research", "Document actionable findings"],
       "check_in_interval": 25,  # Reduced for timely research support
-      "initial_commands": ["cd {self.project_path}", "mkdir -p research", "echo 'Type @ to discover MCP resources, / to discover MCP commands'", "echo 'Look for /mcp__ prefixed commands for MCP tools'"]
+      "initial_commands": ["pwd", "mkdir -p research", "echo 'Type @ to discover MCP resources, / to discover MCP commands'", "echo 'Look for /mcp__ prefixed commands for MCP tools'"]
     }},
     "documentation_writer": {{
       "responsibilities": ["Write technical docs", "Update README", "Create API documentation"],
       "check_in_interval": 60,  # Still longer as docs are updated less frequently
-      "initial_commands": ["cd {self.project_path}", "ls -la *.md"]
+      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && ls -la *.md || cd {self.project_path} && ls -la *.md"]
     }},
     "sysadmin": {{
       "responsibilities": ["System setup", "User management", "Service configuration", "Package management", "System hardening"],
       "check_in_interval": 30,
-      "initial_commands": ["cd {self.project_path}", "sudo -n true && echo 'sudo available' || echo 'need sudo password'", "uname -a", "lsb_release -a 2>/dev/null || cat /etc/os-release"]
+      "initial_commands": ["pwd", "sudo -n true && echo 'sudo available' || echo 'need sudo password'", "uname -a", "lsb_release -a 2>/dev/null || cat /etc/os-release"]
     }},
     "securityops": {{
       "responsibilities": ["Security hardening", "Firewall configuration", "Access control", "SSL/TLS setup", "Security monitoring"],
       "check_in_interval": 30,
-      "initial_commands": ["cd {self.project_path}", "sudo iptables -L -n 2>/dev/null || echo 'checking firewall status'", "sestatus 2>/dev/null || echo 'SELinux not available'"]
+      "initial_commands": ["pwd", "sudo iptables -L -n 2>/dev/null || echo 'checking firewall status'", "sestatus 2>/dev/null || echo 'SELinux not available'"]
     }},
     "networkops": {{
       "responsibilities": ["Network configuration", "Load balancing", "Reverse proxy setup", "DNS management", "Performance optimization"],
       "check_in_interval": 30,
-      "initial_commands": ["cd {self.project_path}", "ip addr show", "netstat -tlnp 2>/dev/null || ss -tlnp"]
+      "initial_commands": ["pwd", "ip addr show", "netstat -tlnp 2>/dev/null || ss -tlnp"]
     }},
     "monitoringops": {{
       "responsibilities": ["Monitoring stack setup", "Metrics collection", "Alert configuration", "Dashboard creation", "Log aggregation"],
       "check_in_interval": 20,
-      "initial_commands": ["cd {self.project_path}", "mkdir -p monitoring/dashboards monitoring/alerts", "echo 'Setting up monitoring infrastructure'"]
+      "initial_commands": ["pwd", "mkdir -p monitoring/dashboards monitoring/alerts", "echo 'Setting up monitoring infrastructure'"]
     }},
     "databaseops": {{
       "responsibilities": ["Database setup", "Performance tuning", "Replication", "Backup strategies", "Schema management"],
       "check_in_interval": 30,
-      "initial_commands": ["cd {self.project_path}", "echo 'Checking database requirements'", "which psql mysql mongod redis-server 2>/dev/null || echo 'No databases installed yet'"]
+      "initial_commands": ["pwd", "echo 'Checking database requirements'", "which psql mysql mongod redis-server 2>/dev/null || echo 'No databases installed yet'"]
     }}
   }},
   "git_workflow": {{
@@ -3209,7 +3211,8 @@ This file is automatically read by Claude Code when working in this directory.
         # MANDATORY reading instruction for all non-orchestrator roles
         mandatory_reading = ""
         if role != 'orchestrator' and worktree_paths:
-            orchestrator_claude_path = self.tmux_orchestrator_path / "CLAUDE.md"
+            # Use absolute path for orchestrator CLAUDE.md to avoid relative path issues
+            orchestrator_claude_path = "/home/clauderun/Tmux-Orchestrator/CLAUDE.md"
             mandatory_reading = f"""🚨 **MANDATORY FIRST STEP** 🚨
 
 Before doing ANYTHING else, you MUST read the orchestrator rules:
@@ -3261,9 +3264,12 @@ Your worktree location: `{worktree_paths.get(role, 'N/A')}`
             
             team_locations += "**To share your changes**:\n"
             team_locations += "```bash\n"
-            team_locations += "# Push your branch so others can access it\n"
-            team_locations += "git add -A && git commit -m \"Your changes\"\n"
-            team_locations += "git push -u origin your-branch-name\n"
+            team_locations += "# Push your branch so others can access it (with automatic versioning)\n"
+            team_locations += "git add -A && git commit -m \"feat: your changes\"\n"
+            team_locations += "git tag v1.0.1  # Increment version appropriately\n"
+            team_locations += "git push -u origin your-branch-name --tags\n"
+            team_locations += "# OR use automatic commit-tag-push:\n"
+            team_locations += f"python3 {self.tmux_orchestrator_path}/git_commit_manager.py \"feat: your feature\" -a\n"
             team_locations += "```\n"
             
             # Add visual map
@@ -3291,6 +3297,30 @@ Your worktree location: `{worktree_paths.get(role, 'N/A')}`
 - If temp files detected: Add them to `.gitignore` or use `git add -p`
 - ALWAYS review `git status` before committing
 - Use selective staging (`git add -p`) instead of `git add .` or `git add -A`
+
+📦 **ENHANCED GIT WORKFLOW WITH AUTO-VERSIONING**:
+```bash
+# Option 1: Traditional workflow
+git add -p  # Or specific files
+git commit -m "feat: implement new feature"
+git tag v1.0.1 -m "Release v1.0.1"
+git push -u origin branch-name --tags
+
+# Option 2: Automated commit-tag-push (RECOMMENDED)
+cd ./shared/main-project || cd {worktree_paths.get(role, '.')}
+python3 {self.tmux_orchestrator_path}/git_commit_manager.py "feat: your feature" -a
+# This automatically:
+# - Stages all changes (-a flag)
+# - Creates commit with co-author
+# - Auto-increments version based on commit type
+# - Creates annotated tag
+# - Pushes both commits and tags
+
+# Commit conventions for auto-versioning:
+# "feat:" or "feature:" -> minor bump (1.0.0 -> 1.1.0)
+# "fix:" or "bugfix:" -> patch bump (1.0.0 -> 1.0.1)
+# "breaking change:" -> major bump (1.0.0 -> 2.0.0)
+```
 
 """
         
@@ -3937,8 +3967,10 @@ Your responsibilities:
 **CRITICAL FIRST TASK**: Read the project's CLAUDE.md for logging/monitoring instructions
 ```bash
 # Check for project-specific monitoring guidance
-cat {self.project_path}/CLAUDE.md | grep -i -E "(log|monitor|error|track|alert)"
-cat {self.project_path}/.claude/CLAUDE.md | grep -i -E "(log|monitor|error|track|alert)"
+cat ./shared/main-project/CLAUDE.md 2>/dev/null | grep -i -E "(log|monitor|error|track|alert)" || echo "No CLAUDE.md in main project"
+cat ./shared/main-project/.claude/CLAUDE.md 2>/dev/null | grep -i -E "(log|monitor|error|track|alert)" || echo "No .claude/CLAUDE.md"
+# If shared directory doesn't exist, fall back to absolute paths
+cat {self.project_path}/CLAUDE.md 2>/dev/null | grep -i -E "(log|monitor|error|track|alert)" || echo "No CLAUDE.md found"
 ```
 
 **Log Monitoring Focus**:
@@ -5193,6 +5225,10 @@ If you encounter conflicts:
 - If temp files detected: Add them to `.gitignore` or use `git add -p`
 - ALWAYS review `git status` before committing
 - Use selective staging (`git add -p`) instead of `git add .` or `git add -A`
+
+📦 **QUICK GIT COMMIT-TAG-PUSH**:
+Use the automated tool for consistent versioning:
+`python3 /home/clauderun/Tmux-Orchestrator/git_commit_manager.py "feat: your message" -a`
 """
 
     def create_context_management_instructions(self, role: str) -> str:
@@ -5230,7 +5266,7 @@ Working in multi-agent systems uses ~15x more tokens than normal. You MUST activ
    /context-prime
    
    # Option B: Manual reload
-   Read {self.tmux_orchestrator_path}/CLAUDE.md
+   Read /home/clauderun/Tmux-Orchestrator/CLAUDE.md
    Read README.md  
    Read {role.upper()}_CHECKPOINT_*.md  # Your checkpoint
    git status && git log --oneline -5

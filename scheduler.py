@@ -1226,6 +1226,56 @@ class TmuxOrchestratorScheduler:
         except Exception as e:
             return False, f"Pattern matching scan failed: {e}"
     
+    def _is_valid_project_session(self, session_name: str) -> bool:
+        """
+        Check if a session name represents a valid project orchestrator session.
+        
+        Valid patterns:
+        - {project-name}-impl-{uuid}     (standard pattern)
+        - {project-name}-{uuid}          (legacy pattern)  
+        - {project-name}-orchestration   (simple pattern)
+        - {project-name}-{anything}      (flexible pattern with hyphens)
+        
+        Invalid patterns:
+        - Simple numeric sessions: "0", "1", "2"
+        - Very short names: "main", "dev", "test" (< 5 chars)
+        - Single word sessions without hyphens
+        
+        Returns True only for valid project orchestrator sessions.
+        """
+        if not session_name:
+            return False
+            
+        # Reject simple numeric sessions
+        if session_name.isdigit():
+            logger.debug(f"Rejecting numeric session: {session_name}")
+            return False
+            
+        # Reject very short session names (likely not projects)
+        if len(session_name) < 5:
+            logger.debug(f"Rejecting very short session name: {session_name}")
+            return False
+            
+        # Reject common non-project session names
+        non_project_names = {'main', 'dev', 'test', 'temp', 'debug', 'shell', 'bash'}
+        if session_name.lower() in non_project_names:
+            logger.debug(f"Rejecting known non-project session: {session_name}")
+            return False
+            
+        # Accept if it has at least one hyphen (project-something pattern)
+        if '-' in session_name:
+            logger.debug(f"Valid project session (has hyphen): {session_name}")
+            return True
+            
+        # For single-word sessions, only accept if they look like project names
+        # (start with letter, reasonably long, not common shell names)
+        if len(session_name) >= 8 and session_name[0].isalpha():
+            logger.debug(f"Valid project session (long single word): {session_name}")
+            return True
+        
+        logger.debug(f"Invalid session name pattern: {session_name}")
+        return False
+    
     def _recover_from_reboot(self):
         """Recover from system reboot by checking status of projects that were processing"""
         logger.info("🔄 Starting reboot recovery check...")
@@ -1539,6 +1589,11 @@ class TmuxOrchestratorScheduler:
         """Add a task to the scheduler queue with idempotent behavior to prevent loops"""
         import hashlib
         
+        # Validate session name to prevent non-project sessions
+        if not self._is_valid_project_session(session_name):
+            logger.warning(f"Refusing to enqueue task for invalid session '{session_name}' - not a project orchestrator session")
+            return None
+        
         # Create composite key for deduplication
         note_hash = hashlib.md5(note.encode()).hexdigest()[:8]
         task_key = f"{session_name}:{agent_role}:{task_type}:{note_hash}"
@@ -1720,6 +1775,16 @@ class TmuxOrchestratorScheduler:
         """Execute a scheduled task with verification"""
         try:
             import shlex
+            
+            # Validate this is actually a project session
+            if not self._is_valid_project_session(session_name):
+                logger.warning(f"Skipping task {task_id}: '{session_name}' is not a valid project session")
+                # Remove this invalid task
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+                self.conn.commit()
+                logger.info(f"Removed invalid task {task_id} for non-project session '{session_name}'")
+                return False
             
             # NEW: Validate session before sending
             if not self._is_session_ready(session_name, window_index):
