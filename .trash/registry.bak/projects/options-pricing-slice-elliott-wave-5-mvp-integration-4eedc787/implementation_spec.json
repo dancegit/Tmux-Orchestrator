@@ -1,0 +1,310 @@
+{
+  "project": {
+    "name": "Options Pricing Slice - Elliott Wave 5 MVP Integration",
+    "path": "/home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+    "type": "python",
+    "main_tech": [
+      "Python",
+      "FastAPI",
+      "Modal",
+      "Black-Scholes",
+      "Valkey/Redis",
+      "Pytest",
+      "NumPy",
+      "SciPy"
+    ]
+  },
+  "implementation_plan": {
+    "phases": [
+      {
+        "name": "Phase 1: Core Service Implementation",
+        "duration_hours": 4.0,
+        "tasks": [
+          "Create options_pricing_service.py with OptionsPricingService class",
+          "Implement Black-Scholes pricing and Greeks calculation methods",
+          "Implement Wave5 event processing and option suggestion logic",
+          "Add volatility estimation and caching mechanisms",
+          "Implement probability of profit calculations",
+          "Add risk metrics and position sizing calculations"
+        ]
+      },
+      {
+        "name": "Phase 2: Plugin Integration",
+        "duration_hours": 2.5,
+        "tasks": [
+          "Update plugin_entry.py with enhanced OptionsPricingPlugin class",
+          "Register Wave5DetectedEvent processor",
+          "Add MVP API endpoints for manual testing",
+          "Update plugin metadata and configuration",
+          "Integrate service with plugin lifecycle",
+          "Add health check and monitoring capabilities"
+        ]
+      },
+      {
+        "name": "Phase 3: Testing Implementation",
+        "duration_hours": 3.0,
+        "tasks": [
+          "Create test_options_pricing_mvp.py with comprehensive unit tests",
+          "Test Black-Scholes calculations and Greeks accuracy",
+          "Test Wave5 event processing flows",
+          "Test probability of profit calculations",
+          "Create integration test framework",
+          "Add mock event generators for testing"
+        ]
+      },
+      {
+        "name": "Phase 4: Performance & Monitoring",
+        "duration_hours": 1.5,
+        "tasks": [
+          "Implement caching strategies for volatility data",
+          "Add metrics tracking for service performance",
+          "Implement batch processing capabilities",
+          "Add comprehensive logging and error handling",
+          "Create monitoring dashboards configuration",
+          "Optimize calculation performance"
+        ]
+      },
+      {
+        "name": "Phase 5: Deployment & Documentation",
+        "duration_hours": 1.0,
+        "tasks": [
+          "Update pyproject.toml with new dependencies",
+          "Configure environment variables for deployment",
+          "Update Modal deployment configuration",
+          "Document API endpoints and event schemas",
+          "Create deployment checklist and runbook",
+          "Perform final integration testing"
+        ]
+      }
+    ],
+    "total_estimated_hours": 12.0
+  },
+  "project_size": {
+    "size": "medium",
+    "estimated_loc": 1200,
+    "complexity": "medium"
+  },
+  "roles": {
+    "orchestrator": {
+      "responsibilities": [
+        "Monitor progress",
+        "Coordinate roles",
+        "Handle blockers"
+      ],
+      "check_in_interval": 20,
+      "initial_commands": [
+        "cd /home/clauderun/Tmux-Orchestrator",
+        "python3 claude_control.py status detailed"
+      ]
+    },
+    "project_manager": {
+      "responsibilities": [
+        "Ensure quality",
+        "Track completion",
+        "Review coverage"
+      ],
+      "check_in_interval": 25,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "cat OPTIONS_PRICING_MVP_IMPLEMENTATION.md"
+      ]
+    },
+    "developer": {
+      "responsibilities": [
+        "Implement features",
+        "Write tests",
+        "Fix bugs"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "git status"
+      ]
+    },
+    "tester": {
+      "responsibilities": [
+        "Run tests",
+        "Report failures",
+        "Verify coverage"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "echo 'Ready to test'"
+      ]
+    },
+    "testrunner": {
+      "responsibilities": [
+        "Execute test suites",
+        "Parallel test management",
+        "Performance testing",
+        "Test infrastructure",
+        "Results analysis"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "echo 'Setting up test execution framework'"
+      ]
+    },
+    "logtracker": {
+      "responsibilities": [
+        "Monitor logs real-time",
+        "Track errors",
+        "Alert critical issues",
+        "Use project monitoring tools",
+        "Generate error reports"
+      ],
+      "check_in_interval": 15,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "mkdir -p monitoring/logs monitoring/reports",
+        "echo 'Reading CLAUDE.md for monitoring instructions'"
+      ]
+    },
+    "devops": {
+      "responsibilities": [
+        "Infrastructure setup",
+        "Deployment pipelines",
+        "Monitor performance"
+      ],
+      "check_in_interval": 45,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "echo 'Checking deployment configuration'"
+      ]
+    },
+    "code_reviewer": {
+      "responsibilities": [
+        "Review code quality",
+        "Security audit",
+        "Best practices enforcement"
+      ],
+      "check_in_interval": 40,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "git log --oneline -10"
+      ]
+    },
+    "researcher": {
+      "responsibilities": [
+        "MCP tool discovery and utilization",
+        "Research best practices",
+        "Security vulnerability analysis",
+        "Performance optimization research",
+        "Document actionable findings"
+      ],
+      "check_in_interval": 25,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "mkdir -p research",
+        "echo 'Type @ to discover MCP resources, / to discover MCP commands'",
+        "echo 'Look for /mcp__ prefixed commands for MCP tools'"
+      ]
+    },
+    "documentation_writer": {
+      "responsibilities": [
+        "Write technical docs",
+        "Update README",
+        "Create API documentation"
+      ],
+      "check_in_interval": 60,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "ls -la *.md"
+      ]
+    },
+    "sysadmin": {
+      "responsibilities": [
+        "System setup",
+        "User management",
+        "Service configuration",
+        "Package management",
+        "System hardening"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "sudo -n true && echo 'sudo available' || echo 'need sudo password'",
+        "uname -a",
+        "lsb_release -a 2>/dev/null || cat /etc/os-release"
+      ]
+    },
+    "securityops": {
+      "responsibilities": [
+        "Security hardening",
+        "Firewall configuration",
+        "Access control",
+        "SSL/TLS setup",
+        "Security monitoring"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "sudo iptables -L -n 2>/dev/null || echo 'checking firewall status'",
+        "sestatus 2>/dev/null || echo 'SELinux not available'"
+      ]
+    },
+    "networkops": {
+      "responsibilities": [
+        "Network configuration",
+        "Load balancing",
+        "Reverse proxy setup",
+        "DNS management",
+        "Performance optimization"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "ip addr show",
+        "netstat -tlnp 2>/dev/null || ss -tlnp"
+      ]
+    },
+    "monitoringops": {
+      "responsibilities": [
+        "Monitoring stack setup",
+        "Metrics collection",
+        "Alert configuration",
+        "Dashboard creation",
+        "Log aggregation"
+      ],
+      "check_in_interval": 20,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "mkdir -p monitoring/dashboards monitoring/alerts",
+        "echo 'Setting up monitoring infrastructure'"
+      ]
+    },
+    "databaseops": {
+      "responsibilities": [
+        "Database setup",
+        "Performance tuning",
+        "Replication",
+        "Backup strategies",
+        "Schema management"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+        "echo 'Checking database requirements'",
+        "which psql mysql mongod redis-server 2>/dev/null || echo 'No databases installed yet'"
+      ]
+    }
+  },
+  "git_workflow": {
+    "parent_branch": "main",
+    "branch_name": "feature/mvp-wave5-options-integration",
+    "commit_interval": 30,
+    "pr_title": "feat: Add Wave 5 Elliott Wave integration for MVP options trading"
+  },
+  "success_criteria": [
+    "OptionsPricingService successfully processes Wave5DetectedEvent and generates OptionTradeSuggestedEvent",
+    "All unit tests pass with 80%+ code coverage for new MVP functionality",
+    "Black-Scholes calculations produce accurate option prices and Greeks",
+    "API endpoints successfully handle manual Wave 5 option suggestion requests",
+    "Service properly caches volatility data and maintains performance under load",
+    "Plugin integrates seamlessly with existing SignalMatrix architecture",
+    "Health checks report service status accurately with MVP feature flags",
+    "Documentation clearly explains event flow and API usage"
+  ]
+}

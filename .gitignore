@@ -1,69 +1,53 @@
-
-logs/*
-sessions/*
-*.pid
+# Database files
 *.db
-.mcp.json
-# Local configuration
-config.local.sh
-config.local.sh.bak
-
-# Temporary files
-next_check_note.txt
-*.log
-*.tmp
-*.temp
-*.bak
-*.swp
-*.swo
-*~
-
-# Registry directory (logs and session data)
-registry/
-
-# Trash directory for deprecated files
-.trash/
-
-# Project-specific files and directories
-# Lock files with PIDs and hostnames
-locks/
-
-# Database files with project data
+*.db-shm 
+*.db-wal
 task_queue.db*
+scheduler.db*
+session_state.db*
+orchestration_tracking.db*
 
-# Session-specific files
-orchestration_metadata.json
-session_state.json
-
-# Python cache and build artifacts
-__pycache__/
-*.py[cod]
-*$py.class
-.pytest_cache/
-*.egg-info/
-dist/
-build/
-
-# Node.js
-node_modules/
-npm-debug.log*
-
-# Virtual environments
-.venv/
-venv/
-env/
-
-# Editor files
-.vscode/
-.idea/
-
-# OS files
-.DS_Store
-Thumbs.db
-.Spotlight-V100
-.Trashes
+# Session and state data
+session_states/
+sessions/
+registry/
 
 # Log files
 *.log
+logs/
 *.out
+*.pid
+
+# Temporary and backup files
+emergency_backup/
+*_backup_*/
+*.tar.gz
+
+# Generated files
+locks/
+*.lock
+*_process.info
+
+# Project-specific sensitive data
+all_projects_batch*.log
+*_orchestrate.log
+debug_*.log
+test-output*.log
+
+# Config files with potential secrets
+config.local.sh
 .env
+.mcp.json
+
+# Python cache
+__pycache__/
+
+# Trash and temporary directories
+.trash/
+
+# Temporary scripts
+temp_*.py
+fix_*.py
+mark_project_*.py
+reset_project_*.py
+repair_*.py

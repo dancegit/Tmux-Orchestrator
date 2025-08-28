@@ -1,0 +1,301 @@
+{
+  "project": {
+    "name": "Elliott Wave 5 + Options Trading Report Generation",
+    "path": "/home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+    "type": "python",
+    "main_tech": [
+      "Python",
+      "FastAPI",
+      "Modal",
+      "matplotlib",
+      "seaborn",
+      "reportlab",
+      "pandas"
+    ]
+  },
+  "implementation_plan": {
+    "phases": [
+      {
+        "name": "Phase 1: Core Report Service Implementation",
+        "duration_hours": 6.0,
+        "tasks": [
+          "Implement generate_elliott_wave_options_report method in reporting_service.py",
+          "Create _create_elliott_wave_chart method with matplotlib/seaborn",
+          "Implement _create_options_payoff_diagram for risk visualization",
+          "Add _fetch_price_data method for chart data retrieval",
+          "Implement _store_report_metadata for report tracking"
+        ]
+      },
+      {
+        "name": "Phase 2: PDF Generation & Email Delivery",
+        "duration_hours": 4.0,
+        "tasks": [
+          "Implement _create_pdf_report method using reportlab",
+          "Create professional PDF templates with charts and tables",
+          "Implement send_report_email method with SMTP support",
+          "Add email attachment handling for PDF reports",
+          "Configure environment variables for email settings"
+        ]
+      },
+      {
+        "name": "Phase 3: Event Processing & Integration",
+        "duration_hours": 3.0,
+        "tasks": [
+          "Register OptionTradeSuggestedEvent processor in plugin_entry.py",
+          "Update get_configuration method with MVP features",
+          "Enhance health_check with library verification methods",
+          "Add error handling and fallback mechanisms",
+          "Implement resource cleanup for temporary files"
+        ]
+      },
+      {
+        "name": "Phase 4: Testing & Validation",
+        "duration_hours": 4.0,
+        "tasks": [
+          "Create test_elliott_wave_reporting.py with comprehensive tests",
+          "Write unit tests for report generation methods",
+          "Test email delivery functionality with mocks",
+          "Validate chart generation and PDF creation",
+          "Performance testing for large report generation"
+        ]
+      },
+      {
+        "name": "Phase 5: Dependencies & Deployment Preparation",
+        "duration_hours": 2.0,
+        "tasks": [
+          "Update pyproject.toml with new dependencies",
+          "Configure Modal secrets for email credentials",
+          "Create deployment documentation",
+          "Verify integration with options-pricing slice",
+          "Final testing and deployment checklist validation"
+        ]
+      }
+    ],
+    "total_estimated_hours": 19.0
+  },
+  "project_size": {
+    "size": "medium",
+    "estimated_loc": 1200,
+    "complexity": "medium"
+  },
+  "roles": {
+    "orchestrator": {
+      "responsibilities": [
+        "Monitor progress",
+        "Coordinate roles",
+        "Handle blockers"
+      ],
+      "check_in_interval": 20,
+      "initial_commands": [
+        "cd /home/clauderun/Tmux-Orchestrator",
+        "python3 claude_control.py status detailed"
+      ]
+    },
+    "project_manager": {
+      "responsibilities": [
+        "Ensure quality",
+        "Track completion",
+        "Review coverage"
+      ],
+      "check_in_interval": 25,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "cat REPORTING_MVP_IMPLEMENTATION.md"
+      ]
+    },
+    "developer": {
+      "responsibilities": [
+        "Implement features",
+        "Write tests",
+        "Fix bugs"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "git status"
+      ]
+    },
+    "tester": {
+      "responsibilities": [
+        "Run tests",
+        "Report failures",
+        "Verify coverage"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "echo 'Ready to test'"
+      ]
+    },
+    "testrunner": {
+      "responsibilities": [
+        "Execute test suites",
+        "Parallel test management",
+        "Performance testing",
+        "Test infrastructure",
+        "Results analysis"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "echo 'Setting up test execution framework'"
+      ]
+    },
+    "logtracker": {
+      "responsibilities": [
+        "Monitor logs real-time",
+        "Track errors",
+        "Alert critical issues",
+        "Use project monitoring tools",
+        "Generate error reports"
+      ],
+      "check_in_interval": 15,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "mkdir -p monitoring/logs monitoring/reports",
+        "echo 'Reading CLAUDE.md for monitoring instructions'"
+      ]
+    },
+    "devops": {
+      "responsibilities": [
+        "Infrastructure setup",
+        "Deployment pipelines",
+        "Monitor performance"
+      ],
+      "check_in_interval": 45,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "echo 'Checking deployment configuration'"
+      ]
+    },
+    "code_reviewer": {
+      "responsibilities": [
+        "Review code quality",
+        "Security audit",
+        "Best practices enforcement"
+      ],
+      "check_in_interval": 40,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "git log --oneline -10"
+      ]
+    },
+    "researcher": {
+      "responsibilities": [
+        "MCP tool discovery and utilization",
+        "Research best practices",
+        "Security vulnerability analysis",
+        "Performance optimization research",
+        "Document actionable findings"
+      ],
+      "check_in_interval": 25,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "mkdir -p research",
+        "echo 'Type @ to discover MCP resources, / to discover MCP commands'",
+        "echo 'Look for /mcp__ prefixed commands for MCP tools'"
+      ]
+    },
+    "documentation_writer": {
+      "responsibilities": [
+        "Write technical docs",
+        "Update README",
+        "Create API documentation"
+      ],
+      "check_in_interval": 60,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "ls -la *.md"
+      ]
+    },
+    "sysadmin": {
+      "responsibilities": [
+        "System setup",
+        "User management",
+        "Service configuration",
+        "Package management",
+        "System hardening"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "sudo -n true && echo 'sudo available' || echo 'need sudo password'",
+        "uname -a",
+        "lsb_release -a 2>/dev/null || cat /etc/os-release"
+      ]
+    },
+    "securityops": {
+      "responsibilities": [
+        "Security hardening",
+        "Firewall configuration",
+        "Access control",
+        "SSL/TLS setup",
+        "Security monitoring"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "sudo iptables -L -n 2>/dev/null || echo 'checking firewall status'",
+        "sestatus 2>/dev/null || echo 'SELinux not available'"
+      ]
+    },
+    "networkops": {
+      "responsibilities": [
+        "Network configuration",
+        "Load balancing",
+        "Reverse proxy setup",
+        "DNS management",
+        "Performance optimization"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "ip addr show",
+        "netstat -tlnp 2>/dev/null || ss -tlnp"
+      ]
+    },
+    "monitoringops": {
+      "responsibilities": [
+        "Monitoring stack setup",
+        "Metrics collection",
+        "Alert configuration",
+        "Dashboard creation",
+        "Log aggregation"
+      ],
+      "check_in_interval": 20,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "mkdir -p monitoring/dashboards monitoring/alerts",
+        "echo 'Setting up monitoring infrastructure'"
+      ]
+    },
+    "databaseops": {
+      "responsibilities": [
+        "Database setup",
+        "Performance tuning",
+        "Replication",
+        "Backup strategies",
+        "Schema management"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+        "echo 'Checking database requirements'",
+        "which psql mysql mongod redis-server 2>/dev/null || echo 'No databases installed yet'"
+      ]
+    }
+  },
+  "git_workflow": {
+    "parent_branch": "main",
+    "branch_name": "feature/elliott-wave-options-reporting",
+    "commit_interval": 30,
+    "pr_title": "Add Elliott Wave 5 + Options trading report generation with PDF and email delivery"
+  },
+  "success_criteria": [
+    "OptionTradeSuggestedEvent processing successfully generates PDF reports",
+    "Charts render correctly with Elliott Wave patterns and options payoff diagrams",
+    "Email delivery works with PDF attachments and proper formatting",
+    "All unit tests pass with >80% code coverage",
+    "Error handling provides graceful fallbacks for chart/email failures"
+  ]
+}

@@ -1,0 +1,326 @@
+{
+  "project": {
+    "name": "Elliott Wave 5 + Options Trading Backtesting Implementation",
+    "path": "/home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+    "type": "python",
+    "main_tech": [
+      "Python",
+      "VectorBT",
+      "Modal",
+      "Redis/Valkey",
+      "FastAPI",
+      "NumPy",
+      "Pandas"
+    ]
+  },
+  "implementation_plan": {
+    "phases": [
+      {
+        "name": "Phase 1: Core Infrastructure Setup",
+        "duration_hours": 3.0,
+        "tasks": [
+          "Set up Elliott Wave strategy module structure in domain/strategies/",
+          "Create Elliott Wave counter trade strategy implementation",
+          "Update pyproject.toml with new dependencies (vectorbt, scipy, scikit-learn, numba)",
+          "Create configuration files for VectorBT performance optimization",
+          "Set up caching infrastructure for historical data"
+        ]
+      },
+      {
+        "name": "Phase 2: Elliott Wave Detection Implementation",
+        "duration_hours": 4.0,
+        "tasks": [
+          "Implement _simulate_elliott_wave_detection method in backtesting_service.py",
+          "Create fractal detection and wave pattern analysis logic",
+          "Implement enhanced entry signal filtering for Wave 5 completion",
+          "Add confidence scoring and pattern strength calculations",
+          "Create historical data loading and window-based processing"
+        ]
+      },
+      {
+        "name": "Phase 3: Options Trading Simulation",
+        "duration_hours": 5.0,
+        "tasks": [
+          "Implement _generate_options_trades method for converting signals to trades",
+          "Create Black-Scholes integration for option pricing",
+          "Implement Greeks calculation for options",
+          "Add transaction cost modeling (commission, slippage, bid-ask spread)",
+          "Create _execute_options_backtest method with realistic portfolio simulation"
+        ]
+      },
+      {
+        "name": "Phase 4: Performance Metrics & Analysis",
+        "duration_hours": 3.0,
+        "tasks": [
+          "Implement _calculate_performance_metrics with Sharpe, Sortino, Calmar ratios",
+          "Create trade statistics analysis methods",
+          "Add Elliott Wave specific performance analysis",
+          "Implement options-specific metrics (put/call win rates, IV analysis)",
+          "Create equity curve and drawdown calculations"
+        ]
+      },
+      {
+        "name": "Phase 5: Event Processing & Integration",
+        "duration_hours": 2.5,
+        "tasks": [
+          "Update plugin_entry.py with new event processor for BacktestRequestEvent",
+          "Implement event routing for elliott_wave_5_options strategy type",
+          "Update plugin configuration with MVP features",
+          "Add error handling and recovery mechanisms",
+          "Create backtest status storage and retrieval methods"
+        ]
+      },
+      {
+        "name": "Phase 6: Testing & Validation",
+        "duration_hours": 3.5,
+        "tasks": [
+          "Create comprehensive unit tests in test_elliott_wave_backtesting.py",
+          "Write integration tests for Elliott Wave options integration",
+          "Create mock data generators for testing",
+          "Test performance with large datasets",
+          "Validate metrics calculation accuracy"
+        ]
+      },
+      {
+        "name": "Phase 7: Optimization & Deployment",
+        "duration_hours": 2.0,
+        "tasks": [
+          "Implement chunked processing for memory efficiency",
+          "Add vectorized calculations for performance",
+          "Set up Redis/Valkey caching for intermediate results",
+          "Create monitoring metrics and logging",
+          "Prepare deployment configuration and verify Modal integration"
+        ]
+      }
+    ],
+    "total_estimated_hours": 23.0
+  },
+  "project_size": {
+    "size": "medium",
+    "estimated_loc": 2500,
+    "complexity": "high"
+  },
+  "roles": {
+    "orchestrator": {
+      "responsibilities": [
+        "Monitor progress",
+        "Coordinate roles",
+        "Handle blockers"
+      ],
+      "check_in_interval": 20,
+      "initial_commands": [
+        "cd /home/clauderun/Tmux-Orchestrator",
+        "python3 claude_control.py status detailed"
+      ]
+    },
+    "project_manager": {
+      "responsibilities": [
+        "Ensure quality",
+        "Track completion",
+        "Review coverage"
+      ],
+      "check_in_interval": 25,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "cat BACKTESTING_MVP_IMPLEMENTATION.md"
+      ]
+    },
+    "developer": {
+      "responsibilities": [
+        "Implement features",
+        "Write tests",
+        "Fix bugs"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "git status"
+      ]
+    },
+    "tester": {
+      "responsibilities": [
+        "Run tests",
+        "Report failures",
+        "Verify coverage"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "echo 'Ready to test'"
+      ]
+    },
+    "testrunner": {
+      "responsibilities": [
+        "Execute test suites",
+        "Parallel test management",
+        "Performance testing",
+        "Test infrastructure",
+        "Results analysis"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "echo 'Setting up test execution framework'"
+      ]
+    },
+    "logtracker": {
+      "responsibilities": [
+        "Monitor logs real-time",
+        "Track errors",
+        "Alert critical issues",
+        "Use project monitoring tools",
+        "Generate error reports"
+      ],
+      "check_in_interval": 15,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "mkdir -p monitoring/logs monitoring/reports",
+        "echo 'Reading CLAUDE.md for monitoring instructions'"
+      ]
+    },
+    "devops": {
+      "responsibilities": [
+        "Infrastructure setup",
+        "Deployment pipelines",
+        "Monitor performance"
+      ],
+      "check_in_interval": 45,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "echo 'Checking deployment configuration'"
+      ]
+    },
+    "code_reviewer": {
+      "responsibilities": [
+        "Review code quality",
+        "Security audit",
+        "Best practices enforcement"
+      ],
+      "check_in_interval": 40,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "git log --oneline -10"
+      ]
+    },
+    "researcher": {
+      "responsibilities": [
+        "MCP tool discovery and utilization",
+        "Research best practices",
+        "Security vulnerability analysis",
+        "Performance optimization research",
+        "Document actionable findings"
+      ],
+      "check_in_interval": 25,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "mkdir -p research",
+        "echo 'Type @ to discover MCP resources, / to discover MCP commands'",
+        "echo 'Look for /mcp__ prefixed commands for MCP tools'"
+      ]
+    },
+    "documentation_writer": {
+      "responsibilities": [
+        "Write technical docs",
+        "Update README",
+        "Create API documentation"
+      ],
+      "check_in_interval": 60,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "ls -la *.md"
+      ]
+    },
+    "sysadmin": {
+      "responsibilities": [
+        "System setup",
+        "User management",
+        "Service configuration",
+        "Package management",
+        "System hardening"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "sudo -n true && echo 'sudo available' || echo 'need sudo password'",
+        "uname -a",
+        "lsb_release -a 2>/dev/null || cat /etc/os-release"
+      ]
+    },
+    "securityops": {
+      "responsibilities": [
+        "Security hardening",
+        "Firewall configuration",
+        "Access control",
+        "SSL/TLS setup",
+        "Security monitoring"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "sudo iptables -L -n 2>/dev/null || echo 'checking firewall status'",
+        "sestatus 2>/dev/null || echo 'SELinux not available'"
+      ]
+    },
+    "networkops": {
+      "responsibilities": [
+        "Network configuration",
+        "Load balancing",
+        "Reverse proxy setup",
+        "DNS management",
+        "Performance optimization"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "ip addr show",
+        "netstat -tlnp 2>/dev/null || ss -tlnp"
+      ]
+    },
+    "monitoringops": {
+      "responsibilities": [
+        "Monitoring stack setup",
+        "Metrics collection",
+        "Alert configuration",
+        "Dashboard creation",
+        "Log aggregation"
+      ],
+      "check_in_interval": 20,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "mkdir -p monitoring/dashboards monitoring/alerts",
+        "echo 'Setting up monitoring infrastructure'"
+      ]
+    },
+    "databaseops": {
+      "responsibilities": [
+        "Database setup",
+        "Performance tuning",
+        "Replication",
+        "Backup strategies",
+        "Schema management"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+        "echo 'Checking database requirements'",
+        "which psql mysql mongod redis-server 2>/dev/null || echo 'No databases installed yet'"
+      ]
+    }
+  },
+  "git_workflow": {
+    "parent_branch": "main",
+    "branch_name": "feature/elliott-wave-options-backtesting",
+    "commit_interval": 30,
+    "pr_title": "Implement Elliott Wave 5 + Options Trading Backtesting"
+  },
+  "success_criteria": [
+    "Elliott Wave 5 detection simulation working on historical data with >65% accuracy",
+    "Options pricing and Greeks calculation integrated with Black-Scholes model",
+    "Realistic transaction costs (commission, slippage, bid-ask spread) properly modeled",
+    "Performance metrics (Sharpe, Sortino, Calmar ratios) calculated correctly",
+    "Backtest completes for 5 years of data across 5 instruments in <30 minutes",
+    "All unit and integration tests passing with >80% code coverage",
+    "Event processing for BacktestRequestEvent working end-to-end",
+    "VectorBT integration optimized for memory efficiency and performance"
+  ]
+}

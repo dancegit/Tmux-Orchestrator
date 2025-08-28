@@ -1,0 +1,307 @@
+{
+  "project": {
+    "name": "Tmux Orchestrator MCP Server V2",
+    "path": "/home/clauderun/mcp_server_spec_v2",
+    "type": "python",
+    "main_tech": [
+      "Python 3.11+",
+      "MCP SDK",
+      "FastAPI",
+      "Redis",
+      "WebSockets",
+      "JWT",
+      "Pydantic"
+    ]
+  },
+  "implementation_plan": {
+    "phases": [
+      {
+        "name": "Phase 1: Core Infrastructure Setup",
+        "duration_hours": 8.0,
+        "tasks": [
+          "Set up project structure and dependencies",
+          "Implement base MCP server with FastAPI integration",
+          "Create core data models and types",
+          "Set up configuration management system",
+          "Implement logging and error handling utilities",
+          "Create basic authentication framework"
+        ]
+      },
+      {
+        "name": "Phase 2: MCP Tools Implementation",
+        "duration_hours": 16.0,
+        "tasks": [
+          "Implement project management tools (create, manage, monitor)",
+          "Create spec writer tools for project specifications",
+          "Build batch processing system for multiple projects",
+          "Implement team communication tools",
+          "Create Git workflow automation tools",
+          "Develop monitoring and status reporting tools"
+        ]
+      },
+      {
+        "name": "Phase 3: Claude Daemon Development",
+        "duration_hours": 12.0,
+        "tasks": [
+          "Implement Claude Daemon core architecture",
+          "Create session management with Redis",
+          "Build WebSocket server for real-time communication",
+          "Implement JWT authentication system",
+          "Create systemd service configuration",
+          "Build daemon-MCP integration layer"
+        ]
+      },
+      {
+        "name": "Phase 4: Integration and Testing",
+        "duration_hours": 10.0,
+        "tasks": [
+          "Integrate MCP server with Tmux Orchestrator",
+          "Create comprehensive test suite",
+          "Implement integration tests for daemon",
+          "Set up CI/CD pipelines",
+          "Performance testing and optimization",
+          "Security hardening and validation"
+        ]
+      },
+      {
+        "name": "Phase 5: Deployment and Documentation",
+        "duration_hours": 6.0,
+        "tasks": [
+          "Create Docker configuration",
+          "Set up deployment scripts",
+          "Write comprehensive documentation",
+          "Create monitoring dashboards",
+          "Implement health check endpoints",
+          "Prepare production deployment guide"
+        ]
+      }
+    ],
+    "total_estimated_hours": 52.0
+  },
+  "project_size": {
+    "size": "large",
+    "estimated_loc": 8000,
+    "complexity": "high"
+  },
+  "roles": {
+    "orchestrator": {
+      "responsibilities": [
+        "Monitor progress",
+        "Coordinate roles",
+        "Handle blockers"
+      ],
+      "check_in_interval": 20,
+      "initial_commands": [
+        "cd /home/clauderun/Tmux-Orchestrator",
+        "python3 claude_control.py status detailed"
+      ]
+    },
+    "project_manager": {
+      "responsibilities": [
+        "Ensure quality",
+        "Track completion",
+        "Review coverage"
+      ],
+      "check_in_interval": 25,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "cat MCP_SERVER_SPEC_V2.md"
+      ]
+    },
+    "developer": {
+      "responsibilities": [
+        "Implement features",
+        "Write tests",
+        "Fix bugs"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "git status"
+      ]
+    },
+    "tester": {
+      "responsibilities": [
+        "Run tests",
+        "Report failures",
+        "Verify coverage"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "echo 'Ready to test'"
+      ]
+    },
+    "testrunner": {
+      "responsibilities": [
+        "Execute test suites",
+        "Parallel test management",
+        "Performance testing",
+        "Test infrastructure",
+        "Results analysis"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "echo 'Setting up test execution framework'"
+      ]
+    },
+    "logtracker": {
+      "responsibilities": [
+        "Monitor logs real-time",
+        "Track errors",
+        "Alert critical issues",
+        "Use project monitoring tools",
+        "Generate error reports"
+      ],
+      "check_in_interval": 15,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "mkdir -p monitoring/logs monitoring/reports",
+        "echo 'Reading CLAUDE.md for monitoring instructions'"
+      ]
+    },
+    "devops": {
+      "responsibilities": [
+        "Infrastructure setup",
+        "Deployment pipelines",
+        "Monitor performance"
+      ],
+      "check_in_interval": 45,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "echo 'Checking deployment configuration'"
+      ]
+    },
+    "code_reviewer": {
+      "responsibilities": [
+        "Review code quality",
+        "Security audit",
+        "Best practices enforcement"
+      ],
+      "check_in_interval": 40,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "git log --oneline -10"
+      ]
+    },
+    "researcher": {
+      "responsibilities": [
+        "MCP tool discovery and utilization",
+        "Research best practices",
+        "Security vulnerability analysis",
+        "Performance optimization research",
+        "Document actionable findings"
+      ],
+      "check_in_interval": 25,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "mkdir -p research",
+        "echo 'Type @ to discover MCP resources, / to discover MCP commands'",
+        "echo 'Look for /mcp__ prefixed commands for MCP tools'"
+      ]
+    },
+    "documentation_writer": {
+      "responsibilities": [
+        "Write technical docs",
+        "Update README",
+        "Create API documentation"
+      ],
+      "check_in_interval": 60,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "ls -la *.md"
+      ]
+    },
+    "sysadmin": {
+      "responsibilities": [
+        "System setup",
+        "User management",
+        "Service configuration",
+        "Package management",
+        "System hardening"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "sudo -n true && echo 'sudo available' || echo 'need sudo password'",
+        "uname -a",
+        "lsb_release -a 2>/dev/null || cat /etc/os-release"
+      ]
+    },
+    "securityops": {
+      "responsibilities": [
+        "Security hardening",
+        "Firewall configuration",
+        "Access control",
+        "SSL/TLS setup",
+        "Security monitoring"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "sudo iptables -L -n 2>/dev/null || echo 'checking firewall status'",
+        "sestatus 2>/dev/null || echo 'SELinux not available'"
+      ]
+    },
+    "networkops": {
+      "responsibilities": [
+        "Network configuration",
+        "Load balancing",
+        "Reverse proxy setup",
+        "DNS management",
+        "Performance optimization"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "ip addr show",
+        "netstat -tlnp 2>/dev/null || ss -tlnp"
+      ]
+    },
+    "monitoringops": {
+      "responsibilities": [
+        "Monitoring stack setup",
+        "Metrics collection",
+        "Alert configuration",
+        "Dashboard creation",
+        "Log aggregation"
+      ],
+      "check_in_interval": 20,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "mkdir -p monitoring/dashboards monitoring/alerts",
+        "echo 'Setting up monitoring infrastructure'"
+      ]
+    },
+    "databaseops": {
+      "responsibilities": [
+        "Database setup",
+        "Performance tuning",
+        "Replication",
+        "Backup strategies",
+        "Schema management"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mcp_server_spec_v2",
+        "echo 'Checking database requirements'",
+        "which psql mysql mongod redis-server 2>/dev/null || echo 'No databases installed yet'"
+      ]
+    }
+  },
+  "git_workflow": {
+    "parent_branch": "master",
+    "branch_name": "feature/mcp-server-v2-implementation",
+    "commit_interval": 30,
+    "pr_title": "Implement MCP Server V2 with Claude Daemon Integration"
+  },
+  "success_criteria": [
+    "Complete MCP server implementation with all specified tools",
+    "Functional Claude Daemon with WebSocket API and session management",
+    "Full integration with Tmux Orchestrator system",
+    "Comprehensive test coverage (>80%)",
+    "Production-ready deployment configuration with systemd service",
+    "Complete documentation and API reference"
+  ]
+}
