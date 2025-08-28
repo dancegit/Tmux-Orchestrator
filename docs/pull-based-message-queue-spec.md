@@ -38,13 +38,28 @@ CREATE TABLE message_queue (
     agent_session TEXT NOT NULL,
     message TEXT NOT NULL,
     priority INTEGER DEFAULT 0,  -- Higher = more urgent
+    sequence_number INTEGER NOT NULL,  -- Global FIFO ordering
+    dependency_id INTEGER,  -- Optional message dependency
+    project_name TEXT,  -- For project-level FIFO
     status TEXT DEFAULT 'pending',  -- pending/pulled/delivered
     enqueued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     pulled_at TIMESTAMP,
-    delivered_at TIMESTAMP
+    delivered_at TIMESTAMP,
+    FOREIGN KEY (dependency_id) REFERENCES message_queue(id)
 );
 
-CREATE INDEX idx_agent_priority ON message_queue(agent_session, priority DESC, enqueued_at);
+-- Indexes for FIFO ordering
+CREATE INDEX idx_agent_fifo ON message_queue(agent_session, priority DESC, sequence_number);
+CREATE INDEX idx_project_fifo ON message_queue(project_name, priority DESC, sequence_number);
+CREATE INDEX idx_global_fifo ON message_queue(priority DESC, sequence_number);
+
+-- Sequence number generator
+CREATE TABLE sequence_generator (
+    name TEXT PRIMARY KEY,
+    current_value INTEGER DEFAULT 0
+);
+
+INSERT OR IGNORE INTO sequence_generator (name, current_value) VALUES ('message_sequence', 0);
 ```
 
 #### 2. Claude Code Hooks Configuration
@@ -76,24 +91,31 @@ Key features:
 #### 3. Queue Check Script (`check_queue.py`)
 
 Script executed by hooks to pull messages:
-- Queries DB for next message (highest priority, FIFO within priority)
+- Queries DB for next message using FIFO ordering (priority first, then sequence)
+- Respects message dependencies (waits for prerequisite messages)
 - Marks previous message as delivered (implicit ACK)
 - Outputs message for hook injection into conversation
 - Uses file locking for concurrent access safety
+- Supports different FIFO scopes: per-agent, per-project, or global
 
 Features:
 - Transaction-based to prevent race conditions
 - Returns JSON format for hook processing
-- Supports message priorities
+- Supports message priorities with FIFO ordering
+- Message dependency resolution
+- Configurable FIFO scope (per-agent/per-project/global)
 - Bootstrap mode for session initialization
+- Sequence number generation for strict ordering
 
 #### 4. Message Enqueuing
 
 Replace all direct `tmux send-keys` with DB inserts:
-- `send-claude-message.sh`: Refactor to enqueue only
-- `TmuxMessenger` in `auto_orchestrate.py`: Insert to DB instead of send
-- `scheduler.py`: Use existing DB connection for enqueueing
+- `send-claude-message.sh`: Refactor to enqueue with sequence numbers
+- `TmuxMessenger` in `auto_orchestrate.py`: Insert to DB with FIFO support
+- `scheduler.py`: Use existing DB connection for enqueueing with dependencies
 - Hook configurations generated dynamically per agent session
+- Sequence number atomically assigned on insert to guarantee FIFO order
+- Project-level FIFO for coordinated multi-agent workflows
 
 ## Implementation Details
 
@@ -118,12 +140,24 @@ Replace all direct `tmux send-keys` with DB inserts:
 - Direct injection via tmux or temporary socket/pipe
 - Fallback ensures low-latency delivery for critical messages
 
-### Message Priority Levels
+### Message Priority Levels and FIFO Ordering
 
+**Priority Levels:**
 - 0-9: Normal messages (default: 0)
 - 10-49: High priority (important tasks)
 - 50-99: Critical (errors, urgent commands)
 - 100+: Emergency (system messages, interrupts)
+
+**FIFO Ordering Scope:**
+- **Per-Agent**: Messages for same agent maintain strict FIFO within priority
+- **Per-Project**: Messages within same project maintain order (for setup sequences)
+- **Global**: System-wide FIFO for critical coordination messages
+
+**Message Dependencies:**
+- Optional `dependency_id` field creates prerequisite chains
+- Dependent messages wait until prerequisite is marked delivered
+- Useful for setup sequences where order is critical
+- Example: "Create database" must complete before "Run migrations"
 
 ### Bootstrap Process
 
@@ -135,12 +169,49 @@ For new agents:
 5. SessionStart hook automatically pulls first message
 6. If queue empty, agent enters "ready for direct delivery" mode
 
+### FIFO Queue Processing
+
+**Message Selection Algorithm:**
+```sql
+-- Per-agent FIFO (default)
+SELECT * FROM message_queue 
+WHERE agent_session = ? AND status = 'pending'
+  AND (dependency_id IS NULL OR dependency_id IN (
+    SELECT id FROM message_queue WHERE status = 'delivered'
+  ))
+ORDER BY priority DESC, sequence_number ASC
+LIMIT 1;
+
+-- Project-level FIFO
+SELECT * FROM message_queue 
+WHERE project_name = ? AND status = 'pending'
+  AND (dependency_id IS NULL OR dependency_id IN (
+    SELECT id FROM message_queue WHERE status = 'delivered'
+  ))
+ORDER BY priority DESC, sequence_number ASC
+LIMIT 1;
+```
+
+**Sequence Number Generation:**
+- Atomically increment global sequence counter on message insert
+- Guarantees strict FIFO ordering across all messages
+- Prevents race conditions in high-concurrency scenarios
+- Used as tie-breaker within same priority level
+
+**Dependency Resolution:**
+- Messages with `dependency_id` wait for prerequisite completion
+- Circular dependency detection prevents deadlocks
+- Timeout mechanism for stale dependencies
+- Cascade handling when prerequisite messages fail
+
 ### Error Handling
 
 - **Failed hooks**: Retry with exponential backoff in hook commands
 - **DB locks**: Use SQLite busy timeout
 - **Agent crashes**: Hook cleanup on session end, messages requeued
 - **Hook conflicts**: Ordered execution and conflict detection
+- **Dependency timeouts**: Auto-resolve stale prerequisites after timeout
+- **Sequence gaps**: Handle missing sequence numbers gracefully
 
 ## Migration Strategy
 
@@ -197,10 +268,13 @@ For new agents:
 ## Future Enhancements
 
 1. **REST API**: Replace direct DB access with API for better security
-2. **Message Dependencies**: Support DAG-style workflows  
+2. **Advanced Dependencies**: Support DAG-style workflows with complex prerequisites
 3. **Advanced Hook Events**: Custom triggers for specific scenarios
-4. **Web Dashboard**: Visualize queue states and hook execution
+4. **Web Dashboard**: Visualize queue states, FIFO order, and hook execution
 5. **Multi-Runtime Support**: Support for different Claude Code implementations
+6. **Message Routing**: Smart routing based on agent capabilities and load
+7. **Queue Partitioning**: Shard queues by project or priority for scalability
+8. **Message Batching**: Group related messages for efficient processing
 
 ## Implementation Timeline
 
@@ -287,14 +361,17 @@ For new agents:
 ### Database Schema Extensions
 
 ```sql
--- Add agent readiness tracking
+-- Add agent readiness tracking and FIFO extensions
 ALTER TABLE message_queue ADD COLUMN delivery_method TEXT DEFAULT 'queued';
+ALTER TABLE message_queue ADD COLUMN fifo_scope TEXT DEFAULT 'agent';  -- agent/project/global
 
 CREATE TABLE IF NOT EXISTS agents (
     session_name TEXT PRIMARY KEY,
+    project_name TEXT,  -- For project-level FIFO
     status TEXT DEFAULT 'active',  -- active/ready/offline
     ready_since TIMESTAMP,
     last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    direct_delivery_pipe TEXT  -- Optional socket/pipe path
+    direct_delivery_pipe TEXT,  -- Optional socket/pipe path
+    last_sequence_delivered INTEGER DEFAULT 0  -- Track delivery order
 );
 ```
