@@ -1,0 +1,356 @@
+{
+  "project": {
+    "name": "Tmux Orchestrator Mobile App V2",
+    "path": "/home/clauderun/mobile_app_spec_v2",
+    "type": "android",
+    "main_tech": [
+      "Kotlin",
+      "Jetpack Compose",
+      "WebSocket",
+      "Claude Daemon",
+      "MCP"
+    ]
+  },
+  "implementation_plan": {
+    "phases": [
+      {
+        "name": "Project Setup & Core Architecture",
+        "duration_hours": 8.0,
+        "tasks": [
+          "Initialize Android project with Gradle and required dependencies",
+          "Set up module structure with app and daemon-sdk modules",
+          "Configure build variants for different daemon environments",
+          "Implement base dependency injection with Hilt",
+          "Create core data models and sealed classes",
+          "Set up DataStore for session persistence"
+        ]
+      },
+      {
+        "name": "Daemon Integration Layer",
+        "duration_hours": 12.0,
+        "tasks": [
+          "Implement WebSocket client for daemon communication",
+          "Create DaemonClient with connection state management",
+          "Build request/response serialization with Kotlin serialization",
+          "Implement session handler with restore capabilities",
+          "Create offline message queue with priority handling",
+          "Add authentication manager with JWT support"
+        ]
+      },
+      {
+        "name": "Chat Interface & Natural Language",
+        "duration_hours": 10.0,
+        "tasks": [
+          "Build ChatScreen with Jetpack Compose",
+          "Implement message bubble components with markdown rendering",
+          "Create message composer with attachment support",
+          "Add typing indicators and connection status",
+          "Implement natural language request builder",
+          "Create interactive elements for daemon responses"
+        ]
+      },
+      {
+        "name": "Voice & Speech Integration",
+        "duration_hours": 6.0,
+        "tasks": [
+          "Integrate Google Speech Recognition API",
+          "Build voice input dialog with wave animation",
+          "Implement text-to-speech for responses",
+          "Add voice command processing pipeline",
+          "Create hands-free mode with wake word detection",
+          "Test voice accuracy across different accents"
+        ]
+      },
+      {
+        "name": "Offline Capabilities & Sync",
+        "duration_hours": 8.0,
+        "tasks": [
+          "Implement robust offline queue management",
+          "Create background sync service with WorkManager",
+          "Add conflict resolution for offline changes",
+          "Build retry logic with exponential backoff",
+          "Implement queue persistence with DataStore",
+          "Create sync status UI indicators"
+        ]
+      },
+      {
+        "name": "Project Management Features",
+        "duration_hours": 6.0,
+        "tasks": [
+          "Build project cards with real-time status",
+          "Create project timeline visualization",
+          "Implement insights dashboard with analytics",
+          "Add recommendation system for next actions",
+          "Build team notification handling",
+          "Create project filtering and search"
+        ]
+      },
+      {
+        "name": "Security & Authentication",
+        "duration_hours": 4.0,
+        "tasks": [
+          "Implement biometric authentication",
+          "Add secure credential storage",
+          "Configure SSL pinning for daemon connection",
+          "Implement token refresh mechanism",
+          "Add device registration flow",
+          "Create security audit logging"
+        ]
+      },
+      {
+        "name": "Testing & Quality Assurance",
+        "duration_hours": 8.0,
+        "tasks": [
+          "Write unit tests for daemon integration",
+          "Create UI tests with Compose testing",
+          "Implement integration tests for offline sync",
+          "Add performance tests for WebSocket",
+          "Create mock daemon for testing",
+          "Achieve 80% code coverage"
+        ]
+      },
+      {
+        "name": "Polish & Production Readiness",
+        "duration_hours": 6.0,
+        "tasks": [
+          "Implement comprehensive error handling",
+          "Add analytics and crash reporting",
+          "Create onboarding tutorial flow",
+          "Optimize app size and performance",
+          "Configure ProGuard rules",
+          "Prepare release configurations"
+        ]
+      }
+    ],
+    "total_estimated_hours": 68.0
+  },
+  "project_size": {
+    "size": "large",
+    "estimated_loc": 12000,
+    "complexity": "high"
+  },
+  "roles": {
+    "orchestrator": {
+      "responsibilities": [
+        "Monitor progress",
+        "Coordinate roles",
+        "Handle blockers"
+      ],
+      "check_in_interval": 20,
+      "initial_commands": [
+        "cd /home/clauderun/Tmux-Orchestrator",
+        "python3 claude_control.py status detailed"
+      ]
+    },
+    "project_manager": {
+      "responsibilities": [
+        "Ensure quality",
+        "Track completion",
+        "Review coverage"
+      ],
+      "check_in_interval": 25,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "cat /home/clauderun/Tmux-Orchestrator/MOBILE_APP_SPEC_V2.md"
+      ]
+    },
+    "developer": {
+      "responsibilities": [
+        "Implement features",
+        "Write tests",
+        "Fix bugs"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "git status"
+      ]
+    },
+    "tester": {
+      "responsibilities": [
+        "Run tests",
+        "Report failures",
+        "Verify coverage"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "echo 'Ready to test'"
+      ]
+    },
+    "testrunner": {
+      "responsibilities": [
+        "Execute test suites",
+        "Parallel test management",
+        "Performance testing",
+        "Test infrastructure",
+        "Results analysis"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "echo 'Setting up test execution framework'"
+      ]
+    },
+    "logtracker": {
+      "responsibilities": [
+        "Monitor logs real-time",
+        "Track errors",
+        "Alert critical issues",
+        "Use project monitoring tools",
+        "Generate error reports"
+      ],
+      "check_in_interval": 15,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "mkdir -p monitoring/logs monitoring/reports",
+        "echo 'Reading CLAUDE.md for monitoring instructions'"
+      ]
+    },
+    "devops": {
+      "responsibilities": [
+        "Infrastructure setup",
+        "Deployment pipelines",
+        "Monitor performance"
+      ],
+      "check_in_interval": 45,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "echo 'Checking deployment configuration'"
+      ]
+    },
+    "code_reviewer": {
+      "responsibilities": [
+        "Review code quality",
+        "Security audit",
+        "Best practices enforcement"
+      ],
+      "check_in_interval": 40,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "git log --oneline -10"
+      ]
+    },
+    "researcher": {
+      "responsibilities": [
+        "MCP tool discovery and utilization",
+        "Research best practices",
+        "Security vulnerability analysis",
+        "Performance optimization research",
+        "Document actionable findings"
+      ],
+      "check_in_interval": 25,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "mkdir -p research",
+        "echo 'Type @ to discover MCP resources, / to discover MCP commands'",
+        "echo 'Look for /mcp__ prefixed commands for MCP tools'"
+      ]
+    },
+    "documentation_writer": {
+      "responsibilities": [
+        "Write technical docs",
+        "Update README",
+        "Create API documentation"
+      ],
+      "check_in_interval": 60,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "ls -la *.md"
+      ]
+    },
+    "sysadmin": {
+      "responsibilities": [
+        "System setup",
+        "User management",
+        "Service configuration",
+        "Package management",
+        "System hardening"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "sudo -n true && echo 'sudo available' || echo 'need sudo password'",
+        "uname -a",
+        "lsb_release -a 2>/dev/null || cat /etc/os-release"
+      ]
+    },
+    "securityops": {
+      "responsibilities": [
+        "Security hardening",
+        "Firewall configuration",
+        "Access control",
+        "SSL/TLS setup",
+        "Security monitoring"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "sudo iptables -L -n 2>/dev/null || echo 'checking firewall status'",
+        "sestatus 2>/dev/null || echo 'SELinux not available'"
+      ]
+    },
+    "networkops": {
+      "responsibilities": [
+        "Network configuration",
+        "Load balancing",
+        "Reverse proxy setup",
+        "DNS management",
+        "Performance optimization"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "ip addr show",
+        "netstat -tlnp 2>/dev/null || ss -tlnp"
+      ]
+    },
+    "monitoringops": {
+      "responsibilities": [
+        "Monitoring stack setup",
+        "Metrics collection",
+        "Alert configuration",
+        "Dashboard creation",
+        "Log aggregation"
+      ],
+      "check_in_interval": 20,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "mkdir -p monitoring/dashboards monitoring/alerts",
+        "echo 'Setting up monitoring infrastructure'"
+      ]
+    },
+    "databaseops": {
+      "responsibilities": [
+        "Database setup",
+        "Performance tuning",
+        "Replication",
+        "Backup strategies",
+        "Schema management"
+      ],
+      "check_in_interval": 30,
+      "initial_commands": [
+        "cd /home/clauderun/mobile_app_spec_v2",
+        "echo 'Checking database requirements'",
+        "which psql mysql mongod redis-server 2>/dev/null || echo 'No databases installed yet'"
+      ]
+    }
+  },
+  "git_workflow": {
+    "parent_branch": "master",
+    "branch_name": "feature/mobile-app-v2-implementation",
+    "commit_interval": 30,
+    "pr_title": "Implement Tmux Orchestrator Mobile App V2 with Claude Daemon Integration"
+  },
+  "success_criteria": [
+    "Android app successfully connects to Claude Daemon via WebSocket",
+    "Natural language chat interface processes commands correctly",
+    "Voice input accurately transcribes and executes commands",
+    "Offline queue reliably stores and syncs messages when reconnected",
+    "All unit and integration tests pass with 80% code coverage",
+    "App performs smoothly with < 100ms UI response time",
+    "Session persistence maintains context across app restarts",
+    "Security measures including biometric auth and JWT tokens implemented",
+    "Project management features display real-time status updates"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+    "session_name": "tmux-orchestrator-mcp-server-v2-impl-3fd2a7dc",
+    "project_name": "mcp-server-v2",
+    "project_path": "/home/clauderun/mcp_server_spec_v2/",
+    "worktree_path": "/home/clauderun/mcp_server_spec_v2-tmux-worktrees/",
+    "start_time": "2025-08-20T00:11:35.506834",
+    "status": "failed",
+    "pid": 583581,
+    "end_time": "2025-08-20T12:45:00",
+    "failure_reason": "Session died, fixed monitoring and PATH issues"
+}
