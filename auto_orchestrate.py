@@ -3030,6 +3030,16 @@ This file is automatically read by Claude Code when working in this directory.
             # Send briefing using unified messenger
             self.messenger.send_briefing(f'{session_name}:{window_idx}', briefing)
             
+            # Send session name reminder to prevent communication errors
+            session_reminder = f"""📍 **IMPORTANT SESSION INFO**
+Your session: {session_name}
+Orchestrator location: {session_name}:0
+
+⚠️ Always use the FULL session name when reporting to the orchestrator.
+DO NOT use shortened forms - use exactly: {session_name}:0
+"""
+            self.messenger.send_message(f'{session_name}:{window_idx}', session_reminder)
+            
             # Run initial commands
             for cmd in role_config.initial_commands:
                 time.sleep(2)
