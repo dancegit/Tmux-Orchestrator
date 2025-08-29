@@ -269,8 +269,15 @@ class PathManager:
         self.orchestrator_root = orchestrator_root.resolve()
         self.project_name = self.project_path.name
         
-        # Worktrees are siblings to the project directory
-        self.worktree_root = self.project_path.parent / f"{self.project_name}-tmux-worktrees"
+        # Use WorktreeManager for spec-specific worktree paths
+        from worktree_manager import WorktreeManager
+        self.worktree_manager = WorktreeManager(self.project_path)
+        
+        # Generate spec-specific worktree path
+        session_name = getattr(self, 'unique_session_name', 'unknown')
+        self.worktree_root = self.worktree_manager.get_or_create_worktree_path(
+            str(self.spec_path), session_name
+        )
         
         # Metadata is also a sibling (migrating from registry)
         self.metadata_root = self.project_path.parent / f"{self.project_name}-tmux-metadata"
