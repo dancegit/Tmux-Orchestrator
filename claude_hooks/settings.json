@@ -8,7 +8,7 @@
             "type": "command",
             "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX}",
             "timeout": 5000,
-            "description": "Check message queue after tool use"
+            "description": "Check message queue and git policy compliance after tool use"
           }
         ]
       }
@@ -43,6 +43,12 @@
       {
         "matcher": ".*",
         "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/setup_git_policy_hooks.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX}",
+            "timeout": 3000,
+            "description": "Setup git policy enforcement for new session"
+          },
           {
             "type": "command",
             "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --bootstrap",

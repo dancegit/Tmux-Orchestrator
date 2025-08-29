@@ -1,0 +1,168 @@
+# Git Policy Enforcement Configuration
+# This file configures the git workflow policy enforcement system
+
+enforcement:
+  # Global enforcement toggle
+  enabled: true
+  
+  # Default enforcement level for new agents
+  default_level: warning  # warning, auto_correct, blocking
+  
+  # Rollout configuration
+  rollout:
+    phase: 1  # 1=warning, 2=auto_correct, 3=blocking
+    gradual_rollout_enabled: true
+    
+    # Agents ready for different enforcement levels
+    warning_mode: []  # All agents start here
+    auto_correct_mode: ["orchestrator"]  # Orchestrator can use auto-commit
+    blocking_mode: []  # Agents ready for full enforcement
+
+# Policy-specific configuration
+policies:
+  
+  # 30-minute commit interval enforcement
+  commit_interval:
+    enabled: true
+    interval_minutes: 30
+    grace_period_minutes: 5
+    blocking_threshold_minutes: 60  # Block actions after this many minutes overdue
+    
+    # Auto-commit configuration
+    auto_commit:
+      enabled: false  # Global default - can be overridden per agent
+      safe_patterns:
+        - "*.md"
+        - "*.txt" 
+        - "*.json"
+        - "*.yaml"
+        - "*.yml"
+      avoid_patterns:
+        - "*.py"
+        - "*.js"
+        - "*.ts"
+        - "*.go"
+        - "*.rs"
+        - "*.cpp"
+        - "*.c"
+        - "*.java"
+
+  # Local remote preference over GitHub
+  local_remote_preference:
+    enabled: true
+    enforcement_level: strict  # strict, warning, disabled
+    performance_reminder: true
+    blocked_github_operations:
+      - "fetch"
+      - "pull" 
+      # push handled separately by github_restrictions policy
+    
+  # PM notification requirements
+  pm_notification:
+    enabled: true
+    required_for_significant_commits: true
+    significance_threshold:
+      files_changed: 3
+      lines_changed: 50
+    auto_notify: false  # Future feature
+    notification_template: "COMMIT_UPDATE: {summary} on {branch}"
+
+  # GitHub usage restrictions  
+  github_restrictions:
+    enabled: true
+    enforcement_level: warning  # warning, blocking
+    
+    # Allowed reasons for GitHub push
+    allowlist:
+      - milestone
+      - backup
+      - release
+      - external_review
+      - emergency
+      - hotfix
+      - critical
+    
+    # Special branch patterns that are always allowed
+    allowed_branches:
+      - "release/*"
+      - "hotfix/*" 
+      - "milestone/*"
+
+  # Rebase workflow enforcement
+  rebase_workflow:
+    enabled: true
+    enforce_fast_forward: true
+    block_merge_commits: false  # Start with warnings
+    enforcement_level: warning  # warning, blocking
+
+# Agent-specific overrides
+agent_overrides:
+  
+  # Orchestrator can use auto-commit and has relaxed policies
+  orchestrator:
+    commit_interval:
+      auto_commit:
+        enabled: true
+    pm_notification:
+      required_for_significant_commits: false  # Orchestrator manages itself
+      
+  # Project Manager doesn't notify itself
+  project-manager:
+    pm_notification:
+      required_for_significant_commits: false
+      
+  # Developer has strict commit requirements
+  developer:
+    commit_interval:
+      grace_period_minutes: 2  # Stricter grace period
+      blocking_threshold_minutes: 45  # Earlier blocking
+      
+  # Tester has relaxed GitHub restrictions for test data
+  tester:
+    github_restrictions:
+      enforcement_level: warning
+      allowlist:
+        - milestone
+        - backup
+        - release
+        - external_review
+        - emergency
+        - hotfix
+        - critical
+        - test_data
+        - test_results
+
+# Emergency and maintenance settings
+emergency:
+  # Environment variable that bypasses all policies
+  bypass_env_var: EMERGENCY_BYPASS
+  
+  # Automatic bypass conditions
+  auto_bypass:
+    - debugging_context: true  # Bypass during debugging/fix branches
+    - rebase_in_progress: true
+    - merge_in_progress: true
+    
+# Monitoring and logging
+monitoring:
+  # Log all policy violations for analysis
+  log_violations: true
+  log_file: "logs/git_policy_violations.log"
+  
+  # Integration with existing compliance monitoring
+  compliance_integration: true
+  
+  # Performance metrics
+  track_performance_gains: true
+  
+# Success metrics and targets  
+metrics:
+  targets:
+    commit_interval_compliance: 95  # percent
+    local_remote_usage: 90  # percent of operations using local remotes
+    github_usage_reduction: 80  # percent reduction in GitHub coordination
+    policy_violation_reduction: 75  # percent reduction over 4 weeks
+    
+  # Reporting
+  daily_reports: true
+  weekly_summaries: true

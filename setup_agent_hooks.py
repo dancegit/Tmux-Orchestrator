@@ -53,7 +53,9 @@ def setup_agent_hooks(
         'check_queue.py',
         'cleanup_agent.py',
         'enqueue_message.py',
-        'tmux_message_sender.py'
+        'tmux_message_sender.py',
+        'git_policy_enforcer.py',
+        'setup_git_policy_hooks.py'
     ]
     
     for script in hook_scripts:
@@ -128,7 +130,148 @@ export ORCHESTRATOR_PATH="{orchestrator_path}"
     os.chmod(env_file, 0o755)
     logger.info(f"Created environment file: {env_file}")
     
+    # Set up git hooks if this is a git repository
+    setup_git_hooks(worktree_path, agent_id, orchestrator_path)
+    
     return True
+
+def setup_git_hooks(worktree_path: Path, agent_id: str, orchestrator_path: Path):
+    """Install git hooks in agent worktrees for policy enforcement"""
+    
+    # Check if this is a git repository
+    git_dir = worktree_path / '.git'
+    if not git_dir.exists():
+        # Check if it's a worktree (has .git file pointing to git dir)
+        git_file = worktree_path / '.git'
+        if git_file.is_file():
+            try:
+                with open(git_file) as f:
+                    content = f.read().strip()
+                    if content.startswith('gitdir:'):
+                        # Extract actual git directory path
+                        git_dir_path = content.split(':', 1)[1].strip()
+                        if not Path(git_dir_path).is_absolute():
+                            git_dir_path = worktree_path / git_dir_path
+                        git_dir = Path(git_dir_path)
+                    else:
+                        logger.info(f"Not a git repository: {worktree_path} - skipping git hooks")
+                        return
+            except Exception:
+                logger.info(f"Not a git repository: {worktree_path} - skipping git hooks")
+                return
+        else:
+            logger.info(f"Not a git repository: {worktree_path} - skipping git hooks")
+            return
+    
+    # For worktrees, hooks directory is in the main .git directory structure
+    if (worktree_path / '.git').is_file():
+        # This is a worktree, hooks go in the main repo
+        hooks_dir = git_dir / 'hooks'
+    else:
+        # This is a regular git repo
+        hooks_dir = git_dir / 'hooks'
+    
+    hooks_dir.mkdir(exist_ok=True)
+    logger.info(f"Setting up git hooks in {hooks_dir}")
+    
+    # Extract agent role from agent_id for role-specific hooks
+    session_name = agent_id.split(':')[0]
+    if 'orchestrator' in session_name:
+        agent_role = 'orchestrator'
+    elif 'developer' in session_name or 'dev' in session_name:
+        agent_role = 'developer'
+    elif 'tester' in session_name or 'test' in session_name:
+        agent_role = 'tester'
+    elif 'project-manager' in session_name or 'pm' in session_name:
+        agent_role = 'project-manager'
+    else:
+        agent_role = 'agent'
+    
+    # Pre-push hook to enforce local-first and GitHub restrictions
+    pre_push_content = f'''#!/bin/bash
+# Git Policy Enforcement: Pre-push hook
+# Enforces local-first workflow and GitHub usage restrictions
+
+remote="$1"
+url="$2"
+
+# Skip policy enforcement if emergency bypass is set
+if [[ "${{EMERGENCY_BYPASS}}" == "true" ]]; then
+    echo "⚠️  Emergency bypass enabled - skipping git policy enforcement"
+    exit 0
+fi
+
+python3 "{orchestrator_path}/claude_hooks/git_policy_enforcer.py" \\
+    --hook-type pre-push \\
+    --agent {agent_role} \\
+    --worktree-path "{worktree_path}" \\
+    --remote "$remote" \\
+    --url "$url"
+
+exit $?
+'''
+    
+    pre_push_hook = hooks_dir / 'pre-push'
+    pre_push_hook.write_text(pre_push_content)
+    pre_push_hook.chmod(0o755)
+    logger.info(f"Created pre-push hook: {pre_push_hook}")
+    
+    # Post-commit hook for PM notification and compliance logging
+    post_commit_content = f'''#!/bin/bash
+# Git Policy Enforcement: Post-commit hook  
+# Handles PM notifications and compliance logging
+
+# Skip during rebase/merge operations
+if [[ -f "{git_dir}/REBASE_HEAD" ]] || [[ -f "{git_dir}/MERGE_HEAD" ]]; then
+    exit 0
+fi
+
+python3 "{orchestrator_path}/claude_hooks/git_policy_enforcer.py" \\
+    --hook-type post-commit \\
+    --agent {agent_role} \\
+    --worktree-path "{worktree_path}"
+
+# Continue regardless of hook result (don't block commits)
+exit 0
+'''
+    
+    post_commit_hook = hooks_dir / 'post-commit'
+    post_commit_hook.write_text(post_commit_content)
+    post_commit_hook.chmod(0o755)
+    logger.info(f"Created post-commit hook: {post_commit_hook}")
+    
+    # Pre-merge-commit hook for rebase enforcement
+    pre_merge_content = f'''#!/bin/bash
+# Git Policy Enforcement: Pre-merge-commit hook
+# Enforces rebase workflow (fast-forward merges only)
+
+# Skip policy enforcement if emergency bypass is set
+if [[ "${{EMERGENCY_BYPASS}}" == "true" ]]; then
+    echo "⚠️  Emergency bypass enabled - allowing merge commit"
+    exit 0
+fi
+
+# Check if this is a fast-forward merge (rebased)
+if git merge-base --is-ancestor HEAD MERGE_HEAD 2>/dev/null; then
+    echo "✅ Fast-forward merge (rebased) - proceeding"
+    exit 0
+else
+    echo "🚫 POLICY VIOLATION: Non-fast-forward merge detected"
+    echo "Required: Rebase your branch first"
+    echo "Run: git rebase <target-branch>"
+    echo "This enforces the rebase workflow defined in CLAUDE.md"
+    echo ""
+    echo "To bypass this check temporarily, set: export EMERGENCY_BYPASS=true"
+    exit 1
+fi
+'''
+    
+    pre_merge_hook = hooks_dir / 'pre-merge-commit'
+    pre_merge_hook.write_text(pre_merge_content)
+    pre_merge_hook.chmod(0o755)
+    logger.info(f"Created pre-merge-commit hook: {pre_merge_hook}")
+    
+    logger.info(f"✅ Git hooks installed for agent {agent_id} (role: {agent_role})")
 
 def verify_hook_setup(worktree_path: Path) -> bool:
     """Verify that hooks are properly set up."""
@@ -137,7 +280,8 @@ def verify_hook_setup(worktree_path: Path) -> bool:
     required_files = [
         claude_dir / 'settings.json',
         claude_dir / 'settings.local.json',
-        claude_dir / 'hooks' / 'check_queue_enhanced.py'
+        claude_dir / 'hooks' / 'check_queue.py',
+        claude_dir / 'hooks' / 'git_policy_enforcer.py'
     ]
     
     for file_path in required_files:
@@ -152,6 +296,38 @@ def verify_hook_setup(worktree_path: Path) -> bool:
             logger.warning(f"Hook script not executable: {script}")
             # Try to make it executable
             os.chmod(script, 0o755)
+    
+    # Verify git hooks if this is a git repository
+    git_dir = worktree_path / '.git'
+    if git_dir.exists() or (worktree_path / '.git').is_file():
+        try:
+            # Find the actual hooks directory
+            if (worktree_path / '.git').is_file():
+                with open(worktree_path / '.git') as f:
+                    content = f.read().strip()
+                    if content.startswith('gitdir:'):
+                        git_dir_path = content.split(':', 1)[1].strip()
+                        if not Path(git_dir_path).is_absolute():
+                            git_dir_path = worktree_path / git_dir_path
+                        git_hooks_dir = Path(git_dir_path) / 'hooks'
+                    else:
+                        git_hooks_dir = None
+            else:
+                git_hooks_dir = git_dir / 'hooks'
+            
+            if git_hooks_dir and git_hooks_dir.exists():
+                git_hook_files = ['pre-push', 'post-commit', 'pre-merge-commit']
+                for hook_name in git_hook_files:
+                    hook_file = git_hooks_dir / hook_name
+                    if hook_file.exists() and os.access(hook_file, os.X_OK):
+                        logger.info(f"✅ Git hook verified: {hook_name}")
+                    else:
+                        logger.warning(f"⚠️  Git hook missing or not executable: {hook_name}")
+            else:
+                logger.warning("Git hooks directory not found")
+                
+        except Exception as e:
+            logger.warning(f"Could not verify git hooks: {e}")
     
     logger.info("Hook setup verified successfully")
     return True
