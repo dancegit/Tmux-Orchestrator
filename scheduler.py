@@ -379,14 +379,14 @@ class TmuxOrchestratorScheduler:
         with self.queue_lock:
             cursor = self.conn.cursor()
             cursor.execute("""
-                SELECT id, project_path, started_at, orchestrator_session, main_session, spec_path, session_name
+                SELECT id, project_path, started_at, orchestrator_session, main_session, spec_path
                 FROM project_queue 
                 WHERE status = 'processing'
             """)
             
             now = int(time.time())
             for row in cursor.fetchall():
-                project_id, project_path, started_at, orch_session, main_session, spec_path, session_name = row
+                project_id, project_path, started_at, orch_session, main_session, spec_path = row
                 is_stuck = False
                 reason = None
                 

@@ -70,8 +70,15 @@ Event-driven hooks configured in `.claude/` workspace directories per agent:
 - **SessionStart**: Initializes queue checking for new agents  
 - **SessionEnd**: Cleanup and message requeuing on agent shutdown
 - **UserPromptSubmit**: Additional trigger for queue checking
+- **PreCompact**: Triggers before context compaction for agent rebriefing
+- **Notification**: Can trigger on specific error patterns for auto-recovery
 
 **Critical Architecture Note**: Agents run in tmux windows (not separate sessions), so agent identification uses `session:window` format (e.g., `project-session:2`) rather than session names alone.
+
+**New Capabilities**:
+- Automatic agent rebriefing when context compaction occurs
+- Error detection and auto-restart mechanism
+- Context preservation across restarts
 
 Workspace Structure:
 ```
@@ -80,8 +87,10 @@ Workspace Structure:
 │   ├── settings.json          # Project-level hooks (committed)
 │   ├── settings.local.json    # Agent-specific config (generated)
 │   └── hooks/                 # Symlinked hook scripts
-│       ├── check_queue.py → /orchestrator/claude_hooks/check_queue.py
-│       └── direct_delivery.py → /orchestrator/claude_hooks/direct_delivery.py
+│       ├── check_queue_enhanced.py → /orchestrator/claude_hooks/check_queue_enhanced.py
+│       ├── cleanup_agent.py → /orchestrator/claude_hooks/cleanup_agent.py
+│       ├── auto_restart.py → /orchestrator/claude_hooks/auto_restart.py
+│       └── enqueue_message.py → /orchestrator/claude_hooks/enqueue_message.py
 ```
 
 Key features:
@@ -90,15 +99,19 @@ Key features:
 - Automatic message injection into conversation stream
 - Direct delivery mechanism for idle agents
 
-#### 3. Queue Check Script (`check_queue.py`)
+#### 3. Enhanced Hook Scripts
 
-Script executed by hooks to pull messages:
+##### check_queue_enhanced.py
+
+Enhanced script executed by hooks to pull messages:
 - Queries DB for next message using FIFO ordering (priority first, then sequence)
 - Respects message dependencies (waits for prerequisite messages)
 - Marks previous message as delivered (implicit ACK)
 - Outputs message for hook injection into conversation
 - Uses file locking for concurrent access safety
 - Supports different FIFO scopes: per-agent, per-project, or global
+- **NEW**: Handles rebriefing mode for context restoration
+- **NEW**: Injects CLAUDE.md rules during PreCompact events
 
 Features:
 - Transaction-based to prevent race conditions
@@ -108,6 +121,34 @@ Features:
 - Configurable FIFO scope (per-agent/per-project/global)
 - Bootstrap mode for session initialization
 - Sequence number generation for strict ordering
+- Context-aware rebriefing with activity summaries
+- Automatic CLAUDE.md rule injection
+
+##### cleanup_agent.py
+
+SessionEnd handler for graceful agent shutdown:
+- Requeues undelivered messages to prevent loss
+- Updates agent status to offline
+- Preserves message ordering for restart
+- Logs shutdown details for debugging
+
+##### auto_restart.py
+
+Error detection and recovery system:
+- Monitors for specific error patterns in Notification events
+- Tracks restart history to prevent infinite loops
+- Triggers tmux window restart with proper briefing
+- Preserves agent context across restarts
+- Configurable restart limits and cooldown periods
+
+##### enqueue_message.py
+
+Message enqueueing module used by other components:
+- Atomic sequence number generation
+- Priority and dependency support
+- FIFO ordering guarantees
+- Batch message enqueueing
+- Validation and error handling
 
 #### 4. Message Enqueuing
 
@@ -128,6 +169,8 @@ Replace all direct `tmux send-keys` with DB inserts:
 - `Stop` - When Claude becomes idle (secondary check + direct delivery mode)
 - `SessionStart` - Initialize queue checking and register agent
 - `SessionEnd` - Cleanup and requeue unprocessed messages
+- `PreCompact` - Trigger rebriefing before context compaction
+- `Notification` - Monitor for errors and trigger recovery
 
 **Message Processing Flow:**
 1. Agent completes operation → PostToolUse pulls queued message
@@ -267,6 +310,41 @@ LIMIT 1;
 4. **DB as Bottleneck**: Under high load
    - Mitigation: Can shard by project or migrate to Redis
 
+## Implementation Status
+
+### Completed Features
+
+1. **Core Hook Scripts**:
+   - ✅ `check_queue_enhanced.py` - Enhanced queue checking with rebriefing
+   - ✅ `cleanup_agent.py` - Agent cleanup on session end
+   - ✅ `auto_restart.py` - Error detection and recovery
+   - ✅ `enqueue_message.py` - Message enqueueing module
+
+2. **Agent Rebriefing**:
+   - ✅ PreCompact hook triggers context restoration
+   - ✅ CLAUDE.md rules automatically reinjected
+   - ✅ Recent activity summary preserved
+   - ✅ Configurable rebriefing intervals
+
+3. **Error Recovery**:
+   - ✅ Notification hook monitors for errors
+   - ✅ Automatic restart with limits
+   - ✅ Context preservation across restarts
+   - ✅ Restart history tracking
+
+4. **Integration Components**:
+   - ✅ `tmux_messenger_hooks.py` - Enhanced TmuxMessenger
+   - ✅ `setup_agent_hooks.py` - Hook configuration script
+   - ✅ `test_hooks_integration.py` - Test suite
+
+### Testing Strategy
+
+1. **Unit Tests**: Individual hook script testing
+2. **Integration Tests**: Full workflow validation
+3. **Failure Scenarios**: Error injection and recovery
+4. **Performance Tests**: Queue throughput and latency
+5. **Migration Tests**: Push to pull transition
+
 ## Future Enhancements
 
 1. **REST API**: Replace direct DB access with API for better security
@@ -277,6 +355,8 @@ LIMIT 1;
 6. **Message Routing**: Smart routing based on agent capabilities and load
 7. **Queue Partitioning**: Shard queues by project or priority for scalability
 8. **Message Batching**: Group related messages for efficient processing
+9. **Metrics Collection**: Hook execution times and success rates
+10. **Health Monitoring**: Agent health checks via hooks
 
 ## Implementation Timeline
 
@@ -308,7 +388,7 @@ LIMIT 1;
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent #{session_name}:#{window_index}"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py --agent #{session_name}:#{window_index}"
           }
         ]
       }
@@ -319,7 +399,7 @@ LIMIT 1;
         "hooks": [
           {
             "type": "command", 
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent #{session_name}:#{window_index} --check-idle"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py --agent #{session_name}:#{window_index} --check-idle"
           }
         ]
       }
@@ -330,7 +410,7 @@ LIMIT 1;
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent #{session_name}:#{window_index} --bootstrap"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py --agent #{session_name}:#{window_index} --bootstrap"
           }
         ]
       }
@@ -342,6 +422,28 @@ LIMIT 1;
           {
             "type": "command",
             "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/cleanup_agent.py --agent #{session_name}:#{window_index}"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py --agent #{session_name}:#{window_index} --rebrief"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": ".*error.*|.*fail.*|.*crash.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/auto_restart.py --agent #{session_name}:#{window_index}"
           }
         ]
       }
@@ -371,10 +473,25 @@ ALTER TABLE message_queue ADD COLUMN fifo_scope TEXT DEFAULT 'agent';  -- agent/
 CREATE TABLE IF NOT EXISTS agents (
     session_name TEXT PRIMARY KEY,
     project_name TEXT,  -- For project-level FIFO
-    status TEXT DEFAULT 'active',  -- active/ready/offline
+    status TEXT DEFAULT 'active',  -- active/ready/offline/error
     ready_since TIMESTAMP,
     last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     direct_delivery_pipe TEXT,  -- Optional socket/pipe path
-    last_sequence_delivered INTEGER DEFAULT 0  -- Track delivery order
+    last_sequence_delivered INTEGER DEFAULT 0,  -- Track delivery order
+    restart_count INTEGER DEFAULT 0,  -- Track restart attempts
+    last_restart TIMESTAMP,
+    last_error TEXT,
+    context_preserved TEXT  -- JSON blob for context preservation
+);
+
+-- Context preservation table
+CREATE TABLE IF NOT EXISTS agent_context (
+    agent_id TEXT PRIMARY KEY,
+    last_briefing TIMESTAMP,
+    briefing_content TEXT,
+    activity_summary TEXT,
+    checkpoint_data TEXT,  -- JSON blob
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```

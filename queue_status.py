@@ -142,6 +142,32 @@ Examples:
     cursor.execute("PRAGMA journal_mode=WAL;")
     cursor.execute("PRAGMA busy_timeout=10000;")
     
+    # Initialize project_queue table if it doesn't exist
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS project_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            spec_path TEXT NOT NULL,
+            project_path TEXT,  -- Can be null if auto-detected
+            status TEXT DEFAULT 'queued',  -- queued, processing, completed, failed, retried, permanently_failed, credit_paused
+            enqueued_at REAL DEFAULT (strftime('%s', 'now')),
+            started_at REAL,
+            completed_at REAL,
+            priority INTEGER DEFAULT 0,  -- Higher = sooner
+            error_message TEXT,
+            batch_id TEXT,  -- Groups related projects for batch processing
+            orchestrator_session TEXT,
+            main_session TEXT,
+            log_file TEXT,
+            retry_count INTEGER DEFAULT 0,
+            fresh_start BOOLEAN DEFAULT 0,  -- Flag for retries, different from --resume
+            auto_orchestrate_args TEXT,  -- Store original args for retries
+            failed_components TEXT,  -- Track which components failed
+            research_session_id TEXT,  -- For enhanced specs from research
+            
+            CONSTRAINT unique_spec_queued UNIQUE(spec_path, status) ON CONFLICT IGNORE
+        )
+    """)
+    
     # Handle cleanup-stale (no ID needed)
     if len(sys.argv) > 1 and sys.argv[1] == '--cleanup-stale':
         from session_state import SessionStateManager
