@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX}",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX}",
             "timeout": 5000,
             "description": "Check message queue after tool use"
           }
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --check-idle",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --check-idle",
             "timeout": 5000,
             "description": "Check queue when Claude becomes idle"
           }
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --compact-trigger",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --rebrief",
             "timeout": 3000,
             "description": "Queue rebriefing message after context compaction"
           }
@@ -45,7 +45,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --bootstrap",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --bootstrap",
             "timeout": 5000,
             "description": "Initialize queue checking for new session"
           }

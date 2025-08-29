@@ -50,10 +50,10 @@ def setup_agent_hooks(
     hooks_dir.mkdir(exist_ok=True)
     
     hook_scripts = [
-        'check_queue_enhanced.py',
+        'check_queue.py',
         'cleanup_agent.py',
         'enqueue_message.py',
-        'auto_restart.py'
+        'tmux_message_sender.py'
     ]
     
     for script in hook_scripts:
