@@ -50,6 +50,10 @@ def reconcile_orphaned_sessions(cursor, conn, projects, active_sessions):
     """Reconcile tmux sessions that exist but aren't tracked in project_queue"""
     reconciled = []
     
+    # Check if reconciliation is disabled
+    if os.getenv('DISABLE_RECONCILIATION', 'false').lower() == 'true':
+        return reconciled
+    
     # Get all main_session values from projects
     tracked_sessions = set()
     for proj in projects:
@@ -57,11 +61,21 @@ def reconcile_orphaned_sessions(cursor, conn, projects, active_sessions):
         if main_session:
             tracked_sessions.add(main_session)
     
+    # Load exclusion list
+    excluded_sessions = set()
+    exclude_file = Path('.reconciliation_exclude')
+    if exclude_file.exists():
+        with open(exclude_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    excluded_sessions.add(line)
+    
     # Find orphaned sessions (active tmux sessions not in queue)
     orphaned_sessions = []
     for session in active_sessions:
         # Only consider project-like sessions (contain '-impl-' pattern)
-        if '-impl-' in session and session not in tracked_sessions:
+        if '-impl-' in session and session not in tracked_sessions and session not in excluded_sessions:
             orphaned_sessions.append(session)
     
     # Add orphaned sessions to queue
@@ -87,9 +101,9 @@ def reconcile_orphaned_sessions(cursor, conn, projects, active_sessions):
             # Add to project_queue as processing
             cursor.execute("""
                 INSERT OR IGNORE INTO project_queue 
-                (spec_path, main_session, status, started_at, orchestrator_session)
-                VALUES (?, ?, 'processing', strftime('%s', 'now'), ?)
-            """, (spec_path, session, session))
+                (spec_path, main_session, session_name, status, started_at, orchestrator_session)
+                VALUES (?, ?, ?, 'processing', strftime('%s', 'now'), ?)
+            """, (spec_path, session, session, session))
             
             if cursor.rowcount > 0:
                 reconciled.append(session)

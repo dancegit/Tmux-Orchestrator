@@ -37,13 +37,36 @@ This completion has been automatically reported to maintain hub-and-spoke compli
 # Update session state with Python
 python3 << EOF
 import sys
+import sqlite3
 sys.path.append('$SCRIPT_DIR')
 from session_state import SessionStateManager
 from datetime import datetime
 from pathlib import Path
 
 mgr = SessionStateManager(Path('$SCRIPT_DIR'))
-project_name = "$SESSION".split('-impl')[0].replace('-', ' ').title()
+
+# FIX: Get the correct project name by looking it up in the database
+# This ensures consistency with how the scheduler derives project names
+try:
+    conn = sqlite3.connect('$SCRIPT_DIR/task_queue.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT spec_path FROM project_queue WHERE session_name = ? OR orchestrator_session = ? OR main_session = ?", 
+                   ("$SESSION", "$SESSION", "$SESSION"))
+    row = cursor.fetchone()
+    if row and row[0]:
+        # Use the same derivation logic as the scheduler
+        spec_path = row[0]
+        project_name = Path(spec_path).stem.lower().replace('_', '-')
+        print(f"Using scheduler-compatible project name: {project_name}")
+    else:
+        # Fallback to session-based naming
+        project_name = "$SESSION".split('-impl')[0].replace('-', ' ').title()
+        print(f"Using fallback project name: {project_name}")
+    conn.close()
+except Exception as e:
+    # Fallback to session-based naming
+    project_name = "$SESSION".split('-impl')[0].replace('-', ' ').title()
+    print(f"Database lookup failed, using fallback: {project_name}")
 
 # Update agent state
 mgr.update_agent_state(project_name, "$ROLE", {

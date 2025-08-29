@@ -666,49 +666,10 @@ class TmuxOrchestratorScheduler:
                         reset_count += 1
                         continue
                 
-                # Check 3: Running auto_orchestrate.py process
-                is_running = False
-                try:
-                    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                        try:
-                            cmdline = proc.info['cmdline']
-                            if cmdline and any('auto_orchestrate.py' in arg for arg in cmdline):
-                                # Check if this process is for our project
-                                if project_name and any(project_name in arg for arg in cmdline):
-                                    is_running = True
-                                    break
-                                # Also check by project ID
-                                if any(f'--project-id {project_id}' in ' '.join(cmdline) for arg in cmdline):
-                                    is_running = True
-                                    break
-                        except (psutil.NoSuchProcess, psutil.AccessDenied):
-                            continue
-                except Exception as e:
-                    logger.error(f"Error checking processes: {e}")
-                
-                # Handle both timestamp and datetime string formats for started_at
-                if not is_running and started_at:
-                    if isinstance(started_at, str):
-                        # Convert datetime string to timestamp
-                        try:
-                            from datetime import datetime
-                            dt = datetime.strptime(started_at, '%Y-%m-%d %H:%M:%S')
-                            started_timestamp = dt.timestamp()
-                        except ValueError:
-                            # Try to parse as float if it's a string representation of a number
-                            try:
-                                started_timestamp = float(started_at)
-                            except ValueError:
-                                logger.error(f"Invalid started_at format for project {project_id}: {started_at}")
-                                started_timestamp = 0
-                    else:
-                        started_timestamp = float(started_at)
-                        
-                    if started_timestamp and time.time() - started_timestamp > 300:  # 5 minutes
-                        self._reset_phantom_project(cursor, project_id, project_name or "unknown", 
-                                                  reason="No running auto_orchestrate.py process after 5 minutes")
-                        reset_count += 1
-                        continue
+                # Check 3: Skip checking for auto_orchestrate.py process
+                # auto_orchestrate.py is just a setup script that exits after creating the project
+                # The actual work is done by the tmux sessions, which we already validated above
+                logger.debug(f"Project {project_id} has active tmux session - not checking for auto_orchestrate.py process")
             
             self.conn.commit()
         
@@ -1877,6 +1838,40 @@ class TmuxOrchestratorScheduler:
             logger.error(f"Error running task {task_id}: {e}")
             return False
             
+    def check_project_completions(self):
+        """Check processing projects for completion using orchestrator intelligence"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, session_name, spec_path 
+            FROM project_queue 
+            WHERE status = 'processing'
+            AND started_at < strftime('%s', 'now', '-30 minutes')
+        """)
+        
+        projects_to_check = cursor.fetchall()
+        
+        for project_id, session_name, spec_path in projects_to_check:
+            try:
+                logger.info(f"Checking completion for project {project_id} ({session_name})")
+                
+                # Run the completion checker script
+                script_path = Path(__file__).parent / 'check_project_completion.py'
+                result = subprocess.run([
+                    'python3', str(script_path), str(project_id)
+                ], capture_output=True, text=True, timeout=120)
+                
+                if result.returncode == 0:
+                    logger.info(f"Completion check for project {project_id} completed successfully")
+                    if "successfully marked as complete" in result.stdout:
+                        logger.info(f"Project {project_id} was automatically completed")
+                else:
+                    logger.warning(f"Completion check failed for project {project_id}: {result.stderr}")
+                    
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Completion check timed out for project {project_id}")
+            except Exception as e:
+                logger.error(f"Error checking completion for project {project_id}: {e}")
+
     def check_and_run_tasks(self):
         """Check for due tasks and run them"""
         now = time.time()
@@ -2392,6 +2387,14 @@ class TmuxOrchestratorScheduler:
                 
                 # Check and run due tasks
                 self.check_and_run_tasks()
+                
+                # Check for project completions (every 5 minutes)
+                if hasattr(self, '_last_completion_check'):
+                    if now - self._last_completion_check > 300:  # 5 minutes
+                        self.check_project_completions()
+                        self._last_completion_check = now
+                else:
+                    self._last_completion_check = now
                 
                 # Sleep for a short interval
                 time.sleep(30)  # Check every 30 seconds
