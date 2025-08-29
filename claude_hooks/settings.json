@@ -26,7 +26,7 @@
         ]
       }
     ],
-    "PreCompact": [
+    "PostCompact": [
       {
         "matcher": ".*",
         "hooks": [
@@ -34,7 +34,7 @@
             "type": "command",
             "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --compact-trigger",
             "timeout": 3000,
-            "description": "Queue rebriefing message before context compaction"
+            "description": "Queue rebriefing message after context compaction"
           }
         ]
       }

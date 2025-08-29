@@ -236,25 +236,52 @@ def update_agent_status(cursor, agent_id: str, status: str):
     """, (status, status, agent_id))
 
 def handle_compact_trigger(agent_id: str):
-    """Handle PreCompact event by queueing a rebriefing message."""
+    """Handle PostCompact event by queueing a rebriefing message."""
     conn = sqlite3.connect(DB_PATH, timeout=TIMEOUT)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
     try:
         with conn:
+            # Get agent info for context
+            agent_info = get_agent_info(cursor, agent_id)
+            project_name = agent_info['project_name'] if agent_info else 'current project'
+            
+            # Get recent completed work for context
+            cursor.execute("""
+            SELECT message, delivered_at 
+            FROM message_queue 
+            WHERE agent_id = ? AND status = 'delivered' 
+            ORDER BY delivered_at DESC LIMIT 3;
+            """, (agent_id,))
+            recent_work = cursor.fetchall()
+            
             # Queue a high-priority context restoration message
-            compact_msg = f"""🔄 **Context Compaction Notice**
+            compact_msg = f"""🔄 **Context Restoration After Compaction**
 
-Your conversation history was just compacted. This is normal and helps maintain performance.
+Your conversation history has been compacted to maintain performance. Here's your context restoration:
 
-**Quick Context Check:**
+**You are:** Agent {agent_id} working on {project_name}
+
+**Recent Completed Tasks:**"""
+            
+            if recent_work:
+                for work in recent_work:
+                    delivered = datetime.fromisoformat(work['delivered_at'].replace('Z', '+00:00'))
+                    time_ago = (datetime.utcnow() - delivered.replace(tzinfo=None)).total_seconds() / 60
+                    compact_msg += f"\n- {int(time_ago)}m ago: {work['message'][:50]}..."
+            else:
+                compact_msg += "\n- No recent tasks found"
+            
+            compact_msg += f"""
+
+**Quick Status Check:**
 - Run `pwd` to confirm your working directory
-- Run `git branch` to see your current branch
-- Run `git status` for uncommitted changes
-- Review your role's responsibilities in the project spec
+- Run `git status` to check for uncommitted changes  
+- Run `git log --oneline -5` to see recent commits
+- Review your role's responsibilities if needed
 
-Continue with your current task. If you were in the middle of something, please complete it."""
+Please continue with your current work. If you were in the middle of implementing something, complete it."""
             
             # Get sequence number
             cursor.execute("""

@@ -23,15 +23,15 @@ This document outlines the implementation plan for transitioning from push-based
 #### Day 5: Integration Components
 - [ ] Create `tmux_messenger_hooks.py` with dual-mode support
 - [ ] Update `auto_orchestrate.py` to use new messenger
-- [ ] Add feature flag support (`ENABLE_HOOKS_QUEUE`)
+- [ ] Implement hooks as default behavior (no feature flags)
 - [ ] Create test harness
 
 ### Phase 2: Agent Lifecycle Features (Week 2)
 
 #### Day 1-2: Context Management
-- [ ] Implement PreCompact rebriefing logic
+- [ ] Implement PostCompact rebriefing logic
 - [ ] Create context preservation mechanism
-- [ ] Add CLAUDE.md rule injection
+- [ ] Add CLAUDE.md rule injection after compaction
 - [ ] Test context recovery scenarios
 
 #### Day 3-4: Error Recovery
@@ -109,7 +109,7 @@ CREATE TABLE agent_context (
         "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py"
       }]
     }],
-    "PreCompact": [{
+    "PostCompact": [{
       "matcher": ".*",
       "hooks": [{
         "type": "command",
@@ -163,8 +163,8 @@ CREATE TABLE agent_context (
 - 200: Rebriefing messages (highest)
 
 ### 3. Rebriefing Strategy
-- Trigger on PreCompact event
-- Queue high-priority rebriefing message
+- Trigger on PostCompact event
+- Queue high-priority rebriefing message after compaction
 - Include:
   - Full CLAUDE.md rules
   - Recent activity summary
@@ -255,9 +255,9 @@ CREATE TABLE agent_context (
    - Mitigation: Optimized scripts and async processing
 
 ### Rollback Plan
-1. Set `ENABLE_HOOKS_QUEUE=false`
-2. Restart agents without hooks
-3. Re-enable push-based monitoring
+1. Revert to previous code version
+2. Restart agents with previous configuration
+3. Re-enable push-based monitoring if needed
 4. Export pending messages
 5. Investigate and fix issues
 

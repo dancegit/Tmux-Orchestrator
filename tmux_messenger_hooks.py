@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Enhanced TmuxMessenger with hooks-based queue support.
-This module extends the messaging functionality to support both push and pull modes.
+TmuxMessenger with hooks-based queue support.
+This module provides messaging functionality using the hooks-based pull model by default.
+The legacy push mode is available as a fallback when explicitly disabled.
 """
 
 import os
+import sys
 import subprocess
 import logging
 from pathlib import Path
@@ -17,15 +19,13 @@ from enqueue_message import enqueue_message, enqueue_batch, get_queue_status
 logger = logging.getLogger(__name__)
 
 class TmuxMessengerHooks:
-    """Enhanced tmux messaging system with hooks-based queue support."""
+    """Tmux messaging system using hooks-based queue by default."""
     
-    def __init__(self, orchestrator_path: Path, use_hooks: Optional[bool] = None):
+    def __init__(self, orchestrator_path: Path, use_hooks: bool = True):
         self.orchestrator_path = orchestrator_path
         self.send_script = orchestrator_path / 'send-claude-message.sh'
         
-        # Determine if hooks should be used
-        if use_hooks is None:
-            use_hooks = os.environ.get('ENABLE_HOOKS_QUEUE', 'false').lower() == 'true'
+        # Always use hooks by default
         self.use_hooks = use_hooks
         
         logger.info(f"TmuxMessenger initialized with hooks={'enabled' if self.use_hooks else 'disabled'}")
@@ -33,7 +33,7 @@ class TmuxMessengerHooks:
     def send_message(self, target: str, message: str, priority: int = 0, 
                     project_name: Optional[str] = None) -> bool:
         """
-        Send a message to an agent using appropriate method.
+        Send a message to an agent using hooks-based queue.
         
         Args:
             target: Agent ID in session:window format
@@ -47,6 +47,7 @@ class TmuxMessengerHooks:
         if self.use_hooks:
             return self._send_via_queue(target, message, priority, project_name)
         else:
+            # Fallback to direct send only if explicitly disabled
             return self._send_direct(target, message)
     
     def _send_via_queue(self, target: str, message: str, priority: int = 0,
@@ -199,7 +200,7 @@ class TmuxMessengerHooks:
         if self.use_hooks:
             return get_queue_status(agent_id)
         else:
-            return {"mode": "push", "queue_enabled": False}
+            return {"mode": "push", "queue_enabled": False, "note": "Hooks disabled - using legacy push mode"}
     
     def clean_message_from_mcp_wrappers(self, message: str) -> str:
         """Enhanced MCP wrapper removal to handle all contamination patterns."""
@@ -264,10 +265,11 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 3:
-        print("Usage: python tmux_messenger_hooks.py <agent_id> <message> [--hooks]")
+        print("Usage: python tmux_messenger_hooks.py <agent_id> <message> [--no-hooks]")
         sys.exit(1)
     
-    use_hooks = '--hooks' in sys.argv
+    # Hooks are enabled by default, use --no-hooks to disable
+    use_hooks = '--no-hooks' not in sys.argv
     messenger = TmuxMessenger(Path.cwd(), use_hooks=use_hooks)
     
     success = messenger.send_message(sys.argv[1], sys.argv[2])
