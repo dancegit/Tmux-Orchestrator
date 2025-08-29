@@ -1882,6 +1882,16 @@ class TmuxOrchestratorScheduler:
         now = time.time()
         cursor = self.conn.cursor()
         
+        # First, fix any tasks with NULL or invalid next_run values
+        cursor.execute("""
+            UPDATE tasks 
+            SET next_run = ? + (interval_minutes * 60)
+            WHERE next_run IS NULL OR typeof(next_run) != 'real'
+        """, (now,))
+        if cursor.rowcount > 0:
+            logger.warning(f"Fixed {cursor.rowcount} tasks with invalid next_run values")
+            self.conn.commit()
+        
         # Get all tasks that are due
         cursor.execute("""
             SELECT id, session_name, agent_role, window_index, next_run, 

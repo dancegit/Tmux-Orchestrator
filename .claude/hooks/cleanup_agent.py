@@ -1,0 +1,1 @@
+../../claude_hooks/cleanup_agent.py

@@ -46,6 +46,63 @@ def format_timestamp(timestamp):
             return str(timestamp)
     return "Never"
 
+def reconcile_orphaned_sessions(cursor, conn, projects, active_sessions):
+    """Reconcile tmux sessions that exist but aren't tracked in project_queue"""
+    reconciled = []
+    
+    # Get all main_session values from projects
+    tracked_sessions = set()
+    for proj in projects:
+        main_session = proj[4]  # main_session is at index 4
+        if main_session:
+            tracked_sessions.add(main_session)
+    
+    # Find orphaned sessions (active tmux sessions not in queue)
+    orphaned_sessions = []
+    for session in active_sessions:
+        # Only consider project-like sessions (contain '-impl-' pattern)
+        if '-impl-' in session and session not in tracked_sessions:
+            orphaned_sessions.append(session)
+    
+    # Add orphaned sessions to queue
+    for session in orphaned_sessions:
+        try:
+            # Try to find metadata for this session
+            registry_dir = Path(f'registry/projects/{session.split("-impl-")[0]}')
+            metadata_file = registry_dir / 'orchestration_metadata.json'
+            spec_path = None
+            
+            if metadata_file.exists():
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                    # Try to find spec from the registry
+                    spec_files = list(registry_dir.glob('*.md')) + list(registry_dir.glob('*.txt'))
+                    if spec_files:
+                        spec_path = str(spec_files[0])
+            
+            if not spec_path:
+                # Use a placeholder spec path if we can't find the original
+                spec_path = f"registry/orphaned/{session}/unknown-spec.md"
+            
+            # Add to project_queue as processing
+            cursor.execute("""
+                INSERT OR IGNORE INTO project_queue 
+                (spec_path, main_session, status, started_at, orchestrator_session)
+                VALUES (?, ?, 'processing', strftime('%s', 'now'), ?)
+            """, (spec_path, session, session))
+            
+            if cursor.rowcount > 0:
+                reconciled.append(session)
+                print(f"🔄 Reconciled orphaned session: {session}")
+                
+        except Exception as e:
+            print(f"⚠️  Failed to reconcile session {session}: {e}")
+    
+    if reconciled:
+        conn.commit()
+    
+    return reconciled
+
 def check_conflicts(projects, active_sessions):
     """Check for potential conflicts between queued projects and active sessions"""
     conflicts = []
@@ -55,11 +112,13 @@ def check_conflicts(projects, active_sessions):
         
         # Check if project has sessions that are still active
         if main_session and main_session in active_sessions:
-            conflicts.append({
-                'project_id': project_id,
-                'type': 'active_session',
-                'message': f'Project {project_id} is {status} but session {main_session} is still active'
-            })
+            # Only a conflict if status is NOT processing (e.g., completed/failed but session still running)
+            if status != 'processing':
+                conflicts.append({
+                    'project_id': project_id,
+                    'type': 'active_session',
+                    'message': f'Project {project_id} is {status} but session {main_session} is still active'
+                })
         
         # Check for similar project names that might conflict
         project_name = Path(spec_path).stem.lower()
@@ -301,6 +360,19 @@ Examples:
     
     # Get active tmux sessions
     active_sessions = get_active_tmux_sessions()
+    
+    # Reconcile orphaned sessions (tmux sessions not in queue)
+    reconciled_sessions = reconcile_orphaned_sessions(cursor, conn, projects, active_sessions)
+    
+    # If we reconciled any sessions, re-fetch projects to include them
+    if reconciled_sessions:
+        cursor.execute("""
+            SELECT id, spec_path, status, orchestrator_session, main_session, 
+                   enqueued_at, started_at, completed_at, error_message, fresh_start, priority
+            FROM project_queue 
+            ORDER BY priority DESC, enqueued_at ASC
+        """)
+        projects = cursor.fetchall()
     
     # Check for conflicts
     conflicts = check_conflicts(projects, active_sessions)

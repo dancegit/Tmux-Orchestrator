@@ -447,9 +447,9 @@ Your conversation history has been compacted to maintain performance. Here's you
             compact_msg += f"""
 
 **Quick Status Check:**
-- Run `pwd` to confirm your working directory
-- Run `git status` to check for uncommitted changes  
-- Run `git log --oneline -5` to see recent commits
+- Confirm your current working directory
+- Check for uncommitted changes  
+- Review recent commits if needed
 - Review your role's responsibilities if needed
 
 Please continue with your current work. If you were in the middle of implementing something, complete it."""

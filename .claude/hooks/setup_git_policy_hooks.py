@@ -1,0 +1,1 @@
+../../claude_hooks/setup_git_policy_hooks.py
