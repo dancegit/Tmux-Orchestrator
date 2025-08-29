@@ -3208,22 +3208,22 @@ DO NOT use shortened forms - use exactly: {session_name}:0
                 continue  # Skip to next role
             
             # Schedule for all roles (including orchestrator when enabled, which is default)
-                # Use credit-aware scheduling if available
-                credit_schedule_script = self.tmux_orchestrator_path / 'credit_management' / 'schedule_credit_aware.sh'
-                regular_schedule_script = self.tmux_orchestrator_path / 'schedule_with_note.sh'
-                
-                schedule_script = credit_schedule_script if credit_schedule_script.exists() else regular_schedule_script
-                
-                check_in_interval = getattr(role_config, 'check_in_interval', 30)  # Default to 30 minutes
-                
-                subprocess.run([
-                    str(schedule_script),
-                    str(check_in_interval),
-                    f"{window_name} regular check-in",
-                    f"{session_name}:{window_idx}"
-                ])
-                
-                console.print(f"[green]Scheduled check-in for {window_name} (window {window_idx}) every {check_in_interval} minutes[/green]")
+            # Use credit-aware scheduling if available
+            credit_schedule_script = self.tmux_orchestrator_path / 'credit_management' / 'schedule_credit_aware.sh'
+            regular_schedule_script = self.tmux_orchestrator_path / 'schedule_with_note.sh'
+            
+            schedule_script = credit_schedule_script if credit_schedule_script.exists() else regular_schedule_script
+            
+            check_in_interval = getattr(role_config, 'check_in_interval', 30)  # Default to 30 minutes
+            
+            subprocess.run([
+                str(schedule_script),
+                str(check_in_interval),
+                f"{window_name} regular check-in",
+                f"{session_name}:{window_idx}"
+            ])
+            
+            console.print(f"[green]Scheduled check-in for {window_name} (window {window_idx}) every {check_in_interval} minutes[/green]")
     
     def clean_message_from_mcp_wrappers(self, message: str) -> str:
         """Enhanced MCP wrapper removal to handle all contamination patterns"""

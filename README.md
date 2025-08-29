@@ -504,37 +504,173 @@ echo "Monitor with: tail -f persistent_scheduler.log"
 health_check.sh
 ```
 
-## 📁 Project Directory Structure
+## 📁 System Files & Database Architecture
 
-The Tmux Orchestrator follows a clean, organized structure. Here's where everything belongs:
+The Tmux Orchestrator manages complex multi-agent operations through various databases, configuration files, and runtime components. Understanding these files is crucial for troubleshooting and system management.
 
-### Core Directories
+### 💾 Core Databases & Data Storage
+
+| Database/File | Purpose | Location | Schema |
+|---------------|---------|----------|--------|
+| **`task_queue.db`** | Main SQLite database for all operations | `/home/clauderun/Tmux-Orchestrator/task_queue.db` | Projects, agents, tasks, messages |
+| **`sessions.json`** | Active tmux session tracking | `registry/sessions.json` | Session states and metadata |
+| **`.orchestrator/scheduler.db`** | Legacy scheduler database (deprecated) | `~/.orchestrator/scheduler.db` | Old task scheduling |
+
+#### 🗃️ task_queue.db Schema (Primary Database)
+```sql
+-- Project management
+project_queue         # Queued projects and batch processing
+├── id, spec_path, project_path, status, enqueued_at, started_at, completed_at
+
+-- Agent management  
+agents               # Active agent tracking and health
+├── agent_id, project_name, status, last_heartbeat, ready_since
+
+-- Task scheduling
+tasks               # Scheduled check-ins and recurring tasks
+├── id, session_name, agent_role, window_index, next_run, interval_minutes, note
+
+-- Inter-agent messaging (NEW: hooks-based system)
+message_queue       # Agent-to-agent message delivery via hooks
+├── id, agent_id, message, priority, status, sequence_number, created_at
+
+-- System tracking
+session_events      # Session lifecycle events
+agents_context      # Agent context preservation
+migrations         # Database schema version control
+```
+
+### 🏗️ Project Directory Structure
 
 ```
-Tmux-Orchestrator/
-├── docs/                    # All documentation (except README.md)
-│   ├── INDEX.md            # Documentation index and guide
-│   ├── architecture/       # System design, specs, architectural decisions
-│   ├── guides/            # How-to guides, briefings, implementation instructions
-│   ├── investigations/    # Deep dives, root cause analyses, research
-│   └── troubleshooting/   # Solutions, fixes, issue resolutions
+Tmux-Orchestrator/                    # Main system directory
+├── 📂 docs/                          # All documentation
+│   ├── INDEX.md                      # Documentation index
+│   ├── architecture/                 # System design specs
+│   ├── guides/                      # Implementation guides
+│   ├── investigations/              # Deep-dive analyses
+│   └── troubleshooting/            # Issue resolutions
 │
-├── monitoring/             # Monitoring and compliance tools
-│   ├── compliance_monitor.py
-│   ├── monitored_send_message.sh
-│   └── workflow_monitor.py
+├── 📂 claude_hooks/                  # NEW: Hooks-based messaging system
+│   ├── check_queue.py               # Main message delivery script
+│   ├── tmux_message_sender.py       # Smart tmux communication
+│   ├── cleanup_agent.py            # Session cleanup handler
+│   ├── enqueue_message.py          # Message queuing utility
+│   └── settings.json               # Hook configuration template
 │
-├── registry/               # Runtime data and state
-│   ├── projects/          # Active project registrations
-│   ├── logs/             # System and agent logs
-│   ├── sessions.json     # Active session tracking
-│   └── notes/           # Orchestrator notes
+├── 📂 monitoring/                    # System monitoring tools
+│   ├── compliance_monitor.py        # Process compliance checking
+│   ├── monitored_send_message.sh   # Message delivery tracking
+│   └── workflow_monitor.py         # Workflow state monitoring
 │
-├── locks/                 # Lock files for process coordination
-├── session_states/        # Agent session state persistence
-├── systemd/              # Systemd service configurations
-└── Examples/             # Screenshots and usage examples
+├── 📂 registry/                     # Runtime state and data
+│   ├── projects/                   # Active project registrations
+│   ├── logs/                      # System and agent logs
+│   ├── sessions.json             # Session state tracking
+│   └── notes/                    # Orchestrator notes
+│
+├── 📂 locks/                        # Process coordination locks
+├── 📂 session_states/               # Agent session persistence
+├── 📂 systemd/                      # Service configurations
+├── 📂 Examples/                     # Usage screenshots
+│
+├── 🗄️ task_queue.db                  # PRIMARY DATABASE
+├── 📋 CLAUDE.md                      # Agent coordination rules
+└── 🔧 config.local.sh               # Local system configuration
 ```
+
+### 🔧 Core Configuration Files
+
+| File | Purpose | Contains |
+|------|---------|----------|
+| **`CLAUDE.md`** | Agent briefing & coordination rules | Role definitions, communication protocols, project guidelines |
+| **`config.sh` / `config.local.sh`** | System configuration | Paths, settings, environment variables |
+| **`.claude/settings.json`** | Agent-specific hook configurations | PostToolUse, Stop, PostCompact, SessionStart, SessionEnd hooks |
+| **`systemd/*.service`** | Service definitions | tmux-orchestrator-checkin, tmux-orchestrator-queue services |
+
+### 📊 Project-Specific Files (Per Project)
+
+When a project is created, the following structure is generated:
+
+```
+project-name/                        # Main project directory
+└── project-name-tmux-worktrees/    # Agent worktree directory (sibling to project)
+    ├── orchestrator/               # Orchestrator agent workspace
+    │   ├── .claude/
+    │   │   ├── settings.json      # Agent-specific hook config
+    │   │   └── hooks/            # Symlinks to system hooks
+    │   └── shared/               # Cross-agent shared files
+    ├── project_manager/           # Project Manager workspace
+    ├── developer/                # Developer workspace  
+    ├── tester/                   # Tester workspace
+    └── testrunner/              # TestRunner workspace
+```
+
+### 🔄 Hooks System Files (NEW)
+
+The new hooks-based messaging system uses these components:
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **Message Queue Checker** | `claude_hooks/check_queue.py` | Main script that checks for pending messages |
+| **Message Sender** | `claude_hooks/tmux_message_sender.py` | Smart tmux send-keys delivery system |
+| **Hook Configuration** | `.claude/settings.json` | Defines when hooks trigger (PostToolUse, Stop, etc.) |
+| **Message Enqueuer** | `claude_hooks/enqueue_message.py` | Utility to add messages to queue |
+| **Cleanup Handler** | `claude_hooks/cleanup_agent.py` | Session cleanup on agent termination |
+
+### 🚨 Critical System Files
+
+**⚠️ DO NOT DELETE THESE FILES:**
+
+| File | Critical Because | Recovery Method |
+|------|------------------|-----------------|
+| **`task_queue.db`** | Contains all project and agent state | Automatic recreation, but all history lost |
+| **`CLAUDE.md`** | Agent coordination and briefing rules | System becomes uncoordinated without it |
+| **`scheduler.py`** | Core scheduling daemon | No check-ins or project processing |
+| **`auto_orchestrate.py`** | Main project creation entry point | Cannot start new projects |
+| **systemd service files** | Persistent system operation | Manual process management required |
+
+### 🔍 Database Locations by Use Case
+
+```bash
+# Main system database (ALL operations)
+/home/clauderun/Tmux-Orchestrator/task_queue.db
+
+# Project-specific databases (hooks system)
+/home/clauderun/project-worktrees/orchestrator/task_queue.db  # Symlink to main
+
+# Legacy scheduler database (deprecated, but may exist)
+/home/clauderun/.orchestrator/scheduler.db                    # Old format
+
+# Session state files
+/home/clauderun/Tmux-Orchestrator/registry/sessions.json     # Active sessions
+/home/clauderun/Tmux-Orchestrator/session_states/           # Individual state files
+```
+
+### 📋 File Usage by System Component
+
+| Component | Files Used | Purpose |
+|-----------|------------|---------|
+| **Scheduler Daemon** | `task_queue.db`, `scheduler.py` | Task scheduling and execution |
+| **Auto Orchestrator** | `task_queue.db`, `CLAUDE.md`, project worktrees | Project creation and management |
+| **Hooks System** | `task_queue.db`, `.claude/settings.json`, `claude_hooks/*.py` | Inter-agent messaging |
+| **Project Manager** | Project-specific worktree, `shared/` directory | Cross-agent coordination |
+| **Monitoring** | `registry/logs/`, `sessions.json`, `task_queue.db` | System health and status |
+
+### 🧹 Maintenance & Cleanup
+
+**Safe to clean:**
+- `registry/logs/` (old log files)
+- `locks/` (stale lock files)
+- Temporary worktree directories (after project completion)
+
+**Never clean:**
+- `task_queue.db` (primary database)
+- `CLAUDE.md` (agent coordination rules)
+- Active project worktrees
+- `systemd/` service files
+
+This file structure enables the Tmux Orchestrator's autonomous multi-agent operations, persistent scheduling, and robust project lifecycle management.
 
 ### File Organization Guidelines
 
