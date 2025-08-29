@@ -26,6 +26,10 @@ def test_database_setup():
     if test_db.exists():
         test_db.unlink()
     
+    # Create an empty database file
+    conn = sqlite3.connect(test_db)
+    conn.close()
+    
     # Run migration
     result = subprocess.run([
         'python3', 'migrate_queue_db.py',
@@ -43,7 +47,7 @@ def test_database_setup():
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = [row[0] for row in cursor.fetchall()]
     
-    expected_tables = ['message_queue', 'agents', 'sequence_generator', 'migrations']
+    expected_tables = ['message_queue', 'agents', 'sequence_generator', 'migrations', 'agent_context', 'session_events']
     for table in expected_tables:
         if table in tables:
             print(f"✅ Table '{table}' created")
@@ -214,7 +218,6 @@ def test_tmux_messenger_integration():
                   capture_output=True)
     
     os.environ['QUEUE_DB_PATH'] = str(test_db)
-    os.environ['ENABLE_HOOKS_QUEUE'] = 'true'
     
     # Import with modified sys.path
     from tmux_messenger_hooks import TmuxMessenger
@@ -245,6 +248,55 @@ def test_tmux_messenger_integration():
     finally:
         test_db.unlink()
     
+    return True
+
+def test_postcompact_rebriefing():
+    """Test PostCompact rebriefing functionality."""
+    print("\n=== Testing PostCompact Rebriefing ===")
+    
+    # Create test database
+    test_db = Path("test_queue.db")
+    subprocess.run(['python3', 'migrate_queue_db.py', '--db-path', str(test_db)],
+                  capture_output=True)
+    
+    os.environ['QUEUE_DB_PATH'] = str(test_db)
+    
+    # Test rebriefing trigger
+    result = subprocess.run([
+        'python3', 'claude_hooks/check_queue_enhanced.py',
+        '--agent', 'test-session:1',
+        '--rebrief',
+        '--no-validation'
+    ], capture_output=True, text=True)
+    
+    if result.returncode == 0:
+        output = json.loads(result.stdout)
+        if output.get('status') == 'rebrief_queued':
+            print("✅ Rebrief message queued successfully")
+        else:
+            print(f"❌ Unexpected status: {output}")
+            test_db.unlink()
+            return False
+    else:
+        print(f"❌ Rebrief failed: {result.stderr}")
+        test_db.unlink()
+        return False
+    
+    # Check that a message was queued
+    conn = sqlite3.connect(test_db)
+    cursor = conn.cursor()
+    cursor.execute("SELECT message FROM message_queue WHERE agent_id = 'test-session:1' AND priority > 90")
+    messages = cursor.fetchall()
+    conn.close()
+    
+    if messages and any('Context Restoration After Compaction' in msg[0] for msg in messages):
+        print("✅ Rebriefing message found in queue")
+    else:
+        print("❌ No rebriefing message found")
+        test_db.unlink()
+        return False
+    
+    test_db.unlink()
     return True
 
 def test_end_to_end_flow():
@@ -310,6 +362,7 @@ def main():
         ("Cleanup Script", test_cleanup_script),
         ("Hook Setup", test_hook_setup),
         ("TmuxMessenger Integration", test_tmux_messenger_integration),
+        ("PostCompact Rebriefing", test_postcompact_rebriefing),
         ("End-to-End Flow", test_end_to_end_flow)
     ]
     
