@@ -2034,7 +2034,7 @@ CLAUDE_EOF
         self.enable_mcp_servers_in_claude_config(worktree_path)
         
         # Set up hooks for the restarted agent
-        agent_id = f"{agent.session_name}:{agent.window_index}"
+        agent_id = f"{session_state.session_name}:{agent.window_index}"
         try:
             setup_agent_hooks(
                 worktree_path=worktree_path,
@@ -2440,18 +2440,9 @@ Please provide a brief status update on your current work and any blockers."""
                 self.enable_mcp_servers_in_claude_config(worktree_path)
                 
                 # Set up hooks for this agent
-                agent_id = f"{session_name}:{window_idx}"
-                try:
-                    setup_agent_hooks(
-                        worktree_path=worktree_path,
-                        agent_id=agent_id,
-                        orchestrator_path=self.tmux_orchestrator_path,
-                        db_path=self.tmux_orchestrator_path / 'task_queue.db'
-                    )
-                    console.print(f"[green]✓ Set up hooks for {role_key} agent[/green]")
-                except Exception as e:
-                    console.print(f"[yellow]Warning: Could not set up hooks for {role_key}: {e}[/yellow]")
-                    # Continue without hooks - not critical for agent operation
+                # Note: We don't have the session name yet since we're setting up worktrees
+                # before creating the tmux session. Hooks will be configured after session creation.
+                # This is just preparation for when the session is created.
                 
                 # Set up sandbox symlinks for this role
                 active_roles = [role for _, role in roles_to_deploy]
@@ -2652,6 +2643,20 @@ This file is automatically read by Claude Code when working in this directory.
             console.print(f"[green]✓ Set UV environment for {role_key} in window {window_idx}[/green]")
         except subprocess.CalledProcessError as e:
             console.print(f"[yellow]Warning: Could not set UV environment for {role_key}: {e}[/yellow]")
+        
+        # Set up hooks for this agent now that we have the session info
+        if role_key in self.worktree_paths:
+            agent_id = f"{session_name}:{window_idx}"
+            try:
+                setup_agent_hooks(
+                    worktree_path=self.worktree_paths[role_key],
+                    agent_id=agent_id,
+                    orchestrator_path=self.tmux_orchestrator_path,
+                    db_path=self.tmux_orchestrator_path / 'task_queue.db'
+                )
+                console.print(f"[green]✓ Set up hooks for {role_key} agent[/green]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not set up hooks for {role_key}: {e}[/yellow]")
     
     def sanitize_session_name(self, name: str) -> str:
         """Sanitize a name to be safe for tmux session names"""
