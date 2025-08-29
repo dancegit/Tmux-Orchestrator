@@ -130,10 +130,42 @@ export ORCHESTRATOR_PATH="{orchestrator_path}"
     os.chmod(env_file, 0o755)
     logger.info(f"Created environment file: {env_file}")
     
-    # Set up git hooks if this is a git repository
-    setup_git_hooks(worktree_path, agent_id, orchestrator_path)
+    # Set up git hooks if this is an agent worktree (not the main orchestrator repo)
+    if is_agent_worktree(worktree_path, orchestrator_path):
+        setup_git_hooks(worktree_path, agent_id, orchestrator_path)
+    else:
+        logger.info(f"Skipping git hooks installation - not an agent worktree: {worktree_path}")
     
     return True
+
+def is_agent_worktree(worktree_path: Path, orchestrator_path: Path) -> bool:
+    """Check if this is an agent worktree (not the main orchestrator repository)"""
+    try:
+        # If the worktree path is the same as orchestrator path, it's the main repo
+        if worktree_path.resolve() == orchestrator_path.resolve():
+            return False
+        
+        # Check if this is a git worktree (has .git file pointing to main repo)
+        git_file = worktree_path / '.git'
+        if git_file.is_file():
+            with open(git_file) as f:
+                content = f.read().strip()
+                if content.startswith('gitdir:'):
+                    return True  # This is a git worktree
+        
+        # Check if this directory name suggests it's an agent worktree
+        worktree_name = worktree_path.name
+        agent_patterns = ['-tmux-worktrees', '-worktrees', 'developer/', 'tester/', 'orchestrator/', 'pm/', 'project-manager/']
+        
+        for pattern in agent_patterns:
+            if pattern in str(worktree_path):
+                return True
+                
+        return False
+        
+    except Exception as e:
+        logger.warning(f"Could not determine if {worktree_path} is an agent worktree: {e}")
+        return False  # Default to not installing hooks if uncertain
 
 def setup_git_hooks(worktree_path: Path, agent_id: str, orchestrator_path: Path):
     """Install git hooks in agent worktrees for policy enforcement"""
