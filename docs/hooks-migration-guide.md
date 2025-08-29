@@ -49,10 +49,11 @@ from tmux_messenger_hooks import TmuxMessenger
 
 ### Phase 2: Testing (Parallel Running)
 
-#### 1. Enable Feature Flag
+#### 1. Verify Hooks Support
 
 ```bash
-export ENABLE_HOOKS_QUEUE=true
+# Check that your Claude installation supports hooks
+claude --version
 ```
 
 #### 2. Configure Test Agent
@@ -75,7 +76,7 @@ cat > settings.json << 'EOF'
         "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue_enhanced.py"
       }]
     }],
-    "PreCompact": [{
+    "PostCompact": [{
       "matcher": ".*",
       "hooks": [{
         "type": "command",
@@ -136,7 +137,7 @@ Replace direct tmux commands:
 # Old way
 self.messenger.send_message(target, message)
 
-# New way (automatic with ENABLE_HOOKS_QUEUE=true)
+# New way (automatic - hooks are now default)
 self.messenger.send_message(target, message)  # Same API!
 ```
 
@@ -174,11 +175,11 @@ Triggers after every tool completion to check for messages:
 - Maintains FIFO ordering
 - Respects priorities
 
-### PreCompact Hook
-Triggers before context window compaction:
+### PostCompact Hook
+Triggers after context window compaction:
 - Queues rebriefing message with CLAUDE.md rules
-- Preserves recent activity summary
-- Prevents context loss
+- Restores recent activity summary
+- Ensures proper context after compaction
 
 ### Notification Hook
 Monitors for error patterns:
@@ -222,8 +223,8 @@ tail -f /var/log/claude_hooks.log
 
 #### 3. Context Loss on Compact
 ```bash
-# Verify PreCompact hook configured
-grep -A5 PreCompact .claude/settings.json
+# Verify PostCompact hook configured
+grep -A5 PostCompact .claude/settings.json
 
 # Check rebriefing messages queued
 sqlite3 task_queue.db "SELECT * FROM message_queue WHERE message LIKE '%REBRIEF%';"
@@ -245,9 +246,10 @@ tmux list-windows -t session-name
 
 If issues arise:
 
-1. **Disable Hooks**:
+1. **Revert to Previous Version**:
 ```bash
-export ENABLE_HOOKS_QUEUE=false
+# Rollback to previous release
+git checkout <previous-version-tag>
 ```
 
 2. **Re-enable Push Monitoring**:

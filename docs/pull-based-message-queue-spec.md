@@ -70,7 +70,7 @@ Event-driven hooks configured in `.claude/` workspace directories per agent:
 - **SessionStart**: Initializes queue checking for new agents  
 - **SessionEnd**: Cleanup and message requeuing on agent shutdown
 - **UserPromptSubmit**: Additional trigger for queue checking
-- **PreCompact**: Triggers before context compaction for agent rebriefing
+- **PostCompact**: Triggers after context compaction for agent rebriefing
 - **Notification**: Can trigger on specific error patterns for auto-recovery
 
 **Critical Architecture Note**: Agents run in tmux windows (not separate sessions), so agent identification uses `session:window` format (e.g., `project-session:2`) rather than session names alone.
@@ -111,7 +111,7 @@ Enhanced script executed by hooks to pull messages:
 - Uses file locking for concurrent access safety
 - Supports different FIFO scopes: per-agent, per-project, or global
 - **NEW**: Handles rebriefing mode for context restoration
-- **NEW**: Injects CLAUDE.md rules during PreCompact events
+- **NEW**: Injects CLAUDE.md rules during PostCompact events
 
 Features:
 - Transaction-based to prevent race conditions
@@ -169,7 +169,7 @@ Replace all direct `tmux send-keys` with DB inserts:
 - `Stop` - When Claude becomes idle (secondary check + direct delivery mode)
 - `SessionStart` - Initialize queue checking and register agent
 - `SessionEnd` - Cleanup and requeue unprocessed messages
-- `PreCompact` - Trigger rebriefing before context compaction
+- `PostCompact` - Trigger rebriefing after context compaction
 - `Notification` - Monitor for errors and trigger recovery
 
 **Message Processing Flow:**
@@ -264,9 +264,9 @@ LIMIT 1;
 
 1. **Development Phase**:
    - Create feature branch with all changes
-   - Add `ENABLE_HOOKS_QUEUE` flag (initially false)
-   - Install and configure Claude.dev runtime
-   - Implement all components without affecting production
+   - Install and configure Claude Code runtime
+   - Implement all components
+   - Test thoroughly before deployment
 
 2. **Testing Phase**:
    - Deploy to staging environment with Claude.dev
@@ -275,10 +275,10 @@ LIMIT 1;
    - Test failure scenarios (hook failures, API issues)
 
 3. **Cutover Phase**:
-   - Migrate tmux sessions from `claude` to `claude-dev`
-   - Deploy code with hooks enabled
+   - Deploy code with hooks as default behavior
    - Monitor hook execution and queue drainage
-   - Rollback plan: Revert to standard Claude CLI
+   - Legacy push mode available as fallback if needed
+   - Rollback plan: Revert to previous version
 
 ### Safety Measures
 
@@ -321,10 +321,10 @@ LIMIT 1;
    - ✅ `enqueue_message.py` - Message enqueueing module
 
 2. **Agent Rebriefing**:
-   - ✅ PreCompact hook triggers context restoration
+   - ✅ PostCompact hook triggers context restoration
    - ✅ CLAUDE.md rules automatically reinjected
    - ✅ Recent activity summary preserved
-   - ✅ Configurable rebriefing intervals
+   - ✅ Context restored after compaction completes
 
 3. **Error Recovery**:
    - ✅ Notification hook monitors for errors
@@ -369,12 +369,10 @@ LIMIT 1;
 ## Configuration
 
 ### Environment Variables
-- `ENABLE_HOOKS_QUEUE`: Enable/disable hooks-based system
-- `QUEUE_DB_PATH`: Path to SQLite database
-- `CLAUDE_PROJECT_DIR`: Set to agent's worktree path
-- `ANTHROPIC_API_KEY`: API key for Claude.dev runtime
-- `MESSAGE_TIMEOUT`: Seconds before requeuing pulled messages
-- `DIRECT_DELIVERY_TIMEOUT`: Seconds before clearing ready status
+- `QUEUE_DB_PATH`: Path to SQLite database (default: /home/clauderun/Tmux-Orchestrator/task_queue.db)
+- `CLAUDE_PROJECT_DIR`: Set to agent's worktree path (auto-set by hooks)
+- `MESSAGE_TIMEOUT`: Seconds before requeuing pulled messages (default: 300)
+- `DIRECT_DELIVERY_TIMEOUT`: Seconds before clearing ready status (default: 30)
 
 ### Workspace Configuration Structure
 
@@ -426,7 +424,7 @@ LIMIT 1;
         ]
       }
     ],
-    "PreCompact": [
+    "PostCompact": [
       {
         "matcher": ".*",
         "hooks": [
