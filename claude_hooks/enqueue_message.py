@@ -22,8 +22,17 @@ def ensure_database_exists():
     """Ensure the database and tables exist."""
     db_path = Path(DB_PATH)
     if not db_path.exists():
-        logger.error(f"Database not found at {DB_PATH}")
-        raise FileNotFoundError(f"Database not found at {DB_PATH}")
+        # Try to create it by running migration
+        logger.warning(f"Database not found at {DB_PATH}, attempting to create...")
+        import subprocess
+        result = subprocess.run([
+            'python3', str(Path(__file__).parent.parent / 'migrate_queue_db.py'),
+            '--db-path', str(db_path)
+        ], capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logger.error(f"Failed to create database: {result.stderr}")
+            raise FileNotFoundError(f"Database not found at {DB_PATH} and failed to create")
     
     # Check if tables exist
     conn = sqlite3.connect(DB_PATH, timeout=TIMEOUT)

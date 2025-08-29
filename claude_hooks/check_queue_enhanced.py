@@ -312,8 +312,8 @@ def main():
                        help="Bootstrap mode for session initialization")
     parser.add_argument('--check-idle', action='store_true', 
                        help="Check queue in idle mode and set ready flag")
-    parser.add_argument('--compact-trigger', action='store_true',
-                       help="Handle PreCompact event")
+    parser.add_argument('--rebrief', action='store_true',
+                       help="Handle PostCompact event for rebriefing")
     parser.add_argument('--scope', default='agent', 
                        choices=['agent', 'project', 'global'], 
                        help="FIFO scope for message selection")
@@ -321,12 +321,12 @@ def main():
                        help="Skip agent ID validation (for testing)")
     args = parser.parse_args()
 
-    logger.info(f"Hook triggered for agent {args.agent} - bootstrap:{args.bootstrap}, idle:{args.check_idle}, compact:{args.compact_trigger}")
+    logger.info(f"Hook triggered for agent {args.agent} - bootstrap:{args.bootstrap}, idle:{args.check_idle}, rebrief:{args.rebrief}")
 
-    # Handle compact trigger specially
-    if args.compact_trigger:
+    # Handle PostCompact rebriefing specially
+    if args.rebrief:
         handle_compact_trigger(args.agent)
-        print(json.dumps({"status": "compact_handled", "agent_id": args.agent}))
+        print(json.dumps({"status": "rebrief_queued", "agent_id": args.agent}))
         return
 
     # Validate agent_id against current tmux context

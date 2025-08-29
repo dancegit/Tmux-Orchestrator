@@ -62,6 +62,9 @@ from email_notifier import get_email_notifier
 from completion_manager import CompletionManager
 # Import git commit manager
 from git_commit_manager import GitCommitManager
+# Import hooks-based messaging system
+from tmux_messenger_hooks import TmuxMessenger
+from setup_agent_hooks import setup_agent_hooks
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -2030,6 +2033,19 @@ CLAUDE_EOF
         self.setup_mcp_for_worktree(worktree_path)
         self.enable_mcp_servers_in_claude_config(worktree_path)
         
+        # Set up hooks for the restarted agent
+        agent_id = f"{agent.session_name}:{agent.window_index}"
+        try:
+            setup_agent_hooks(
+                worktree_path=worktree_path,
+                agent_id=agent_id,
+                orchestrator_path=self.tmux_orchestrator_path,
+                db_path=self.tmux_orchestrator_path / 'task_queue.db'
+            )
+            console.print(f"[green]✓ Set up hooks for {agent.role} agent[/green]")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not set up hooks for {agent.role}: {e}[/yellow]")
+        
         console.print(f"[green]✓ Created worktree for {agent.role} at {worktree_path}[/green]")
         return True
 
@@ -2422,6 +2438,20 @@ Please provide a brief status update on your current work and any blockers."""
                 
                 # Enable MCP servers in Claude configuration for this worktree
                 self.enable_mcp_servers_in_claude_config(worktree_path)
+                
+                # Set up hooks for this agent
+                agent_id = f"{session_name}:{window_idx}"
+                try:
+                    setup_agent_hooks(
+                        worktree_path=worktree_path,
+                        agent_id=agent_id,
+                        orchestrator_path=self.tmux_orchestrator_path,
+                        db_path=self.tmux_orchestrator_path / 'task_queue.db'
+                    )
+                    console.print(f"[green]✓ Set up hooks for {role_key} agent[/green]")
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Could not set up hooks for {role_key}: {e}[/yellow]")
+                    # Continue without hooks - not critical for agent operation
                 
                 # Set up sandbox symlinks for this role
                 active_roles = [role for _, role in roles_to_deploy]
