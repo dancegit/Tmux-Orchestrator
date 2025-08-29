@@ -14,6 +14,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from tmux_message_sender import TmuxMessageSender
+from git_policy_enforcer import GitPolicyEnforcer
 
 # Configure logging
 log_dir = Path(__file__).parent.parent / 'logs' / 'hooks'
@@ -214,6 +215,63 @@ def get_next_message(cursor, agent_id: str, scope: str = 'agent'):
 
     cursor.execute(query, params)
     return cursor.fetchone()
+
+def check_git_policy_compliance(cursor, agent_id: str) -> dict:
+    """Check git workflow policy compliance after tool use"""
+    try:
+        # Determine worktree path from agent_id
+        worktree_path = Path.cwd()  # Assumes hook runs in worktree directory
+        
+        # Extract agent role from agent_id (session:window format)
+        session_name = agent_id.split(':')[0]
+        # Try to extract role from session name patterns
+        if 'orchestrator' in session_name:
+            agent_role = 'orchestrator'
+        elif 'developer' in session_name or 'dev' in session_name:
+            agent_role = 'developer'
+        elif 'tester' in session_name or 'test' in session_name:
+            agent_role = 'tester'
+        elif 'project-manager' in session_name or 'pm' in session_name:
+            agent_role = 'project-manager'
+        else:
+            agent_role = 'agent'  # Default fallback
+        
+        # Initialize enforcer and check policies
+        enforcer = GitPolicyEnforcer(str(worktree_path), agent_role)
+        policy_result = enforcer.check_all_policies()
+        
+        # Process violations and queue messages for high-priority ones
+        for violation in policy_result['violations']:
+            if violation['severity'] in ['critical', 'high']:
+                # Queue high-priority policy violation message
+                cursor.execute("""
+                UPDATE sequence_generator 
+                SET current_value = current_value + 1 
+                WHERE name = 'message_sequence';
+                """)
+                cursor.execute("SELECT current_value FROM sequence_generator WHERE name = 'message_sequence';")
+                seq_num = cursor.fetchone()[0]
+                
+                priority = 80 if violation['severity'] == 'critical' else 70
+                
+                cursor.execute("""
+                INSERT INTO message_queue 
+                (agent_id, message, priority, sequence_number, status)
+                VALUES (?, ?, ?, ?, 'pending');
+                """, (agent_id, violation['message'], priority, seq_num))
+                
+                logger.info(f"Queued {violation['severity']} git policy violation message for {agent_id}: {violation['type']}")
+                
+                # Handle auto-fix if available and enabled
+                if violation.get('auto_fix_available') and violation['type'] == 'commit_interval':
+                    if enforcer.perform_auto_commit("policy enforcement"):
+                        logger.info(f"Auto-committed for {agent_id} due to commit interval violation")
+        
+        return policy_result
+        
+    except Exception as e:
+        logger.error(f"Error checking git policy compliance for {agent_id}: {e}")
+        return {'violations': [], 'compliant': True, 'error': str(e)}
 
 def update_agent_status(cursor, agent_id: str, status: str):
     """Update agent status in the agents table."""
@@ -470,6 +528,11 @@ def main():
     try:
         # Transaction for atomicity
         with conn:
+            # Check git policy compliance (except during bootstrap and MCP approval)
+            if not args.bootstrap and not args.rebrief:
+                policy_result = check_git_policy_compliance(cursor, args.agent)
+                logger.info(f"Git policy check for {args.agent}: {len(policy_result['violations'])} violations found")
+
             # Implicit ACK for previous message (except in bootstrap)
             if not args.bootstrap:
                 mark_previous_as_delivered(cursor, args.agent)
