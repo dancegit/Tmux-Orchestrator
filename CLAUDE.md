@@ -2479,45 +2479,64 @@ When a command fails:
 
 ### Communication with Claude Agents
 
-#### 🎯 IMPORTANT: Always Use Monitored Messaging for Compliance
+#### 🎯 SMART MESSAGING: Window Name Resolution (NEW!)
 
-**DO NOT use send-claude-message.sh directly anymore!** Use the monitored wrapper for compliance tracking:
+**Use window names instead of numbers to prevent targeting errors!** The new smart messaging system automatically resolves role names to window numbers:
 
 ```bash
-# Use the shortcut command (REQUIRED)
-scm session:window "Your message here"
+# NEW: Use role names instead of window numbers (RECOMMENDED)
+scm session-name:TestRunner "Run the test suite"
+scm session-name:Developer "Status update needed"
+scm session-name:Project-Manager "Review required"
 
-# Or if scm is not in PATH
-./send-monitored-message.sh session:window "Your message"
-
-# OLD METHOD (DO NOT USE):
-# ❌ ./send-claude-message.sh session:window "message"
+# OLD: Prone to errors if window numbers change
+scm session-name:4 "Run the test suite"  # Error-prone!
 ```
 
-**Why Monitored Messaging?**
-- Automatic compliance checking against CLAUDE.md rules
-- Logs all communications for audit trail
-- Detects hub-and-spoke violations
-- Enables workflow analysis
-- Provides orchestrator visibility
+**Why Use Window Names?**
+- **Prevents Targeting Errors**: No more sending messages to wrong windows
+- **Self-Documenting**: Clear who you're messaging 
+- **Automatic Resolution**: System finds the correct window number
+- **Error Reporting**: Shows available roles if name not found
 
-#### Using Monitored Messaging (scm)
+#### 📝 Messaging Commands Reference
+
+**Main Commands:**
 ```bash
-# Basic usage - ALWAYS use this for compliance
-scm <target> "message"
+# Smart messaging (window name resolution + monitoring)
+scm <session:role_name> "Your message"
 
-# Examples:
-# Send to a window
-scm agentic-seek:3 "Hello Claude!"
+# Legacy fallback (if needed)
+./send-monitored-message.sh session:window_number "message"
+```
 
-# Send to a specific pane in split-screen
-scm tmux-orc:0.1 "Message to pane 1"
+**Helper Scripts (Available in Agent Worktrees):**
+```bash
+# Quick messaging to specific roles
+./scripts/msg_orchestrator.sh "Task completed"
+./scripts/msg_developer.sh "Need code review"
+./scripts/msg_testrunner.sh "Please run tests"
 
-# Send complex instructions
-scm glacier-backend:0 "Please check the database schema for the campaigns table and verify all columns are present"
+# General messaging script
+./scripts/msg.sh TestRunner "Execute test suite"
+./scripts/msg.sh Developer "Implementation ready"
 
-# Send status update requests
-scm ai-chat:2 "STATUS UPDATE: What's your current progress on the authentication implementation?"
+# View team members
+./scripts/list_team.sh  # Shows all available roles
+```
+
+#### Smart Messaging Examples
+```bash
+# ✅ CORRECT: Use role names (NEW)
+scm orchestrator-mobile-ux-impl-cd43aa77:TestRunner "Execute the security tests"
+scm orchestrator-mobile-ux-impl-cd43aa77:Developer "Implementation completed"
+scm orchestrator-mobile-ux-impl-cd43aa77:Project-Manager "Ready for review"
+
+# ⚠️  LEGACY: Window numbers (error-prone)
+scm orchestrator-mobile-ux-impl-cd43aa77:4 "Execute tests"  # Who is window 4?
+
+# 🔍 DISCOVERY: Find available roles
+tmux list-windows -t session-name -F '#{window_index}: #{window_name}'
 ```
 
 #### Why Use Monitored Messaging?

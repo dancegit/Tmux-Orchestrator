@@ -1,4 +1,6 @@
 #!/bin/bash
-# Wrapper to use monitored messaging
+# Wrapper to use smart monitored messaging with window name resolution
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-"$SCRIPT_DIR/monitoring/monitored_send_message.sh" "$@"
+
+# Use the smart send message script for window name resolution
+"$SCRIPT_DIR/monitoring/smart_send_message.sh" "$@"

@@ -468,8 +468,102 @@ class PathManager:
                 
             logger.info(f"Generated orchestrator_config.json with agent_id: {agent_id}")
             
+            # Generate helper messaging scripts for this agent
+            self._create_messaging_helpers(role, worktree_path, orchestrator.unique_session_name)
+            
         except Exception as e:
             logger.warning(f"Failed to setup Claude config for {role}: {e}")
+    
+    def _create_messaging_helpers(self, role: str, worktree_path: Path, session_name: str):
+        """Create helper scripts for agents to message other roles easily."""
+        try:
+            scripts_dir = worktree_path / 'scripts'
+            scripts_dir.mkdir(exist_ok=True)
+            
+            # Get all possible role names for this orchestration
+            common_roles = ['Orchestrator', 'Project-Manager', 'Developer', 'Tester', 'TestRunner', 
+                           'Researcher', 'DevOps', 'SysAdmin', 'SecurityOps', 'NetworkOps', 
+                           'MonitoringOps', 'DatabaseOps']
+            
+            # Create individual messaging scripts for each common role
+            for target_role in common_roles:
+                if target_role.lower() == role.lower():
+                    continue  # Skip self-messaging script
+                
+                script_name = f"msg_{target_role.lower().replace('-', '_')}.sh"
+                script_path = scripts_dir / script_name
+                
+                script_content = f"""#!/bin/bash
+# Quick message to {target_role}
+# Usage: ./msg_{target_role.lower().replace('-', '_')}.sh "Your message here"
+
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <message>"
+    echo "Example: $0 'Status update: Feature completed'"
+    exit 1
+fi
+
+MESSAGE="$*"
+ORCHESTRATOR_PATH="{self.tmux_orchestrator_path}"
+
+# Use the smart messaging system
+"$ORCHESTRATOR_PATH/monitoring/smart_send_message.sh" "{session_name}:{target_role}" "$MESSAGE"
+"""
+                
+                with open(script_path, 'w') as f:
+                    f.write(script_content)
+                
+                script_path.chmod(0o755)
+            
+            # Create a general messaging script
+            general_script = scripts_dir / 'msg.sh'
+            general_content = f"""#!/bin/bash
+# General messaging script
+# Usage: ./msg.sh <role_name> "Your message"
+# Examples:
+#   ./msg.sh Orchestrator "Task completed"
+#   ./msg.sh Developer "Need clarification on requirements"
+
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 <role_name> <message>"
+    echo "Available roles: Orchestrator, Project-Manager, Developer, Tester, TestRunner, etc."
+    echo "Examples:"
+    echo "  $0 Orchestrator 'Task completed successfully'"
+    echo "  $0 Developer 'Need input on API design'"
+    exit 1
+fi
+
+ROLE="$1"
+shift
+MESSAGE="$*"
+ORCHESTRATOR_PATH="{self.tmux_orchestrator_path}"
+
+# Use the smart messaging system
+"$ORCHESTRATOR_PATH/monitoring/smart_send_message.sh" "{session_name}:$ROLE" "$MESSAGE"
+"""
+            
+            with open(general_script, 'w') as f:
+                f.write(general_content)
+            
+            general_script.chmod(0o755)
+            
+            # Create a convenience script to list available windows
+            list_script = scripts_dir / 'list_team.sh'
+            list_content = f"""#!/bin/bash
+# List all team members (tmux windows) in this session
+echo "🏢 Team members in session {session_name}:"
+tmux list-windows -t "{session_name}" -F '  {{window_index}}: {{window_name}}'
+"""
+            
+            with open(list_script, 'w') as f:
+                f.write(list_content)
+            
+            list_script.chmod(0o755)
+            
+            logger.info(f"Created messaging helper scripts for {role} in {scripts_dir}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to create messaging helpers for {role}: {e}")
     
     def _create_relative_symlink(self, link_path: Path, target_path: Path, base_path: Path) -> bool:
         """Create a relative symlink from link_path to target_path, relative to base_path."""
