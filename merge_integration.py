@@ -820,48 +820,70 @@ def check_integration_merge_status(integration: Dict[str, any]) -> tuple[str, st
         if not project_path.exists() or not (project_path / '.git').exists():
             return "unknown", "No git repo"
             
-        # Check for integration tags (created by successful merges)
-        tag_result = run_git_command(['tag', '--list', 'integration-*'], str(project_path))
-        if tag_result.returncode == 0 and tag_result.stdout.strip():
-            # Check if any recent integration tags exist (within last 7 days)
-            recent_tags = []
-            for tag in tag_result.stdout.strip().split('\n'):
-                if tag.strip():
-                    # Get tag date
-                    tag_date_result = run_git_command(['log', '-1', '--format=%ct', tag.strip()], str(project_path))
-                    if tag_date_result.returncode == 0:
-                        try:
-                            tag_timestamp = int(tag_date_result.stdout.strip())
-                            days_ago = (time.time() - tag_timestamp) / 86400  # seconds to days
-                            if days_ago <= 7:  # Within last week
-                                recent_tags.append((tag.strip(), days_ago))
-                        except ValueError:
-                            pass
-            
-            if recent_tags:
-                most_recent = min(recent_tags, key=lambda x: x[1])
-                days = int(most_recent[1])
-                return "merged", f"Tag: {most_recent[0][:20]} ({days}d ago)"
-        
-        # Check for merge commits in recent history
-        commit_hash = integration.get('latest_commit_hash', '')[:8]
+        # Most important check: see if this specific commit exists in ANY branch of the main project
+        commit_hash = integration.get('latest_commit_hash', '')
         if commit_hash:
-            # Search for merge commits that might contain this hash
-            merge_result = run_git_command(['log', '--oneline', '--merges', '-10'], str(project_path))
-            if merge_result.returncode == 0:
-                for line in merge_result.stdout.split('\n'):
-                    if commit_hash.lower() in line.lower() or 'integration' in line.lower():
-                        return "merged", f"Found merge commit"
+            # Check if this specific commit exists in the main project
+            check_result = run_git_command(['cat-file', '-t', commit_hash], str(project_path))
+            if check_result.returncode != 0:
+                # Commit doesn't exist in main project at all
+                return "not_merged", "Ready to merge"
+            
+            # If commit exists, check which branches contain it (excluding worktree-specific branches)
+            branch_result = run_git_command(['branch', '--contains', commit_hash], str(project_path))
+            if branch_result.returncode == 0 and branch_result.stdout.strip():
+                # Filter out worktree-specific branches
+                branches = [b.strip().strip('*').strip() for b in branch_result.stdout.strip().split('\n')]
+                non_worktree_branches = [b for b in branches 
+                                       if not any(role in b for role in ['testrunner', 'developer', 'tester', 'orchestrator', 'project_manager'])]
+                
+                if non_worktree_branches:
+                    # Found in a non-worktree branch, likely merged
+                    return "merged", f"In branch: {non_worktree_branches[0][:15]}"
+            
+            # Check if there's a merge commit that includes this commit
+            merge_result = run_git_command(['log', '--oneline', '--merges', '--grep=integration', '-20'], str(project_path))
+            if merge_result.returncode == 0 and merge_result.stdout.strip():
+                # Check each merge commit to see if it includes our commit
+                for line in merge_result.stdout.strip().split('\n'):
+                    merge_hash = line.split()[0]
+                    # Check if our commit is an ancestor of this merge
+                    ancestor_result = run_git_command(['merge-base', '--is-ancestor', commit_hash, merge_hash], str(project_path))
+                    if ancestor_result.returncode == 0:
+                        # Our commit is included in this merge
+                        return "merged", f"Via merge: {merge_hash[:8]}"
         
-        # Check if the worktree branch has been merged
-        worktree_path = Path(integration.get('integration_worktree', ''))
-        if worktree_path.exists():
-            branch_info = integration.get('latest_branch', '')
-            if branch_info:
-                # Check if this branch exists in main project and has been merged
-                branch_result = run_git_command(['branch', '--merged', 'main'], str(project_path))
-                if branch_result.returncode == 0 and branch_info in branch_result.stdout:
-                    return "merged", "Branch merged"
+        # Fallback: Check for integration tags that might have included this work
+        # But only if they're AFTER the project completion time
+        completed_at = integration.get('completed_at')
+        if completed_at:
+            try:
+                # Parse completion time
+                if isinstance(completed_at, (int, float)):
+                    completion_timestamp = completed_at
+                else:
+                    from datetime import datetime
+                    completion_dt = datetime.fromisoformat(str(completed_at).replace('Z', '+00:00'))
+                    completion_timestamp = completion_dt.timestamp()
+                
+                # Check integration tags
+                tag_result = run_git_command(['tag', '--list', 'integration-*', '--sort=-creatordate'], str(project_path))
+                if tag_result.returncode == 0 and tag_result.stdout.strip():
+                    for tag in tag_result.stdout.strip().split('\n')[:5]:  # Check last 5 tags
+                        if tag.strip():
+                            # Get tag timestamp
+                            tag_date_result = run_git_command(['log', '-1', '--format=%ct', tag.strip()], str(project_path))
+                            if tag_date_result.returncode == 0:
+                                try:
+                                    tag_timestamp = int(tag_date_result.stdout.strip())
+                                    # Only consider tags created AFTER project completion
+                                    if tag_timestamp > completion_timestamp:
+                                        days_ago = int((time.time() - tag_timestamp) / 86400)
+                                        return "merged", f"Tag: {tag[:20]} ({days_ago}d ago)"
+                                except ValueError:
+                                    pass
+            except Exception:
+                pass  # Ignore date parsing errors
         
         return "not_merged", "Ready to merge"
         
