@@ -1,0 +1,10 @@
+{
+  "agent_id": "PLACEHOLDER",
+  "session_name": "PLACEHOLDER",
+  "project_name": "PLACEHOLDER",
+  "db_path": "/home/clauderun/Tmux-Orchestrator/task_queue.db",
+  "orchestrator_path": "/home/clauderun/Tmux-Orchestrator",
+  "ready_flag_timeout": 30,
+  "direct_delivery_enabled": true,
+  "hooks_enabled": true
+}

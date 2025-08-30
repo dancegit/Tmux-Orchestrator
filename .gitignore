@@ -1,3 +1,6 @@
+
+.mcp.json
+.env
 # Database files
 *.db
 *.db-shm 

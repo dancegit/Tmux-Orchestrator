@@ -1,0 +1,43 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX}",
+            "timeout": 5000,
+            "description": "Check message queue and git policy compliance after tool use"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*", 
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --check-idle",
+            "timeout": 5000,
+            "description": "Check queue when Claude becomes idle"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --rebrief",
+            "timeout": 3000,
+            "description": "Queue rebriefing message before context compaction"
+          }
+        ]
+      }
+    ]
+  }
+}

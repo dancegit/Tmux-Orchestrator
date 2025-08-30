@@ -1,0 +1,6 @@
+{
+  "env": {
+    "TMUX_ORCHESTRATOR_ROOT": "$CLAUDE_PROJECT_DIR",
+    "HOOKS_ENABLED": "true"
+  }
+}

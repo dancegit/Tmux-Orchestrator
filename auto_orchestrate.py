@@ -402,7 +402,7 @@ class PathManager:
         return success
     
     def _setup_claude_config_for_role(self, role: str, worktree_path: Path):
-        """Generate .claude/settings.local.json with agent_id for hooks-based messaging."""
+        """Generate Claude settings and orchestrator config for hooks-based messaging."""
         try:
             # Check if we have access to orchestrator's AgentIdManager
             orchestrator = getattr(self, '_orchestrator_ref', None)
@@ -415,29 +415,46 @@ class PathManager:
             claude_dir = worktree_path / '.claude'
             claude_dir.mkdir(exist_ok=True)
             
-            # Generate settings.local.json
-            config_path = claude_dir / 'settings.local.json'
-            config = {
+            # Copy template files from templates/agent_claude_settings
+            template_dir = self.tmux_orchestrator_path / 'templates' / 'agent_claude_settings'
+            if template_dir.exists():
+                import shutil
+                
+                # Copy settings.json if exists
+                settings_template = template_dir / 'settings.json'
+                if settings_template.exists():
+                    try:
+                        shutil.copy2(settings_template, claude_dir / 'settings.json')
+                        logger.info(f"Copied settings.json template to {claude_dir}")
+                    except Exception as e:
+                        logger.warning(f"Failed to copy settings.json template: {e}")
+                
+                # Copy settings.local.json if exists
+                settings_local_template = template_dir / 'settings.local.json'
+                if settings_local_template.exists():
+                    try:
+                        shutil.copy2(settings_local_template, claude_dir / 'settings.local.json')
+                        logger.info(f"Copied settings.local.json template to {claude_dir}")
+                    except Exception as e:
+                        logger.warning(f"Failed to copy settings.local.json template: {e}")
+            
+            # Generate orchestrator_config.json with agent-specific values
+            orchestrator_config_path = claude_dir / 'orchestrator_config.json'
+            orchestrator_config = {
                 "agent_id": agent_id,
                 "session_name": orchestrator.unique_session_name,
+                "project_name": orchestrator.unique_session_name,
                 "db_path": str(orchestrator.tmux_orchestrator_path / 'task_queue.db'),
+                "orchestrator_path": str(orchestrator.tmux_orchestrator_path),
                 "ready_flag_timeout": 30,
-                "direct_delivery_enabled": True
+                "direct_delivery_enabled": True,
+                "hooks_enabled": True
             }
             
-            # Merge with existing config if it exists
-            if config_path.exists():
-                try:
-                    with open(config_path, 'r') as f:
-                        existing = json.load(f)
-                    config.update(existing)
-                except json.JSONDecodeError:
-                    logger.warning(f"Invalid JSON in {config_path}, overwriting")
-            
-            with open(config_path, 'w') as f:
-                json.dump(config, f, indent=2)
+            with open(orchestrator_config_path, 'w') as f:
+                json.dump(orchestrator_config, f, indent=2)
                 
-            logger.info(f"Generated .claude/settings.local.json with agent_id: {agent_id}")
+            logger.info(f"Generated orchestrator_config.json with agent_id: {agent_id}")
             
         except Exception as e:
             logger.warning(f"Failed to setup Claude config for {role}: {e}")
