@@ -437,6 +437,18 @@ class PathManager:
                         logger.info(f"Copied settings.local.json template to {claude_dir}")
                     except Exception as e:
                         logger.warning(f"Failed to copy settings.local.json template: {e}")
+                
+                # Copy cleanup script if exists
+                cleanup_script = template_dir / 'cleanup_on_exit.sh'
+                if cleanup_script.exists():
+                    try:
+                        shutil.copy2(cleanup_script, claude_dir / 'cleanup_on_exit.sh')
+                        # Preserve executable permissions
+                        dest_script = claude_dir / 'cleanup_on_exit.sh'
+                        dest_script.chmod(0o755)
+                        logger.info(f"Copied cleanup_on_exit.sh to {claude_dir}")
+                    except Exception as e:
+                        logger.warning(f"Failed to copy cleanup script: {e}")
             
             # Generate orchestrator_config.json with agent-specific values
             orchestrator_config_path = claude_dir / 'orchestrator_config.json'

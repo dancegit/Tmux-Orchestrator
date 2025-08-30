@@ -1,5 +1,18 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -f $CLAUDE_PROJECT_DIR/.claude/.initialized || (python3 $CLAUDE_PROJECT_DIR/.claude/hooks/setup_git_policy_hooks.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} && python3 $CLAUDE_PROJECT_DIR/.claude/hooks/check_queue.py --agent ${TMUX_SESSION_NAME}:${TMUX_WINDOW_INDEX} --bootstrap && touch $CLAUDE_PROJECT_DIR/.claude/.initialized)",
+            "timeout": 8000,
+            "description": "Initialize git policy and queue checking on first user prompt"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": ".*",
