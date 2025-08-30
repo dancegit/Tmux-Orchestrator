@@ -273,14 +273,18 @@ class PathManager:
         from worktree_manager import WorktreeManager
         self.worktree_manager = WorktreeManager(self.project_path)
         
-        # Generate spec-specific worktree path
-        session_name = getattr(self, 'unique_session_name', 'unknown')
-        self.worktree_root = self.worktree_manager.get_or_create_worktree_path(
-            str(self.spec_path), session_name
-        )
+        # Worktree root will be set later when session_name is available
+        # For now, use the old default path structure
+        self.worktree_root = self.project_path.parent / f"{self.project_name}-tmux-worktrees"
         
         # Metadata is also a sibling (migrating from registry)
         self.metadata_root = self.project_path.parent / f"{self.project_name}-tmux-metadata"
+    
+    def update_worktree_root_with_session(self, spec_path: str, session_name: str):
+        """Update worktree root to use spec-specific path now that session name is available"""
+        self.worktree_root = self.worktree_manager.get_or_create_worktree_path(
+            spec_path, session_name
+        )
         
         # Legacy registry path (for migration)
         self.legacy_registry = self.orchestrator_root / 'registry' / 'projects' / self.project_name
@@ -2691,7 +2695,11 @@ This file is automatically read by Claude Code when working in this directory.
         if hasattr(self, 'custom_worktree_base') and self.custom_worktree_base:
             return Path(self.custom_worktree_base)
         
-        # BEST PRACTICE: Following Grok's recommendation to place worktrees outside project
+        # Use PathManager's worktree root which includes spec-specific hashing
+        if hasattr(self, 'path_manager') and self.path_manager:
+            return self.path_manager.worktree_root
+        
+        # Fallback: Following Grok's recommendation to place worktrees outside project
         # This avoids nested worktree issues, git clean risks, and repository bloat
         # Format: /path/to/project-name-worktrees/ (sibling to project directory)
         project_dir_name = self.project_path.name
@@ -3002,6 +3010,10 @@ This file is automatically read by Claude Code when working in this directory.
             try:
                 self.unique_session_name, self.unique_registry_dir = self.concurrent_manager.start_orchestration(
                     spec.project.name, timeout=30
+                )
+                # Update worktree root with session-specific path now that we have the session name
+                self.path_manager.update_worktree_root_with_session(
+                    str(self.spec_path), self.unique_session_name
                 )
             except Exception as e:
                 console.print(f"[red]Error starting orchestration: {e}[/red]")
@@ -5656,6 +5668,10 @@ Remember: Context management is automatic - focus on creating good checkpoints t
         try:
             self.unique_session_name, self.unique_registry_dir = self.concurrent_manager.start_orchestration(
                 self.implementation_spec.project.name, timeout=30
+            )
+            # Update worktree root with session-specific path now that we have the session name
+            self.path_manager.update_worktree_root_with_session(
+                str(self.spec_path), self.unique_session_name
             )
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
