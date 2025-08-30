@@ -131,6 +131,261 @@ def get_latest_integration_info(worktree_path: Path) -> Dict[str, any]:
         return {}
 
 
+def find_all_worktree_directories(project_path: Path, spec_info: Optional[Dict] = None) -> List[Path]:
+    """Find all worktree directories for a project, including spec-specific ones"""
+    project_name = project_path.name
+    parent_dir = project_path.parent
+    
+    worktree_dirs = []
+    
+    # Look for standard worktrees
+    standard_worktrees = parent_dir / f"{project_name}-tmux-worktrees"
+    if standard_worktrees.exists():
+        worktree_dirs.append(standard_worktrees)
+    
+    # Look for spec-specific worktrees
+    if spec_info and 'spec_path' in spec_info:
+        spec_name = Path(spec_info['spec_path']).stem.lower().replace('_', '-')
+        # Search for directories matching pattern
+        for item in parent_dir.iterdir():
+            if item.is_dir() and spec_name in item.name and item.name.endswith('-tmux-worktrees'):
+                if item not in worktree_dirs:
+                    worktree_dirs.append(item)
+    else:
+        # Look for any spec-specific pattern
+        pattern = f"{project_name}-*-tmux-worktrees"
+        for item in parent_dir.glob(pattern):
+            if item.is_dir() and item not in worktree_dirs:
+                worktree_dirs.append(item)
+    
+    return worktree_dirs
+
+
+def collect_all_agent_work(project_path: Path, spec_info: Optional[Dict] = None) -> List[Dict[str, any]]:
+    """Collect work from all agent worktrees"""
+    worktree_dirs = find_all_worktree_directories(project_path, spec_info)
+    
+    all_work = []
+    for worktree_dir in worktree_dirs:
+        console.print(f"[cyan]Scanning worktrees in: {worktree_dir}[/cyan]")
+        
+        # Check each agent subdirectory
+        for agent_dir in worktree_dir.iterdir():
+            if agent_dir.is_dir() and (agent_dir / '.git').exists():
+                work_info = get_latest_integration_info(agent_dir)
+                if work_info:
+                    # Add agent name
+                    work_info['agent'] = agent_dir.name
+                    work_info['worktree_set'] = worktree_dir.name
+                    
+                    # Get list of modified files
+                    result = run_git_command(['diff', '--name-only', 'HEAD~5..HEAD'], str(agent_dir))
+                    work_info['modified_files'] = result.stdout.strip().split('\n') if result.stdout.strip() else []
+                    
+                    all_work.append(work_info)
+    
+    return all_work
+
+
+def display_agent_work_summary(agent_work: List[Dict[str, any]]):
+    """Display a summary of all agent work"""
+    table = Table(title="Agent Work Summary", show_lines=True)
+    table.add_column("Agent", style="cyan", width=15)
+    table.add_column("Branch", style="green", width=25)
+    table.add_column("Latest Commit", style="yellow", width=45)
+    table.add_column("Files", style="blue", width=8)
+    table.add_column("Status", style="magenta", width=12)
+    
+    for work in agent_work:
+        status = "[red]Uncommitted[/red]" if not work['is_clean'] else "[green]Clean[/green]"
+        
+        # Extract datetime from commit
+        commit_dt = datetime.fromisoformat(work['commit_time'].replace('Z', '+00:00'))
+        time_str = commit_dt.strftime('%m-%d %H:%M')
+        
+        table.add_row(
+            work['agent'],
+            work['current_branch'][:25],
+            f"{work['commit_hash_short']} ({time_str}) {work['commit_message'][:35]}...",
+            str(len(work.get('modified_files', []))),
+            status
+        )
+    
+    console.print(table)
+
+
+def create_integration_plan(agent_work: List[Dict[str, any]]) -> List[Dict[str, any]]:
+    """Create an ordered integration plan based on agent dependencies"""
+    # Define integration order (most foundational first)
+    agent_priority = {
+        'developer': 1,      # Core implementation
+        'tester': 2,         # Tests that depend on implementation
+        'project_manager': 3, # PM integration work
+        'project-manager': 3, # Alternative naming
+        'testrunner': 4,     # Test execution results
+        'orchestrator': 5,   # High-level documentation
+    }
+    
+    # Sort by priority
+    sorted_work = sorted(
+        agent_work,
+        key=lambda x: (agent_priority.get(x['agent'].lower(), 10), x['commit_time'])
+    )
+    
+    integration_plan = []
+    seen_commits = set()  # Track commits to avoid duplicates
+    
+    for work in sorted_work:
+        # Skip if we've already seen this commit
+        if work['commit_hash'] in seen_commits:
+            continue
+            
+        # Skip if no real implementation
+        if len(work.get('modified_files', [])) == 0:
+            continue
+            
+        # Skip if only log files
+        impl_files = [f for f in work.get('modified_files', []) 
+                      if not f.endswith('.log') and not f.endswith('.md')]
+        if not impl_files:
+            console.print(f"[yellow]Skipping {work['agent']} - only documentation/logs[/yellow]")
+            continue
+        
+        seen_commits.add(work['commit_hash'])
+        integration_plan.append(work)
+    
+    return integration_plan
+
+
+def merge_all_agents(project_path: Path, spec_info: Optional[Dict] = None, dry_run: bool = False) -> bool:
+    """Merge work from all agent worktrees comprehensively"""
+    console.print(Panel.fit(
+        "[bold cyan]Comprehensive Agent Work Integration[/bold cyan]\n"
+        "Collecting and merging work from all agent worktrees",
+        border_style="cyan"
+    ))
+    
+    # Collect all agent work
+    agent_work = collect_all_agent_work(project_path, spec_info)
+    
+    if not agent_work:
+        console.print("[red]No agent work found![/red]")
+        return False
+    
+    # Display summary
+    display_agent_work_summary(agent_work)
+    
+    # Create integration plan
+    console.print("\n[bold]Creating Integration Plan...[/bold]")
+    integration_plan = create_integration_plan(agent_work)
+    
+    if not integration_plan:
+        console.print("[yellow]No implementation work to integrate (only docs/logs found)[/yellow]")
+        return False
+    
+    console.print(f"\n[green]Ready to integrate work from {len(integration_plan)} agents[/green]")
+    
+    if dry_run:
+        console.print("\n[yellow]DRY RUN MODE - showing what would be done[/yellow]")
+    
+    # Prepare project for merge
+    if not dry_run:
+        console.print(f"\n[yellow]Preparing project for comprehensive merge...[/yellow]")
+        if not prepare_files_for_merge(project_path):
+            console.print(f"[red]Failed to prepare project for merge[/red]")
+            return False
+        
+        # Create integration branch
+        timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        integration_branch = f"integration/all-agents-{timestamp}"
+        
+        result = run_git_command(['checkout', '-b', integration_branch], str(project_path))
+        if result.returncode != 0:
+            console.print(f"[red]Failed to create integration branch: {result.stderr}[/red]")
+            return False
+        
+        console.print(f"[green]Created integration branch: {integration_branch}[/green]")
+    
+    # Execute integration plan
+    success_count = 0
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Integrating agent work...", total=len(integration_plan))
+        
+        for work in integration_plan:
+            agent = work['agent']
+            progress.update(task, description=f"Integrating {agent}...")
+            
+            if dry_run:
+                console.print(f"\n[yellow]DRY RUN: Would merge {agent} from {work['current_branch']}[/yellow]")
+                console.print(f"  Commit: {work['commit_hash_short']} - {work['commit_message']}")
+                console.print(f"  Files: {len(work.get('modified_files', []))}")
+                success_count += 1
+            else:
+                # Add worktree as remote if needed
+                remote_name = f"agent-{agent}-{work['commit_hash_short']}"
+                run_git_command(['remote', 'remove', remote_name], str(project_path))
+                result = run_git_command(['remote', 'add', remote_name, str(work['worktree_path'])], 
+                                       str(project_path))
+                
+                if result.returncode == 0:
+                    # Fetch from agent
+                    console.print(f"\n[cyan]Fetching from {agent}...[/cyan]")
+                    result = run_git_command(['fetch', remote_name], str(project_path))
+                    
+                    if result.returncode == 0:
+                        # Merge agent's work
+                        merge_ref = f"{remote_name}/{work['current_branch']}"
+                        console.print(f"[cyan]Merging {merge_ref}...[/cyan]")
+                        
+                        result = run_git_command([
+                            'merge', merge_ref, '--no-ff',
+                            '-m', f"Integrate {agent}'s work\n\nCommit: {work['commit_hash_short']}\nMessage: {work['commit_message']}"
+                        ], str(project_path))
+                        
+                        if result.returncode != 0:
+                            console.print(f"[red]Merge conflict with {agent}![/red]")
+                            console.print(f"[red]Error: {result.stderr}[/red]")
+                            
+                            # Try automatic conflict resolution
+                            if "Merge conflict" in result.stderr:
+                                console.print("[yellow]Attempting automatic conflict resolution...[/yellow]")
+                                if resolve_conflicts_with_claude(project_path, result.stderr):
+                                    success_count += 1
+                                else:
+                                    # Abort this merge and continue
+                                    run_git_command(['merge', '--abort'], str(project_path))
+                                    console.print(f"[yellow]Skipped {agent} due to unresolvable conflicts[/yellow]")
+                            else:
+                                console.print(f"[red]Non-conflict error, skipping {agent}[/red]")
+                        else:
+                            console.print(f"[green]✓ Successfully integrated {agent}'s work[/green]")
+                            success_count += 1
+                
+                # Clean up remote
+                run_git_command(['remote', 'remove', remote_name], str(project_path))
+            
+            progress.advance(task)
+    
+    if not dry_run and success_count > 0:
+        # Create final tag
+        tag_name = f"all-agents-integration-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        run_git_command(['tag', '-a', tag_name, '-m', 
+                        f'Comprehensive integration of {success_count} agents\' work'], 
+                       str(project_path))
+        console.print(f"\n[green]✓ Created integration tag: {tag_name}[/green]")
+        
+        # Show final status
+        result = run_git_command(['log', '--oneline', '-10'], str(project_path))
+        console.print("\n[bold]Integration History:[/bold]")
+        console.print(result.stdout)
+    
+    return success_count > 0
+
+
 def find_progress_projects(page: int = 1, per_page: int = 10, all_items: bool = False) -> List[Dict[str, any]]:
     """
     Find in-progress (non-completed) projects from database, with pagination and sorting.
@@ -1073,6 +1328,8 @@ Notes:
                                 help='Preview what would be done without making any changes')
     execution_group.add_argument('--force', action='store_true',
                                 help='Skip interactive confirmation prompts (auto-select first match for ambiguous names)')
+    execution_group.add_argument('--all-agents', action='store_true',
+                                help='Merge work from ALL agent worktrees comprehensively (recommended)')
     
     args = parser.parse_args()
     
@@ -1169,6 +1426,24 @@ Notes:
         from_path = Path(selected['integration_worktree'])
         to_path = Path(selected['project_path'])
         
+        # Check if --all-agents flag is set
+        if args.all_agents:
+            # Get spec info for finding spec-specific worktrees
+            spec_info = {
+                'spec_path': selected.get('spec_path'),
+                'project_name': selected['project_name']
+            }
+            success = merge_all_agents(to_path, spec_info, dry_run=args.dry_run)
+            if success:
+                if not args.dry_run:
+                    console.print(f"\n[green]✓ All agents integration completed successfully![/green]")
+                    console.print(f"[green]✓ Check {to_path} for the merged code[/green]")
+                else:
+                    console.print(f"\n[blue]✓ Dry run completed - no changes made[/blue]")
+            else:
+                console.print(f"\n[red]✗ All agents integration failed[/red]")
+            return
+        
     elif args.from_path and args.to_path:
         from_path = Path(args.from_path)
         to_path = Path(args.to_path)
@@ -1191,9 +1466,13 @@ Notes:
     console.print(f"• From: {from_path}")
     console.print(f"• To: {to_path}")
     console.print(f"• Mode: {'DRY RUN' if args.dry_run else 'EXECUTE'}")
+    console.print(f"• All Agents: {'YES' if args.all_agents else 'NO (single worktree only)'}")
     
     # Confirm unless forced or dry run
     if not args.force and not args.dry_run:
+        if not args.all_agents:
+            console.print("\n[yellow]Warning: Single worktree merge may miss work from other agents![/yellow]")
+            console.print("[yellow]Consider using --all-agents for comprehensive merge[/yellow]")
         if not Confirm.ask("\nProceed with merge?"):
             console.print("[yellow]Merge cancelled[/yellow]")
             return
