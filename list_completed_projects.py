@@ -94,7 +94,7 @@ def get_completed_projects_from_db() -> List[Dict]:
     return completed_projects
 
 
-def find_project_locations(project_name: str, project_path: Optional[str] = None) -> Dict[str, Path]:
+def find_project_locations(project_name: str, project_path: Optional[str] = None, spec_path: Optional[str] = None) -> Dict[str, Path]:
     """Find all locations related to a project"""
     locations = {}
     
@@ -111,6 +111,22 @@ def find_project_locations(project_name: str, project_path: Optional[str] = None
             locations['worktrees'] = worktree_dir
         if metadata_dir.exists():
             locations['metadata'] = metadata_dir
+        
+        # Also check for spec-specific worktrees if spec_path provided
+        if spec_path:
+            # Look for worktrees with spec-specific naming pattern
+            parent_dir = project_dir.parent
+            spec_name = Path(spec_path).stem.lower().replace('_', '-')
+            
+            # Search for directories matching pattern: {project}-{spec}-*-tmux-worktrees
+            for item in parent_dir.iterdir():
+                if item.is_dir() and spec_name in item.name and item.name.endswith('-tmux-worktrees'):
+                    # Verify it's a valid worktree directory by checking for subdirectories
+                    if any(item.iterdir()):
+                        locations['spec_worktrees'] = item
+                        # Prefer spec-specific worktrees over generic ones
+                        locations['worktrees'] = item
+                        break
     
     # Also check legacy registry
     orchestrator_path = Path(__file__).parent
@@ -405,7 +421,7 @@ def main():
     
     for project in completed_projects:
         # Find all project locations
-        locations = find_project_locations(project['name'], project.get('project_path'))
+        locations = find_project_locations(project['name'], project.get('project_path'), project.get('spec_path'))
         
         # Get project start time
         start_time = get_project_start_time(locations)
@@ -481,9 +497,9 @@ def main():
     # Calculate and show summary statistics
     total_projects = len(completed_projects)
     projects_with_worktrees = sum(1 for project in completed_projects 
-                                 if analyze_worktree_integration(find_project_locations(project['name'], project.get('project_path')))['integration_worktree'])
+                                 if analyze_worktree_integration(find_project_locations(project['name'], project.get('project_path'), project.get('spec_path')))['integration_worktree'])
     projects_with_start_times = sum(1 for project in completed_projects 
-                                   if get_project_start_time(find_project_locations(project['name'], project.get('project_path'))))
+                                   if get_project_start_time(find_project_locations(project['name'], project.get('project_path'), project.get('spec_path'))))
     
     console.print(f"\n[bold]Summary:[/bold]")
     console.print(f"• Total projects found: {total_projects}")
@@ -494,7 +510,7 @@ def main():
     # Show copy-friendly integration paths
     console.print("\n[bold]Integration Paths (copy-friendly):[/bold]")
     for project in completed_projects:
-        locations = find_project_locations(project['name'], project.get('project_path'))
+        locations = find_project_locations(project['name'], project.get('project_path'), project.get('spec_path'))
         integration_info = analyze_worktree_integration(locations)
         
         if integration_info['integration_worktree']:
@@ -527,7 +543,7 @@ def get_completed_integrations(page: int = 1, per_page: int = 4, all_items: bool
         
         integrations = []
         for project in projects:
-            locations = find_project_locations(project['name'], project.get('project_path'))
+            locations = find_project_locations(project['name'], project.get('project_path'), project.get('spec_path'))
             integration_info = analyze_worktree_integration(locations)
             
             if integration_info['integration_worktree']:
