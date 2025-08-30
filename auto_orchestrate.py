@@ -2578,6 +2578,9 @@ Please provide a brief status update on your current work and any blockers."""
                 # before creating the tmux session. Hooks will be configured after session creation.
                 # This is just preparation for when the session is created.
                 
+                # Create .gitignore file for worktree
+                self.create_worktree_gitignore(worktree_path)
+                
                 # Set up sandbox symlinks for this role
                 active_roles = [role for _, role in roles_to_deploy]
                 if not self.path_manager.setup_sandbox_for_role(role_key, active_roles):
@@ -2837,6 +2840,118 @@ This file is automatically read by Claude Code when working in this directory.
             console.print(f"[green]✓ Locked worktree {worktree_path.name} for safety[/green]")
         except subprocess.CalledProcessError:
             console.print(f"[yellow]⚠️  Could not lock worktree {worktree_path.name}[/yellow]")
+    
+    def create_worktree_gitignore(self, worktree_path: Path):
+        """Create a comprehensive .gitignore file for agent worktrees"""
+        gitignore_path = worktree_path / '.gitignore'
+        
+        # Check if .gitignore already exists and has content
+        existing_content = []
+        if gitignore_path.exists():
+            with open(gitignore_path, 'r') as f:
+                existing_content = f.read().splitlines()
+        
+        # Define patterns to add
+        patterns_to_add = [
+            "# Logs and temporary files",
+            "*.log",
+            "*.log.*",
+            "logs/",
+            "temp/",
+            "tmp/",
+            "",
+            "# MCP and environment files",
+            ".mcp.json",
+            ".env",
+            ".env.*",
+            "*.env",
+            "",
+            "# Database files",
+            "*.db",
+            "*.db-*",
+            "*.sqlite",
+            "*.sqlite3",
+            "*.db-shm",
+            "*.db-wal",
+            "",
+            "# IDE and editor files",
+            ".idea/",
+            ".vscode/",
+            "*.swp",
+            "*.swo",
+            "*~",
+            ".DS_Store",
+            "",
+            "# Python",
+            "__pycache__/",
+            "*.py[cod]",
+            "*$py.class",
+            ".Python",
+            "venv/",
+            "env/",
+            ".venv/",
+            "",
+            "# Node.js",
+            "node_modules/",
+            "npm-debug.log*",
+            "yarn-debug.log*",
+            "yarn-error.log*",
+            "",
+            "# Build outputs",
+            "build/",
+            "dist/",
+            "out/",
+            "*.egg-info/",
+            "",
+            "# Orchestrator specific",
+            "scheduler.log",
+            "task_queue.db*",
+            "session_state.json",
+            "completion_status.json",
+            "CLAUDE.md",  # Often contains session-specific info
+            "",
+            "# OS files",
+            "Thumbs.db",
+            "desktop.ini",
+        ]
+        
+        # Find patterns that aren't already in the file
+        new_patterns = []
+        for pattern in patterns_to_add:
+            if pattern not in existing_content and pattern.strip() and not pattern.startswith("#"):
+                # Check if pattern isn't already covered by existing patterns
+                pattern_exists = False
+                for existing in existing_content:
+                    if existing.strip() == pattern.strip():
+                        pattern_exists = True
+                        break
+                if not pattern_exists:
+                    new_patterns.append(pattern)
+        
+        # If there are new patterns to add
+        if new_patterns or not gitignore_path.exists():
+            with open(gitignore_path, 'a' if existing_content else 'w') as f:
+                if existing_content and new_patterns:
+                    f.write("\n\n# Auto-added by Tmux Orchestrator\n")
+                
+                # Add all patterns including comments and blank lines
+                current_section = None
+                for pattern in patterns_to_add:
+                    if pattern.startswith("#"):
+                        # This is a section comment
+                        if current_section != pattern:
+                            current_section = pattern
+                            if pattern not in existing_content:
+                                f.write(f"\n{pattern}\n")
+                    elif pattern == "":
+                        # Blank line for readability
+                        continue
+                    elif pattern not in existing_content and pattern.strip():
+                        f.write(f"{pattern}\n")
+            
+            console.print(f"[green]✓ Created/updated .gitignore in {worktree_path.name}'s worktree[/green]")
+        else:
+            console.print(f"[dim]✓ .gitignore already complete in {worktree_path.name}'s worktree[/dim]")
     
     def resolve_session_conflicts(self, session_name: str) -> bool:
         """

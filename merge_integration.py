@@ -348,14 +348,30 @@ def initialize_git_repo(project_path: Path, worktree_path: Path) -> bool:
 
 def prepare_files_for_merge(project_path: Path) -> bool:
     """
-    Prepare .mcp.json and CLAUDE.md files to prevent merge conflicts by:
+    Prepare temporary files to prevent merge conflicts by:
     1. Adding them to .gitignore if not already present
     2. Running git rm --cached to untrack them
     3. Committing these changes
     """
     try:
         gitignore_path = project_path / '.gitignore'
-        files_to_ignore = ['.mcp.json', 'CLAUDE.md']
+        # Expanded list of files that shouldn't be merged
+        files_to_ignore = [
+            '.mcp.json', 
+            'CLAUDE.md',
+            '*.log',
+            'scheduler.log',
+            'enhanced_mcp.log',
+            'mcp_errors.log',
+            'task_queue.db*',
+            '*.db-shm',
+            '*.db-wal',
+            '.env',
+            '.env.*',
+            'logs/',
+            'temp/',
+            'tmp/',
+        ]
         
         # Read existing .gitignore
         existing_ignore = set()
@@ -378,16 +394,29 @@ def prepare_files_for_merge(project_path: Path) -> bool:
         
         # Remove files from git tracking if they exist
         files_to_untrack = []
-        for file_name in files_to_ignore:
-            file_path = project_path / file_name
-            if file_path.exists():
-                files_to_untrack.append(file_name)
+        import glob
+        for pattern in files_to_ignore:
+            if '*' in pattern or '?' in pattern:
+                # Handle wildcard patterns
+                matching_files = glob.glob(str(project_path / pattern))
+                for match in matching_files:
+                    rel_path = Path(match).relative_to(project_path)
+                    files_to_untrack.append(str(rel_path))
+            else:
+                # Handle exact file names
+                file_path = project_path / pattern
+                if file_path.exists() and not pattern.endswith('/'):
+                    files_to_untrack.append(pattern)
         
         if files_to_untrack:
-            console.print(f"[yellow]Removing {', '.join(files_to_untrack)} from git tracking[/yellow]")
-            result = run_git_command(['rm', '--cached'] + files_to_untrack, str(project_path))
-            if result.returncode != 0 and 'did not match any files' not in result.stderr:
-                console.print(f"[yellow]Warning: Could not untrack some files: {result.stderr}[/yellow]")
+            console.print(f"[yellow]Removing {len(files_to_untrack)} files from git tracking[/yellow]")
+            # Process in batches to avoid command line length limits
+            batch_size = 50
+            for i in range(0, len(files_to_untrack), batch_size):
+                batch = files_to_untrack[i:i+batch_size]
+                result = run_git_command(['rm', '--cached', '-r'] + batch, str(project_path))
+                if result.returncode != 0 and 'did not match any files' not in result.stderr:
+                    console.print(f"[yellow]Warning: Could not untrack some files: {result.stderr}[/yellow]")
         
         # Stage .gitignore changes if any were made
         if files_added:
