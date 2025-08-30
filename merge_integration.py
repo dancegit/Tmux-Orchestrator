@@ -885,9 +885,10 @@ def list_available_integrations(integrations: List[Dict[str, any]], args):
         return
     
     # Group integrations by unique project paths to avoid duplicates
+    # Include project_name to allow multiple specs from same directory
     unique_integrations = {}
     for integration in integrations:
-        key = f"{integration['project_path']}-{integration['integration_worktree']}"
+        key = f"{integration['project_path']}-{integration['integration_worktree']}-{integration['project_name']}"
         if key not in unique_integrations:
             unique_integrations[key] = integration
     

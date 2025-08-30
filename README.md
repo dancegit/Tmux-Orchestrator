@@ -362,27 +362,46 @@ python3 scheduler.py --list | head -20
 
 ### System Services (RECOMMENDED for Production)
 
-#### New Dual-Service Architecture
-The system now uses separate systemd services for better reliability:
+#### Triple-Service Architecture (NEW!)
+The system now uses three systemd services for complete automation:
 
 ```bash
-# Install both services (replaces single service approach)
+# Install all three services
 sudo cp systemd/tmux-orchestrator-checkin.service /etc/systemd/system/
 sudo cp systemd/tmux-orchestrator-queue.service /etc/systemd/system/
+sudo cp systemd/tmux-orchestrator-completion.service /etc/systemd/system/
 sudo systemctl daemon-reload
 
-# Enable and start both services
-sudo systemctl enable tmux-orchestrator-checkin tmux-orchestrator-queue
-sudo systemctl start tmux-orchestrator-checkin tmux-orchestrator-queue
+# Enable and start all services
+sudo systemctl enable tmux-orchestrator-checkin tmux-orchestrator-queue tmux-orchestrator-completion
+sudo systemctl start tmux-orchestrator-checkin tmux-orchestrator-queue tmux-orchestrator-completion
 
-# Check status of both services
-sudo systemctl status tmux-orchestrator-checkin tmux-orchestrator-queue
+# Check status of all services
+sudo systemctl status tmux-orchestrator-checkin tmux-orchestrator-queue tmux-orchestrator-completion
 ```
 
-**Benefits of Dual Service Architecture:**
-- **No Race Conditions**: Each service uses mode-specific lock files
+**🎯 NEW: Completion Monitoring Service**
+The completion service automatically monitors all PROCESSING projects and detects when they're complete:
+
+- **Automatic Detection**: Polls every 5 minutes for project completion
+- **Smart Validation**: Uses the same completion logic as manual checks
+- **Database Updates**: Automatically updates project status to COMPLETED
+- **Email Notifications**: Sends completion notifications (if configured)
+- **Resource Cleanup**: Triggers proper decommissioning workflows
+
+**Service Architecture:**
+```
+┌─ Checkin Service ──┐    ┌─ Queue Service ─────┐    ┌─ Completion Service ─┐
+│ Agent check-ins    │    │ Processes queue     │    │ Monitors completions  │
+│ Status updates     │    │ Starts projects     │    │ Updates database      │
+│ Progress tracking  │────┤ Manages lifecycle   │────┤ Triggers cleanup      │
+└────────────────────┘    └─────────────────────┘    └───────────────────────┘
+```
+
+**Benefits:**
+- **No Race Conditions**: Each service uses independent lock files
+- **Complete Automation**: Projects auto-complete without manual intervention
 - **Independent Restart**: Services restart independently on failure
-- **Clean Separation**: Check-in scheduling separate from queue processing
 - **Better Monitoring**: Service-specific logs and status monitoring
 
 #### 2. Scheduler Monitor (cron)
@@ -794,6 +813,32 @@ sudo systemctl stop tmux-orchestrator-checkin tmux-orchestrator-queue
 | **`sync_dashboard.py`** | Sync status dashboard | Monitor git synchronization |
 | **`multi_project_monitor.py`** | Multi-project overview | Managing multiple orchestrations |
 | **`performance_tuner.py`** | Performance optimization | System tuning and cleanup |
+| **`completion_monitor_daemon.py`** 🆕 | Automatic completion monitoring | Background completion detection |
+| **`check_project_completion.py`** | Manual completion check | Verify if projects are complete |
+| **`queue_status.py` (./qs)** | Project queue status | Check project completion status |
+
+#### 🎯 Completion Monitoring Commands (NEW!)
+
+```bash
+# Check if a specific project is complete
+python3 check_project_completion.py <project_id>
+
+# Test completion monitoring (one cycle)
+python3 completion_monitor_daemon.py --test
+
+# Run completion monitor manually
+python3 completion_monitor_daemon.py --poll-interval 60
+
+# Check completion service status  
+sudo systemctl status tmux-orchestrator-completion
+sudo journalctl -u tmux-orchestrator-completion -f
+
+# View completion monitoring logs
+tail -f completion_monitor.log
+
+# Quick project status check
+./qs  # Shows all projects and their completion status
+```
 
 ### Advanced Features
 

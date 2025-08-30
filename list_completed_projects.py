@@ -69,7 +69,7 @@ def get_completed_projects_from_db() -> List[Dict]:
         cursor.execute("""
             SELECT id, spec_path, spec_path, project_path, status, completed_at
             FROM project_queue
-            WHERE status = 'completed'
+            WHERE status IN ('completed', 'COMPLETED')
             ORDER BY completed_at DESC
         """)
         
@@ -436,10 +436,14 @@ def main():
         completed_at = project.get('completed_at', 'Unknown')
         if completed_at and completed_at != 'Unknown':
             try:
-                dt = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
+                # Handle both timestamp (float/int) and ISO string formats
+                if isinstance(completed_at, (int, float)):
+                    dt = datetime.fromtimestamp(completed_at)
+                else:
+                    dt = datetime.fromisoformat(str(completed_at).replace('Z', '+00:00'))
                 completed_at = dt.strftime('%Y-%m-%d %H:%M')
             except:
-                pass
+                completed_at = str(completed_at) if completed_at else 'Unknown'
         
         # Format integration info
         if integration_info['integration_worktree']:

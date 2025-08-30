@@ -1,0 +1,40 @@
+[Unit]
+Description=Tmux Orchestrator Completion Monitor
+Documentation=https://github.com/dancegit/Tmux-Orchestrator
+After=network.target tmux-orchestrator-queue.service
+Wants=tmux-orchestrator-queue.service
+PartOf=tmux-orchestrator-scheduler.slice
+
+[Service]
+Type=simple
+User=clauderun
+Group=clauderun
+WorkingDirectory=/home/clauderun/Tmux-Orchestrator
+ExecStart=/usr/bin/python3 /home/clauderun/Tmux-Orchestrator/completion_monitor_daemon.py --daemon --poll-interval 300
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=50%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tmux-orchestrator-completion
+
+# Security (basic sandboxing)
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/clauderun/Tmux-Orchestrator
+ReadWritePaths=/tmp
+ReadWritePaths=/var/tmp
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+Also=tmux-orchestrator-queue.service
