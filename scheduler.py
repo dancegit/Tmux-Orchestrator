@@ -841,11 +841,40 @@ class TmuxOrchestratorScheduler:
                             # self.conn.rollback()
                             # return None
                 
-                # Step 1: Check if we're at the concurrency limit
+                # Step 1: Enhanced concurrency check - verify both database AND active sessions
                 cursor.execute("SELECT COUNT(*) FROM project_queue WHERE status = 'processing'")
-                active_count = cursor.fetchone()[0]
-                if active_count >= self.max_concurrent:
-                    logger.debug(f"Skipping dequeue: {active_count} project(s) processing (limit: {self.max_concurrent})")
+                db_active_count = cursor.fetchone()[0]
+                
+                # CRITICAL: Also check for actual running tmux sessions (fixes concurrent bug)
+                active_sessions = self.tmux_manager.get_active_sessions()
+                orchestration_sessions = []
+                for session in active_sessions:
+                    # Look for orchestration session patterns (contains 'impl' and has multiple windows)
+                    if 'impl' in session and len(session.split('-')) >= 3:
+                        session_info = self.tmux_manager.get_session_info(session)
+                        if session_info and session_info.get('windows', 0) >= 3:  # Orchestrations have multiple windows
+                            orchestration_sessions.append(session)
+                
+                session_active_count = len(orchestration_sessions)
+                max_active_count = max(db_active_count, session_active_count)
+                
+                logger.debug(f"Concurrency check: DB active={db_active_count}, Session active={session_active_count}, Max={max_active_count}, Limit={self.max_concurrent}")
+                
+                if max_active_count >= self.max_concurrent:
+                    if session_active_count > db_active_count:
+                        logger.warning(f"Found {session_active_count} active orchestration sessions but only {db_active_count} DB processing entries - potential race condition")
+                        # Auto-repair: Update database status for running sessions
+                        for session in orchestration_sessions:
+                            cursor.execute("SELECT id, status FROM project_queue WHERE session_name = ? OR orchestrator_session = ? OR main_session = ?", 
+                                         (session, session, session))
+                            rows = cursor.fetchall()
+                            for row in rows:
+                                project_id, status = row
+                                if status != 'processing':
+                                    logger.warning(f"Auto-repairing: Project {project_id} has active session {session} but status={status}, updating to processing")
+                                    cursor.execute("UPDATE project_queue SET status = 'processing' WHERE id = ?", (project_id,))
+                    
+                    logger.debug(f"Skipping dequeue: {max_active_count} project(s) active (limit: {self.max_concurrent})")
                     self.conn.rollback()
                     return None
 
