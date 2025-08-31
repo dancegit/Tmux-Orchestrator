@@ -120,13 +120,39 @@ class CompletionDetector:
             'decommission_ready': False,
             'no_active_work': False,
             'error_indicators': False,
-            'confidence': 0.0
+            'confidence': 0.0,
+            'is_status_report': False  # New indicator for status reports
         }
         
         if not output:
             return indicators
         
         output_lower = output.lower()
+        
+        # Check if this is a status report (not an error)
+        status_report_indicators = [
+            'orchestrator report',
+            'status report',
+            'project status',
+            'team status',
+            'progress report',
+            'status update'
+        ]
+        
+        for indicator in status_report_indicators:
+            if indicator in output_lower:
+                indicators['is_status_report'] = True
+                break
+        
+        # Handle "NOT READY" status - this means processing, not failure!
+        if '❌ not ready' in output_lower or 'not ready' in output_lower:
+            if indicators['is_status_report']:
+                # In a status report, "NOT READY" means still processing
+                indicators['confidence'] += 0.2  # Boost confidence - project is active
+                logger.debug("Found 'NOT READY' in status report - treating as active processing")
+            else:
+                # Outside status report, might be a concern
+                indicators['confidence'] -= 0.1
         
         # Explicit completion statements
         completion_phrases = [
@@ -186,21 +212,26 @@ class CompletionDetector:
             'error: python3:',  # Normal python errors from wrong paths
             'attempt 1/3',  # Retry messages
             'command not found',  # Minor script errors
+            'not ready',  # Status indicator, not error
+            '❌ not ready',  # Status with emoji
+            'project completion: ❌',  # Status report
         ]
         
-        for line in output_lower.split('\n'):
-            # Skip lines that are known false positives
-            if any(pattern in line for pattern in false_positive_patterns):
-                continue
-            
-            # Count real errors
-            for phrase in error_phrases:
-                if phrase in line:
-                    # Check if it's a significant error (not just a path or command issue)
-                    if 'traceback' in line or 'assertion' in line or 'unhandled' in line:
-                        error_count += 2  # More serious errors
-                    else:
-                        error_count += 1
+        # Skip error counting in status reports
+        if not indicators['is_status_report']:
+            for line in output_lower.split('\n'):
+                # Skip lines that are known false positives
+                if any(pattern in line for pattern in false_positive_patterns):
+                    continue
+                
+                # Count real errors
+                for phrase in error_phrases:
+                    if phrase in line:
+                        # Check if it's a significant error (not just a path or command issue)
+                        if 'traceback' in line or 'assertion' in line or 'unhandled' in line:
+                            error_count += 2  # More serious errors
+                        else:
+                            error_count += 1
         
         # Only flag as error if we have multiple significant errors
         if error_count >= 5:  # Threshold for real problems
@@ -208,6 +239,10 @@ class CompletionDetector:
             indicators['confidence'] -= 0.2
         elif error_count >= 3:
             indicators['confidence'] -= 0.1  # Minor confidence reduction for some errors
+        
+        # Handle emoji indicators intelligently
+        emoji_context = self._analyze_emoji_context(output)
+        indicators['confidence'] += emoji_context['score']
         
         # Boost confidence based on output volume (indicates substantial work)
         if output:
@@ -253,6 +288,7 @@ class CompletionDetector:
             return 'completed', f'All {total_phases} implementation phases completed (marker auto-created)'
         
         # Method 4: Check for stuck agents (NEW)
+        active_agent_count = 0
         if self.health_monitor and session_name:
             health_status = self.health_monitor.check_agent_health(session_name)
             
@@ -262,13 +298,15 @@ class CompletionDetector:
                     if status.get('is_stuck', False) and status.get('stuck_duration', 0) > 1800
                 ]
                 
+                active_agents = [
+                    name for name, status in health_status.items()
+                    if status.get('has_claude', False) and not status.get('is_stuck', False)
+                ]
+                
+                active_agent_count = len(active_agents)
+                
                 if stuck_agents:
                     # Don't mark as failed if other agents are active
-                    active_agents = [
-                        name for name, status in health_status.items()
-                        if status.get('has_claude', False) and not status.get('is_stuck', False)
-                    ]
-                    
                     if not active_agents:
                         return 'failed', f"All agents stuck in bash mode: {', '.join(stuck_agents)}"
                     else:
@@ -296,8 +334,18 @@ class CompletionDetector:
                 self.auto_create_marker(project, reason_text)
                 return 'completed', f"{reason_text} (marker auto-created)"
             
-            # Check for failures
+            # Check for failures - but override if agents are active
             if indicators['error_indicators'] and indicators['confidence'] < 0.3:
+                # IMPORTANT: Override failure if we have active agents
+                if active_agent_count > 0:
+                    logger.info(f"Would mark as failed but {active_agent_count} agents are active - keeping as processing")
+                    return 'processing', f"Errors detected but {active_agent_count} agents still active"
+                
+                # Also check for recent activity as override
+                if indicators.get('is_status_report', False):
+                    logger.info("Would mark as failed but this is a status report - keeping as processing")
+                    return 'processing', "Status report with low confidence - still processing"
+                
                 return 'failed', f"Error indicators detected with low confidence ({indicators['confidence']:.2f})"
         
         # Still processing
@@ -306,6 +354,50 @@ class CompletionDetector:
             progress_info.append(f"{completed_phases}/{total_phases} phases done")
         
         return 'processing', f"Still in progress: {', '.join(progress_info) if progress_info else 'no clear completion indicators'}"
+    
+    def _analyze_emoji_context(self, output: str) -> Dict[str, float]:
+        """Analyze emoji usage in context to determine sentiment"""
+        result = {'score': 0.0}
+        
+        # Define emoji mappings with context-aware scoring
+        emoji_map = {
+            '✅': 0.15,   # Success/completion
+            '❌': 0.0,    # Context-dependent (see below)
+            '⚠️': -0.05,  # Warning, not failure
+            '🚀': 0.1,    # Progress/deployment
+            '📊': 0.05,   # Status/metrics (neutral-positive)
+            '🔍': 0.05,   # Investigation/analysis
+            '⏳': 0.0,    # Waiting/pending (neutral)
+            '🛠️': 0.05,   # Working/building
+        }
+        
+        output_lower = output.lower()
+        
+        for emoji, base_score in emoji_map.items():
+            count = output.count(emoji)
+            if count > 0:
+                # Special handling for ❌
+                if emoji == '❌':
+                    # Check context around each occurrence
+                    for i in range(count):
+                        idx = output.find('❌', 0)
+                        if idx != -1:
+                            # Get surrounding context (50 chars each side)
+                            start = max(0, idx - 50)
+                            end = min(len(output), idx + 50)
+                            context = output[start:end].lower()
+                            
+                            # ❌ is neutral/positive in these contexts
+                            if 'not ready' in context or 'pending' in context or 'in progress' in context:
+                                pass  # No score change
+                            else:
+                                # ❌ is negative in failure context
+                                result['score'] -= 0.1
+                else:
+                    # Apply normal scoring for other emojis
+                    result['score'] += base_score * count
+        
+        return result
     
     def auto_create_marker(self, project: Dict[str, Any], reason: str):
         """Auto-create marker when completion detected but marker missing (enforces autonomy)"""
