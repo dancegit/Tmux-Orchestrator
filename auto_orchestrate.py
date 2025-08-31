@@ -3491,6 +3491,17 @@ This file is automatically read by Claude Code when working in this directory.
                 ], check=True)
                 progress.update(task, advance=1, description=f"Created {window_name} window...")
             
+            # CRITICAL FIX: Update database with session name IMMEDIATELY after session creation
+            # This prevents orphan reconciliation from creating duplicates if briefing fails
+            if hasattr(self, 'project_id') and self.project_id:
+                try:
+                    from scheduler import TmuxOrchestratorScheduler
+                    scheduler = TmuxOrchestratorScheduler()
+                    scheduler.update_session_name(self.project_id, session_name)
+                    console.print(f"[blue]✅ IMMEDIATELY updated database with session name: {session_name}[/blue]")
+                except Exception as e:
+                    console.print(f"[red]❌ CRITICAL: Failed to update session name in database: {e}[/red]")
+            
             # Ensure each worktree has orchestrator reference in CLAUDE.md
             self.ensure_orchestrator_reference(worktree_paths)
             
@@ -3502,16 +3513,6 @@ This file is automatically read by Claude Code when working in this directory.
             console.print(f"Deployed roles: {', '.join([r[0] for r in roles_to_deploy])}")
             console.print(f"\nTo attach: [cyan]tmux attach -t {session_name}[/cyan]")
             console.print(f"\n[yellow]Note: Each agent works in their own git worktree to prevent conflicts[/yellow]")
-            
-            # Update database with session name if called from queue daemon
-            if hasattr(self, 'project_id') and self.project_id:
-                try:
-                    from scheduler import TmuxOrchestratorScheduler
-                    scheduler = TmuxOrchestratorScheduler()
-                    scheduler.update_session_name(self.project_id, session_name)
-                    console.print(f"[blue]Updated queue database with session name: {session_name}[/blue]")
-                except Exception as e:
-                    console.print(f"[yellow]Warning: Failed to update session name in database: {e}[/yellow]")
     
     def brief_all_roles(self, session_name: str, spec: ImplementationSpec, roles_to_deploy: List[Tuple[str, str]], worktree_paths: Dict[str, Path]):
         """Start Claude in each window and provide role-specific briefings"""
