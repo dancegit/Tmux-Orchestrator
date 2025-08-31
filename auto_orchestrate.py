@@ -1581,37 +1581,37 @@ Generate a JSON implementation plan with this EXACT structure:
     "project_manager": {{
       "responsibilities": ["Ensure quality", "Track completion", "Review coverage"],
       "check_in_interval": 25,  # Reduced for better coordination
-      "initial_commands": ["cd ./shared/main-project || cd {self.project_path}", "cat {self.spec_path.name}"]
+      "initial_commands": ["# Access project files using absolute paths with Read/Bash tools", "cat {self.spec_path}" if "{self.spec_path}".startswith("/") else "cat {self.project_path}/{self.spec_path.name}"]
     }},
     "developer": {{
       "responsibilities": ["Implement features", "Write tests", "Fix bugs"],
       "check_in_interval": 30,  # Reduced for faster development cycles
-      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && git status || cd {self.project_path} && git status"]
+      "initial_commands": ["pwd", "# Use absolute paths with git -C instead of cd", "git -C {self.project_path} status"]
     }},
     "tester": {{
       "responsibilities": ["Run tests", "Report failures", "Verify coverage"],
       "check_in_interval": 30,  # Reduced to match developer pace
-      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && echo 'Ready to test' || cd {self.project_path} && echo 'Ready to test'"]
+      "initial_commands": ["pwd", "echo 'Ready to test - will use absolute paths with test commands'"]
     }},
     "testrunner": {{
       "responsibilities": ["Execute test suites", "Parallel test management", "Performance testing", "Test infrastructure", "Results analysis"],
       "check_in_interval": 30,  # Same as tester for coordination
-      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && echo 'Setting up test execution framework' || cd {self.project_path} && echo 'Setting up test execution framework'"]
+      "initial_commands": ["pwd", "echo 'Setting up test execution framework - will use absolute paths'"]
     }},
     "logtracker": {{
       "responsibilities": ["Monitor logs real-time", "Track errors", "Alert critical issues", "Use project monitoring tools", "Generate error reports"],
       "check_in_interval": 15,  # Frequent checks for real-time monitoring
-      "initial_commands": ["pwd", "mkdir -p monitoring/logs monitoring/reports", "cd ./shared/main-project && echo 'Reading CLAUDE.md for monitoring instructions' || cd {self.project_path} && echo 'Reading CLAUDE.md for monitoring instructions'"]
+      "initial_commands": ["pwd", "mkdir -p monitoring/logs monitoring/reports", "echo 'Reading CLAUDE.md for monitoring instructions from {self.project_path}'"]
     }},
     "devops": {{
       "responsibilities": ["Infrastructure setup", "Deployment pipelines", "Monitor performance"],
       "check_in_interval": 45,  # Reduced but still longer as infra work is less frequent
-      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && echo 'Checking deployment configuration' || cd {self.project_path} && echo 'Checking deployment configuration'"]
+      "initial_commands": ["pwd", "echo 'Checking deployment configuration in {self.project_path}'"]
     }},
     "code_reviewer": {{
       "responsibilities": ["Review code quality", "Security audit", "Best practices enforcement"],
       "check_in_interval": 40,  # Reduced to review code more frequently
-      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && git log --oneline -10 || cd {self.project_path} && git log --oneline -10"]
+      "initial_commands": ["pwd", "git -C {self.project_path} log --oneline -10"]
     }},
     "researcher": {{
       "responsibilities": ["MCP tool discovery and utilization", "Research best practices", "Security vulnerability analysis", "Performance optimization research", "Document actionable findings"],
@@ -1621,7 +1621,7 @@ Generate a JSON implementation plan with this EXACT structure:
     "documentation_writer": {{
       "responsibilities": ["Write technical docs", "Update README", "Create API documentation"],
       "check_in_interval": 60,  # Still longer as docs are updated less frequently
-      "initial_commands": ["pwd", "ls -la shared/ || echo 'No shared directory'", "cd ./shared/main-project && ls -la *.md || cd {self.project_path} && ls -la *.md"]
+      "initial_commands": ["pwd", "ls -la {self.project_path}/*.md 2>/dev/null || echo 'Will document project'"]
     }},
     "sysadmin": {{
       "responsibilities": ["System setup", "User management", "Service configuration", "Package management", "System hardening"],
@@ -3988,35 +3988,36 @@ readlink shared/main-project  # Should show relative path to main project
 ```
 **If ANY of these fail, immediately report to Orchestrator and switch to cd-free mode.**
 
-🔒 **WHY USE SHARED SYMLINKS:**
-Claude Code security prevents direct `cd` to parent directories. This is a safety feature, not a bug.
+🔒 **WORKING WITH CLAUDE CODE SECURITY RESTRICTIONS:**
+Claude Code security prevents direct `cd` to parent directories. This is a safety feature.
 - ❌ `cd {self.project_path}` (blocked by security)
-- ✅ `cd ./shared/main-project` (allowed via symlink)
+- ✅ Use absolute paths with Read/Bash tools instead
 
-📍 **WHEN TO USE WHICH DIRECTORY:**
+📍 **HOW TO ACCESS FILES WITHOUT CD:**
 ✅ **Your worktree** (current location): Role-specific work, commits, your directories
-✅ **Main project** (cd ./shared/main-project): Project commands, shared files, main git repo
-✅ **Other agents** (cd ./shared/{{role}}): Read-only access to other agents' work
+✅ **Main project files**: Use `Read {self.project_path}/filename` or `Bash(git -C {self.project_path} status)`
+✅ **Other agent work**: Use absolute paths to read their files
 
-**Directory Structure**:
-./shared/
-├── main-project/     → Main project directory
-├── developer/        → Developer's worktree (if present)
-├── tester/          → Tester's worktree (if present)
-└── [other agents]/  → Other agent worktrees
+**Working with Project Files**:
+# Instead of cd + command, use absolute paths:
+- git -C {self.project_path} status
+- git -C {self.project_path} pull origin main
+- python {self.project_path}/script.py
+- npm --prefix {self.project_path} install
+- Read {self.project_path}/src/main.py
 
 **Examples**:
-- cd ./shared/main-project && git pull origin main
-- cd ./shared/main-project && npm install
-- cat ./shared/developer/src/feature.py
-- git log --oneline -5 ./shared/tester/
+- Bash(git -C {self.project_path} log --oneline -10)
+- Read {self.project_path}/README.md
+- Bash(python {self.project_path}/manage.py test)
+- Bash(npm --prefix {self.project_path} run build)
 
-**Git Remotes** (from main-project):
-- cd ./shared/main-project
-- git remote add developer ../../developer
-- git remote add tester ../../tester
+**Git Operations from Worktree**:
+- git add .  # In your worktree
+- git commit -m "Your message"
+- git push origin your-branch
 
-⚠️ **If Symlinks Fail:**
+⚠️ **Key Points:**
 1. Diagnose: ls -la shared/ || echo "shared missing"
 2. Switch to cd-free mode: Use absolute paths with Read/Bash tools
 3. Report immediately: "SYMLINK FAILURE: switched to cd-free mode"

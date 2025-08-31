@@ -29,13 +29,15 @@ def fix_briefing_paths(briefing: str, role: str, worktree_path: str, project_pat
     fixed = re.sub(r'\.\./(\.\./)?(Tmux-Orchestrator|tmux-orchestrator)', 
                    '/home/clauderun/Tmux-Orchestrator', fixed)
     
-    # Fix cd commands to project path
-    fixed = re.sub(f'cd {re.escape(project_path)}(?![\w-])', 
-                   f'cd ./shared/main-project || cd {project_path}', fixed)
+    # Fix cd commands to project path - don't use shared dirs as they fail with Claude security
+    # Just keep the original path
+    # fixed = re.sub(f'cd {re.escape(project_path)}(?![\w-])', 
+    #                f'cd ./shared/main-project || cd {project_path}', fixed)
     
-    # Fix direct references to check shared directory first
-    fixed = re.sub(f'cat {re.escape(project_path)}/(\S+)', 
-                   f'cat ./shared/main-project/\\1 || cat {project_path}/\\1', fixed)
+    # Fix direct references - don't use shared dirs as they fail with Claude security
+    # Just keep the original path
+    # fixed = re.sub(f'cat {re.escape(project_path)}/(\S+)', 
+    #                f'cat ./shared/main-project/\\1 || cat {project_path}/\\1', fixed)
     
     # Add working directory verification at the beginning if not present
     if "pwd" not in fixed[:200] and role != 'orchestrator':
@@ -84,7 +86,9 @@ def fix_initial_command_paths(commands: list, role: str) -> list:
         if cmd.startswith('cd ') and '/home/clauderun' in cmd and 'Tmux-Orchestrator' not in cmd:
             # This is a cd to project directory
             project_path = cmd[3:].strip()
-            fixed_cmd = f'cd ./shared/main-project || cd {project_path}'
+            # Don't use shared dirs - they fail with Claude security
+            # Just use absolute paths with Read/Bash tools instead
+            fixed_cmd = f'# Use absolute paths with Read/Bash tools instead of cd {project_path}'
             fixed_commands.append(fixed_cmd)
         else:
             fixed_commands.append(cmd)
