@@ -3628,7 +3628,7 @@ This file is automatically read by Claude Code when working in this directory.
                     # Use unified messenger for context priming
                     self.messenger.send_message(f'{session_name}:{window_idx}', context_prime_msg)
                     # Wait for context priming to complete
-                    time.sleep(8)
+                    time.sleep(15)  # Increased delay to allow processing
                 except Exception as e:
                     console.print(f"[yellow]Context priming skipped for {window_name}: {str(e)}[/yellow]")
             
@@ -3645,6 +3645,9 @@ This file is automatically read by Claude Code when working in this directory.
             # Send briefing using unified messenger
             self.messenger.send_briefing(f'{session_name}:{window_idx}', briefing)
             
+            # Wait for briefing to be processed before sending session reminder
+            time.sleep(10)
+            
             # Send session name reminder to prevent communication errors
             session_reminder = f"""📍 **IMPORTANT SESSION INFO**
 Your session: {session_name}
@@ -3654,6 +3657,9 @@ Orchestrator location: {session_name}:0
 DO NOT use shortened forms - use exactly: {session_name}:0
 """
             self.messenger.send_message(f'{session_name}:{window_idx}', session_reminder)
+            
+            # Wait before processing initial commands or moving to next agent
+            time.sleep(5)
             
             # Run initial commands
             for cmd in role_config.initial_commands:

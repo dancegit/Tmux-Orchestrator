@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "specs": [
+    {
+      "spec_file": "./enhance_batch_dependencies.md",
+      "project_directory": "/home/clauderun/Tmux-Orchestrator",
+      "enabled": true,
+      "tags": ["enhancement", "tool-improvement", "dependency-resolution", "batch-processing"]
+    }
+  ],
+  "batch_config": {
+    "parallel": false,
+    "continue_on_error": false,
+    "log_level": "INFO"
+  }
+}

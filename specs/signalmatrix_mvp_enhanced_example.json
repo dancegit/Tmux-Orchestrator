@@ -1,0 +1,85 @@
+{
+  "version": "1.0",
+  "description": "Example of SignalMatrix MVP batch with enhanced dependency support",
+  "specs": [
+    {
+      "spec_file": "./orchestrator_mvp_events.md",
+      "project_directory": "/home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-orchestrator",
+      "enabled": true,
+      "tags": ["mvp", "orchestrator", "events", "infrastructure"],
+      "priority": 0,
+      "dependencies": []
+    },
+    {
+      "spec_file": "./elliott_wave_mvp_integration.md",
+      "project_directory": "/home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-elliott-wave",
+      "enabled": true,
+      "tags": ["mvp", "elliott-wave", "detection", "core"],
+      "priority": 0,
+      "dependencies": ["orchestrator_mvp_events"]
+    },
+    {
+      "spec_file": "./options_pricing_mvp_integration.md",
+      "project_directory": "/home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-options-pricing",
+      "enabled": true,
+      "tags": ["mvp", "options-pricing", "black-scholes", "core"],
+      "priority": 0,
+      "dependencies": ["elliott_wave_mvp_integration"]
+    },
+    {
+      "spec_file": "./reporting_mvp_integration.md",
+      "project_directory": "/home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-reporting",
+      "enabled": true,
+      "tags": ["mvp", "reporting", "pdf-generation", "core"],
+      "priority": 0,
+      "dependencies": ["options_pricing_mvp_integration"]
+    },
+    {
+      "spec_file": "./backtesting_mvp_integration.md",
+      "project_directory": "/home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-backtesting",
+      "enabled": true,
+      "tags": ["mvp", "backtesting", "validation", "core"],
+      "priority": 0,
+      "dependencies": ["reporting_mvp_integration"]
+    },
+    {
+      "spec_file": "./mvp_interface_development.md",
+      "project_directory": "/home/clauderun/signalmatrix/signalmatrix_org/signalmatrix-slice-slice-deployment",
+      "enabled": true,
+      "tags": ["mvp", "interface", "jupyter", "infrastructure"],
+      "priority": 1,
+      "dependencies": ["backtesting_mvp_integration"]
+    },
+    {
+      "spec_file": "./mvp_testing_integration.md",
+      "project_directory": "/home/clauderun/signalmatrix/signalmatrix_integration_work/tests",
+      "enabled": true,
+      "tags": ["mvp", "testing", "quality-assurance", "infrastructure"],
+      "priority": 0,
+      "dependencies": ["mvp_interface_development"]
+    },
+    {
+      "spec_file": "./mvp_deployment_config.md",
+      "project_directory": "/home/clauderun/signalmatrix/signalmatrix_integration_work/deployment",
+      "enabled": true,
+      "tags": ["mvp", "deployment", "ci-cd", "infrastructure"],
+      "priority": 1,
+      "dependencies": ["mvp_testing_integration"]
+    },
+    {
+      "spec_file": "./mvp_deployment_final.md",
+      "project_directory": "/home/clauderun/signalmatrix/signalmatrix_integration_work/deployment",
+      "enabled": true,
+      "tags": ["mvp", "deployment", "final", "go-live", "production"],
+      "priority": 0,
+      "dependencies": ["elliott_wave_mvp_integration", "options_pricing_mvp_integration", "reporting_mvp_integration", "backtesting_mvp_integration", "mvp_deployment_config"]
+    }
+  ],
+  "batch_config": {
+    "parallel": false,
+    "continue_on_error": false,
+    "log_level": "INFO",
+    "dependency_resolution": true,
+    "show_dependency_graph": true
+  }
+}
