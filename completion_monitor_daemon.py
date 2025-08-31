@@ -108,6 +108,46 @@ class CompletionMonitorDaemon:
             logger.error(f"Failed to get processing projects: {e}")
             return []
     
+    def get_recent_failed_projects(self, limit: int = 3) -> List[Dict[str, Any]]:
+        """Get recently failed projects that might actually be completed"""
+        db_path = self.tmux_orchestrator_path / 'task_queue.db'
+        
+        try:
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT id, 
+                           COALESCE(session_name, orchestrator_session, main_session) as project_name,
+                           COALESCE(session_name, orchestrator_session, main_session) as session_name, 
+                           spec_path as spec_file, status, started_at, completed_at, error_message
+                    FROM project_queue 
+                    WHERE status = 'failed' 
+                    AND completed_at > datetime('now', '-24 hours')  -- Only recent failures
+                    ORDER BY completed_at DESC
+                    LIMIT ?
+                """, (limit,))
+                
+                projects = []
+                for row in cursor.fetchall():
+                    projects.append({
+                        'id': row['id'],
+                        'project_name': row['project_name'],
+                        'session_name': row['session_name'],
+                        'spec_file': row['spec_file'],
+                        'status': row['status'],
+                        'started_at': row['started_at'],
+                        'completed_at': row['completed_at'],
+                        'error_message': row['error_message']
+                    })
+                
+                return projects
+                
+        except Exception as e:
+            logger.error(f"Failed to get recent failed projects: {e}")
+            return []
+    
     def check_session_exists(self, session_name: str) -> bool:
         """Check if a tmux session exists and is active"""
         import subprocess
@@ -306,6 +346,115 @@ class CompletionMonitorDaemon:
         
         logger.warning(f"❌ Project {project_id} marked as failed")
     
+    def recover_wrongly_failed_project(self, project: Dict[str, Any]):
+        """Recover a project that was wrongly marked as failed but is actually complete"""
+        project_id = project['id']
+        session_name = project['session_name']
+        
+        logger.info(f"🔄 Recovering wrongly failed project {project_id}: {project['project_name']}")
+        
+        # Update database status to completed (preserve original completion timestamp if recent)
+        completion_time = datetime.now().isoformat()
+        
+        # If failed recently (< 30 minutes ago), assume it was wrongly failed and use current time
+        try:
+            if project.get('completed_at'):
+                from datetime import datetime, timedelta
+                failed_time = datetime.fromisoformat(project['completed_at'])
+                if datetime.now() - failed_time < timedelta(minutes=30):
+                    completion_time = project['completed_at']  # Keep original failure time as completion time
+        except:
+            pass  # Use current time if parsing fails
+            
+        self.update_project_status(project_id, 'completed', completion_time)
+        
+        # Update error message to indicate recovery
+        try:
+            db_path = self.tmux_orchestrator_path / 'task_queue.db'
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.execute("""
+                    UPDATE project_queue 
+                    SET error_message = ?
+                    WHERE id = ?
+                """, (f"Recovered: Project incorrectly marked failed but found to be complete via completion detection", project_id))
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Could not update recovery message for project {project_id}: {e}")
+        
+        # Send recovery notification (if configured)
+        try:
+            if hasattr(self.completion_manager, 'notifier') and self.completion_manager.notifier:
+                success = self.completion_manager.notifier.send_completion_notification(
+                    project['project_name'],
+                    session_name,
+                    'completed_recovery'
+                )
+                if success:
+                    logger.info(f"Recovery notification sent for project {project_id}")
+        except Exception as e:
+            logger.error(f"Error sending recovery notification for project {project_id}: {e}")
+        
+        logger.info(f"✅ Project {project_id} recovered from failed to completed")
+    
+    def failed_project_recovery_cycle(self):
+        """Check recent failed projects to see if any are actually completed"""
+        try:
+            logger.debug("Starting failed project recovery cycle...")
+            
+            failed_projects = self.get_recent_failed_projects(3)
+            if not failed_projects:
+                logger.debug("No recent failed projects to check")
+                return
+            
+            logger.info(f"Checking {len(failed_projects)} recent failed projects for potential recovery")
+            
+            recovered_count = 0
+            
+            for project in failed_projects:
+                try:
+                    project_id = project['id']
+                    
+                    # Skip if no session name (can't check completion)
+                    if not project['session_name']:
+                        logger.debug(f"Project {project_id}: No session name, skipping recovery check")
+                        continue
+                    
+                    # Enhanced project info for detector
+                    db_path = self.tmux_orchestrator_path / 'task_queue.db'
+                    project_path = None
+                    with sqlite3.connect(str(db_path)) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT project_path FROM project_queue WHERE id = ?", (project_id,))
+                        row = cursor.fetchone()
+                        if row:
+                            project_path = row[0]
+                    
+                    enhanced_project = {
+                        **project,
+                        'project_path': project_path
+                    }
+                    
+                    # Use completion detector to check if actually completed
+                    status, reason = self.completion_detector.detect_completion(enhanced_project)
+                    
+                    if status == 'completed':
+                        logger.info(f"🔄 Project {project_id} was wrongly failed - actually completed: {reason}")
+                        self.recover_wrongly_failed_project(project)
+                        recovered_count += 1
+                    else:
+                        logger.debug(f"Project {project_id} confirmed failed: {reason}")
+                        
+                except Exception as e:
+                    logger.error(f"Error checking failed project {project.get('id', 'unknown')}: {e}")
+            
+            if recovered_count > 0:
+                logger.info(f"✅ Recovered {recovered_count} wrongly failed project(s)")
+            else:
+                logger.debug("No wrongly failed projects found - all failures appear legitimate")
+                
+        except Exception as e:
+            logger.error(f"Error during failed project recovery cycle: {e}")
+    
     def monitoring_cycle(self):
         """Run one monitoring cycle - check all processing projects"""
         logger.debug("Starting monitoring cycle...")
@@ -335,6 +484,9 @@ class CompletionMonitorDaemon:
         
         # Verify cleanup for recent completed projects
         self.cleanup_verification_cycle()
+        
+        # Check for wrongly failed projects that might actually be completed
+        self.failed_project_recovery_cycle()
         
         logger.debug("Monitoring cycle completed")
     
