@@ -620,13 +620,13 @@ class TmuxOrchestratorScheduler:
         with self.queue_lock:
             cursor = self.conn.cursor()
             cursor.execute("""
-                SELECT id, project_path, orchestrator_session, main_session, started_at, spec_path
+                SELECT id, project_path, orchestrator_session, main_session, started_at, spec_path, session_name
                 FROM project_queue 
                 WHERE status = 'processing'
             """)
             
             for row in cursor.fetchall():
-                project_id, project_path, orch_session, main_session, started_at, spec_path = row
+                project_id, project_path, orch_session, main_session, started_at, spec_path, session_name = row
                 
                 # Derive project name from spec path
                 project_name = None
@@ -679,7 +679,7 @@ class TmuxOrchestratorScheduler:
                     continue
                 
                 # Check 1: No session name set (auto_orchestrate.py failed before session creation)
-                if not orch_session and not main_session:
+                if not orch_session and not main_session and not session_name:
                     # NEW: Check if process is still alive via ProcessManager before flagging
                     if self.process_manager.is_alive(project_id):
                         logger.debug(f"Project {project_id} has no session but process is alive ({elapsed:.0f}s elapsed) - skipping phantom reset")
@@ -703,8 +703,10 @@ class TmuxOrchestratorScheduler:
                         continue
                 
                 # Check 2: Session validation (with pattern matching fallback if no session name)
-                session_to_check = orch_session or main_session
+                session_to_check = orch_session or main_session or session_name
                 if session_to_check:
+                    session_source = 'orchestrator' if orch_session else ('main' if main_session else 'session_name')
+                    logger.debug(f"Project {project_id}: Checking {session_source} session '{session_to_check}'")
                     is_live, reason = self.validate_session_liveness(session_to_check, project_id=project_id, spec_path=spec_path)
                     if not is_live:
                         self._reset_phantom_project(cursor, project_id, project_name or "unknown", reason=reason)
@@ -2581,33 +2583,55 @@ class TmuxOrchestratorScheduler:
                             logger.warning(f"STDERR: {result.stderr[:500]}")
                         
                         # CRITICAL: Validate that auto_orchestrate.py actually created a tmux session
-                        # Wait up to 30 seconds for session creation, then verify
+                        # Wait up to 30 seconds for session creation, then verify AND CAPTURE session name
                         session_validated = False
+                        discovered_session_name = None
                         for attempt in range(6):  # 6 attempts, 5 seconds each = 30 seconds total
                             time.sleep(5)
                             
                             # Check if any new tmux sessions were created with project-related names
                             try:
-                                session_check = subprocess.run(['tmux', 'list-sessions'], 
+                                session_check = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], 
                                                              capture_output=True, text=True)
                                 if session_check.returncode == 0:
-                                    sessions = session_check.stdout
+                                    sessions = session_check.stdout.strip().split('\n')
                                     # Look for sessions containing the project name or spec keywords
-                                    project_keywords = [project_name.lower(), 'tmux-orchestrator', 'impl']
-                                    if any(keyword in sessions.lower() for keyword in project_keywords):
-                                        session_validated = True
-                                        logger.info(f"Session validation SUCCESS for project {next_project['id']}")
+                                    project_keywords = [project_name.lower(), 'impl', 'integration', 'deployment', 'config']
+                                    
+                                    for session_name in sessions:
+                                        session_lower = session_name.lower()
+                                        if any(keyword in session_lower for keyword in project_keywords):
+                                            # Found matching session - validate it's actually for this project
+                                            if '-impl-' in session_lower and len(session_name) > 20:  # Reasonable length check
+                                                discovered_session_name = session_name
+                                                session_validated = True
+                                                logger.info(f"Session validation SUCCESS for project {next_project['id']}: {discovered_session_name}")
+                                                break
+                                    
+                                    if session_validated:
                                         break
                             except Exception as e:
                                 logger.warning(f"Session validation error: {e}")
                         
-                        if not session_validated:
+                        if not session_validated or not discovered_session_name:
                             # Session creation failed - mark project as failed immediately
                             error_msg = "auto_orchestrate.py completed but no tmux session was created"
                             self.update_project_status(next_project['id'], 'failed', error_msg)
                             logger.error(f"SESSION VALIDATION FAILED for project {next_project['id']}: {error_msg}")
                             failed_projects.append(f"{project_name} (ID: {next_project['id']}) - Session Creation Failed")
                             continue
+                        
+                        # CRITICAL FIX: Store the discovered session name in the database
+                        try:
+                            cursor.execute("""
+                                UPDATE project_queue 
+                                SET session_name = ?
+                                WHERE id = ?
+                            """, (discovered_session_name, next_project['id']))
+                            self.conn.commit()
+                            logger.info(f"✅ FIXED: Stored session name '{discovered_session_name}' for project {next_project['id']}")
+                        except Exception as e:
+                            logger.error(f"❌ Failed to store session name for project {next_project['id']}: {e}")
                         
                         # FIXED: Keep project in 'processing' until actual orchestration work completes
                         # Project remains 'processing' - will be marked 'completed' by orchestration agents
