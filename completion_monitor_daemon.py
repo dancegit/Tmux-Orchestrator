@@ -82,7 +82,9 @@ class CompletionMonitorDaemon:
                 cursor = conn.cursor()
                 
                 cursor.execute("""
-                    SELECT id, orchestrator_session as project_name, orchestrator_session as session_name, 
+                    SELECT id, 
+                           COALESCE(session_name, orchestrator_session, main_session) as project_name,
+                           COALESCE(session_name, orchestrator_session, main_session) as session_name, 
                            spec_path as spec_file, status, started_at
                     FROM project_queue 
                     WHERE status = 'processing'
