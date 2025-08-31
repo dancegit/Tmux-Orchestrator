@@ -130,6 +130,7 @@ def setup_new_project(spec_path: Path, force: bool = False) -> Tuple[str, str]:
     
     return str(new_project_path), str(dest_spec)
 
+
 def expand_specs(spec_args: List[str]) -> List[Path]:
     """Expand spec arguments, including globs and directories, to a list of unique .md files."""
     expanded = []
@@ -146,10 +147,10 @@ def expand_specs(spec_args: List[str]) -> List[Path]:
     # Deduplicate while preserving order
     unique_specs = list(OrderedDict.fromkeys(expanded))
     
-    # Validate
-    invalid = [p for p in unique_specs if not p.exists() or p.suffix.lower() != '.md']
+    # Validate - now allow both .md and .json files
+    invalid = [p for p in unique_specs if not p.exists() or p.suffix.lower() not in ['.md', '.json']]
     if invalid:
-        raise ValueError(f"Invalid specs (must be existing .md files): {invalid}")
+        raise ValueError(f"Invalid specs (must be existing .md or .json files): {invalid}")
     
     return unique_specs
 
@@ -192,6 +193,61 @@ class ImplementationSpec(BaseModel):
     git_workflow: GitWorkflow
     success_criteria: List[str]
     project_size: ProjectSize = Field(default_factory=ProjectSize)
+
+
+# JSON Spec Models for spec-to-project mapping
+class SpecMapping(BaseModel):
+    spec_file: str = Field(..., description="Path to the .md spec file")
+    project_directory: str = Field(..., description="Target project directory")
+    enabled: bool = Field(default=True, description="Whether to process this spec")
+    tags: Optional[List[str]] = Field(default=[], description="Tags for filtering")
+    new_project: bool = Field(default=False, description="Whether to create a new project (true) or use existing (false)")
+
+class BatchConfig(BaseModel):
+    parallel: bool = Field(default=False, description="Run specs in parallel")
+    continue_on_error: bool = Field(default=True, description="Continue if a spec fails")
+    log_level: str = Field(default="INFO", description="Logging level")
+
+class SpecMappingFile(BaseModel):
+    version: str = Field(default="1.0", description="Schema version")
+    specs: List[SpecMapping] = Field(..., description="List of spec mappings")
+    batch_config: Optional[BatchConfig] = Field(default_factory=BatchConfig, description="Batch processing config")
+
+
+def load_json_specs(json_path: Path, filter_tags: Optional[List[str]] = None) -> Tuple[List[Tuple[Path, str, bool]], BatchConfig]:
+    """Load spec mappings from JSON file.
+    
+    Returns:
+        Tuple of (List of tuples: (spec_file_path, project_directory, new_project), batch_config)
+    """
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+    
+    mapping_file = SpecMappingFile(**data)
+    
+    specs = []
+    for spec in mapping_file.specs:
+        if not spec.enabled:
+            console.print(f"[yellow]Skipping disabled spec: {spec.spec_file}[/yellow]")
+            continue
+            
+        if filter_tags and not any(tag in spec.tags for tag in filter_tags):
+            console.print(f"[yellow]Skipping spec (tags don't match): {spec.spec_file}[/yellow]")
+            continue
+            
+        # Resolve relative paths
+        spec_path = Path(spec.spec_file)
+        if not spec_path.is_absolute():
+            spec_path = json_path.parent / spec_path
+            
+        # Validate spec exists
+        if not spec_path.exists():
+            console.print(f"[red]Warning: Spec file not found: {spec_path}[/red]")
+            continue
+            
+        specs.append((spec_path, spec.project_directory, spec.new_project))
+    
+    return specs, mapping_file.batch_config
 
 
 class AgentIdManager:
@@ -401,6 +457,84 @@ class PathManager:
         
         return success
     
+    def pre_authenticate_claude(self):
+        """Ensure Claude is authenticated before starting agents"""
+        try:
+            # Check current auth status using config
+            result = subprocess.run(
+                ['claude', 'config', 'ls'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                import json
+                try:
+                    config = json.loads(result.stdout)
+                    # Check if both required auth flags are set
+                    has_trust = config.get('hasTrustDialogAccepted', False)
+                    has_onboarding = config.get('hasCompletedProjectOnboarding', False)
+                    
+                    if not has_trust or not has_onboarding:
+                        missing_flags = []
+                        if not has_trust:
+                            missing_flags.append('hasTrustDialogAccepted')
+                        if not has_onboarding:
+                            missing_flags.append('hasCompletedProjectOnboarding')
+                        
+                        error_msg = f"Claude authentication incomplete - missing flags: {', '.join(missing_flags)}. Please run Claude Code manually to complete authentication."
+                        logger.error(error_msg)
+                        raise Exception(error_msg)
+                    else:
+                        logger.info("Claude authentication verified: trust and onboarding completed")
+                except json.JSONDecodeError as e:
+                    error_msg = f"Failed to parse claude config output: {e}. Claude may not be properly installed."
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+            else:
+                error_msg = f"Claude config command failed (exit code {result.returncode}). Claude Code may not be installed or accessible."
+                logger.error(error_msg)
+                raise Exception(error_msg)
+                    
+            return True
+            
+        except subprocess.TimeoutExpired:
+            error_msg = "Claude config command timed out. Claude Code may be unresponsive."
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except FileNotFoundError:
+            error_msg = "Claude command not found. Please ensure Claude Code is installed and in PATH."
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except Exception as e:
+            logger.error(f"Authentication check failed: {e}")
+            raise
+
+    def get_role_initial_commands(self, role: str) -> List[str]:
+        """Get initial commands for role with authentication checking"""
+        commands = [
+            "pwd",
+            # Check claude config and fail if authentication incomplete
+            """
+            config=$(claude config ls 2>/dev/null)
+            if [ $? -ne 0 ]; then
+                echo "ERROR: Claude config command failed. Claude Code may not be installed." >&2
+                exit 1
+            fi
+            
+            if echo "$config" | grep -q '"hasTrustDialogAccepted": true' && echo "$config" | grep -q '"hasCompletedProjectOnboarding": true'; then
+                echo "Claude authentication verified"
+            else
+                echo "ERROR: Claude authentication incomplete. Missing required flags in config." >&2
+                echo "Please run Claude Code manually to complete authentication setup." >&2
+                echo "Required: hasTrustDialogAccepted=true, hasCompletedProjectOnboarding=true" >&2
+                exit 1
+            fi
+            """.strip()
+        ]
+        return commands
+    
     def _setup_claude_config_for_role(self, role: str, worktree_path: Path):
         """Generate Claude settings and orchestrator config for hooks-based messaging."""
         try:
@@ -449,6 +583,35 @@ class PathManager:
                         logger.info(f"Copied cleanup_on_exit.sh to {claude_dir}")
                     except Exception as e:
                         logger.warning(f"Failed to copy cleanup script: {e}")
+                        
+                # Create authentication check script for roles that need system access
+                if role.lower() in ['sysadmin', 'devops', 'securityops', 'networkops', 'monitoringops', 'databaseops']:
+                    auth_script_path = claude_dir / 'auth_check.sh'
+                    with open(auth_script_path, 'w') as f:
+                        f.write("""#!/bin/bash
+# Authentication check for Claude Code
+# Checks authentication status and aborts if incomplete
+
+config=$(claude config ls 2>/dev/null)
+if [ $? -ne 0 ]; then
+    echo "ERROR: Claude config command failed. Claude Code may not be installed." >&2
+    echo "Please ensure Claude Code is properly installed and accessible." >&2
+    exit 1
+fi
+
+if echo "$config" | grep -q '"hasTrustDialogAccepted": true' && echo "$config" | grep -q '"hasCompletedProjectOnboarding": true'; then
+    echo "Claude authentication verified"
+    exit 0
+else
+    echo "ERROR: Claude authentication incomplete. Missing required flags in config." >&2
+    echo "Please run Claude Code manually to complete authentication setup." >&2
+    echo "Required: hasTrustDialogAccepted=true, hasCompletedProjectOnboarding=true" >&2
+    echo "Project will be aborted with appropriate fail message." >&2
+    exit 1
+fi
+""")
+                    auth_script_path.chmod(0o755)
+                    logger.info(f"Created authentication check script for {role} at {claude_dir}")
             
             # Generate orchestrator_config.json with agent-specific values
             orchestrator_config_path = claude_dir / 'orchestrator_config.json'
@@ -700,6 +863,8 @@ class TmuxMessenger:
         
     def send_message(self, target: str, message: str, retries: int = 3) -> bool:
         """Send message with guaranteed Enter key and MCP wrapper prevention"""
+        import time
+        
         # Clean message first
         clean_message = self.clean_message_from_mcp_wrappers(message)
         
@@ -707,27 +872,47 @@ class TmuxMessenger:
             console.print(f"[yellow]⚠️ Message was empty after cleaning, skipping send to {target}[/yellow]")
             return True  # Don't fail on empty messages
         
-        # Use enhanced send script with proper Enter handling
+        # ALWAYS append newline to ensure Enter key
+        if not clean_message.endswith('\n'):
+            clean_message += '\n'
+        
+        for attempt in range(retries):
+            try:
+                result = subprocess.run([
+                    str(self.send_script),
+                    target,
+                    clean_message
+                ], capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    # Verify delivery
+                    time.sleep(1)  # Allow message to process
+                    output = self._capture_pane_output(target)
+                    if clean_message.strip() in output:
+                        console.print(f"[dim]📤 Message delivered successfully to {target}: {clean_message[:50]}{'...' if len(clean_message) > 50 else ''}[/dim]")
+                        return True
+                    else:
+                        console.print(f"[yellow]⚠️ Message sent but not found in output (attempt {attempt + 1})[/yellow]")
+                else:
+                    console.print(f"[red]❌ Failed to send to {target} (attempt {attempt + 1}): {result.stderr}[/red]")
+                        
+            except subprocess.TimeoutExpired:
+                console.print(f"[red]⏰ Message send timeout to {target} (attempt {attempt + 1})[/red]")
+                
+            time.sleep(5 * (attempt + 1))  # Exponential backoff
+            
+        console.print(f"[red]💥 Failed to deliver message to {target} after {retries} attempts[/red]")
+        return False
+
+    def _capture_pane_output(self, target: str, lines: int = 50) -> str:
+        """Capture recent pane output for verification"""
         try:
             result = subprocess.run([
-                str(self.send_script),
-                target,
-                clean_message
-            ], capture_output=True, text=True, timeout=30)
-            
-            if result.returncode == 0:
-                console.print(f"[dim]📤 Message sent to {target}: {clean_message[:50]}{'...' if len(clean_message) > 50 else ''}[/dim]")
-                return True
-            else:
-                console.print(f"[red]❌ Failed to send to {target}: {result.stderr}[/red]")
-                return False
-                
-        except subprocess.TimeoutExpired:
-            console.print(f"[red]⏰ Message send timeout to {target}[/red]")
-            return False
-        except Exception as e:
-            console.print(f"[red]💥 Exception sending to {target}: {e}[/red]")
-            return False
+                'tmux', 'capture-pane', '-p', '-t', target, f'-S -{lines}'
+            ], capture_output=True, text=True)
+            return result.stdout if result.returncode == 0 else ""
+        except Exception:
+            return ""
     
     def send_command(self, target: str, command: str) -> bool:
         """Send a command with 'Please run:' prefix"""
@@ -1511,7 +1696,6 @@ IMPORTANT:
                 
                 # Try a simpler approach without -p flag
                 # Write prompt to temporary file and use cat | claude approach
-                import uuid
                 import threading
                 import time
                 
@@ -6146,10 +6330,14 @@ Remember: Context management is automatic - focus on creating good checkpoints t
               help='Enable self-scheduling for orchestrator window 0 (default: enabled)')
 @click.option('--global-mcp-init', is_flag=True, default=False,
               help='Enable global/system-level MCP initialization for all roles')
+@click.option('--filter-tags', multiple=True,
+              help='Filter specs by tags when using JSON spec files')
+@click.option('--validate-json', is_flag=True,
+              help='Validate JSON spec file without processing')
 def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, team_type: str, roles: tuple, force: bool, overwrite: bool, plan: str, 
          resume: bool, status_only: bool, rebrief_all: bool, list_orchestrations: bool, new_project: bool,
          research: Optional[str], restore: Optional[str], continue_batch: bool, git_mode: str, project_id: Optional[int], daemon: bool,
-         enable_orchestrator_scheduling: bool, global_mcp_init: bool):
+         enable_orchestrator_scheduling: bool, global_mcp_init: bool, filter_tags: tuple, validate_json: bool):
     """Automatically set up a Tmux Orchestrator environment from a specification.
     
     The script will analyze your specification and set up a complete tmux
@@ -6166,6 +6354,36 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
     You can manually specify project size with --size or add specific roles
     with --roles (e.g., --roles documentation_writer)
     """
+    # Handle JSON validation first - before any other processing
+    if validate_json and spec:
+        console.print("\n[cyan]JSON Spec Validation Mode[/cyan]")
+        validation_successful = True
+        
+        for spec_path_str in spec:
+            spec_path = Path(spec_path_str)
+            if spec_path.suffix.lower() == '.json':
+                try:
+                    json_specs, json_batch_config = load_json_specs(spec_path, list(filter_tags) if filter_tags else None)
+                    console.print(f"\n[green]✓ Valid JSON: {spec_path}[/green]")
+                    console.print(f"  - Enabled specs: {len(json_specs)}")
+                    console.print(f"  - Batch config: parallel={json_batch_config.parallel}, continue_on_error={json_batch_config.continue_on_error}")
+                    
+                    # Show spec mappings
+                    for i, (spec_file, project_dir, new_project) in enumerate(json_specs):
+                        mode = "new project" if new_project else "existing project"
+                        console.print(f"  - Spec {i+1}: {spec_file} → {project_dir} ({mode})")
+                        
+                except Exception as e:
+                    console.print(f"\n[red]✗ Invalid JSON: {spec_path}[/red]")
+                    console.print(f"  Error: {str(e)}")
+                    validation_successful = False
+            else:
+                console.print(f"\n[yellow]⚠ Skipping non-JSON file: {spec_path}[/yellow]")
+        
+        # Exit after validation
+        console.print(f"\n[cyan]Validation complete - {'PASSED' if validation_successful else 'FAILED'}[/cyan]")
+        return 0 if validation_successful else 1
+    
     # Handle list option first
     if list_orchestrations:
         # Create a temporary manager to list orchestrations
@@ -6252,8 +6470,111 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
             return
         
         if not spec_paths:
-            console.print("[red]Error: No valid .md specs found[/red]")
+            console.print("[red]Error: No valid specs found[/red]")
             return
+        
+        
+        # Handle JSON spec files
+        json_specs_to_process = []
+        md_specs_to_process = []
+        
+        for spec_path in spec_paths:
+            if spec_path.suffix.lower() == '.json':
+                # Load JSON spec mappings
+                try:
+                    json_specs, json_batch_config = load_json_specs(spec_path, list(filter_tags) if filter_tags else None)
+                    
+                    # Add JSON specs to processing list
+                    json_specs_to_process.extend(json_specs)
+                    
+                    # Override batch config if specified in JSON
+                    if json_batch_config.continue_on_error:
+                        console.print("[cyan]JSON batch config: continue_on_error=True[/cyan]")
+                    
+                except Exception as e:
+                    console.print(f"[red]Error loading JSON spec {spec_path}: {e}[/red]")
+                    if not json_batch_config.continue_on_error if 'json_batch_config' in locals() else True:
+                        return
+                    continue
+            else:
+                # Regular .md spec
+                md_specs_to_process.append(spec_path)
+        
+        # If we have JSON specs, process them with their specific project directories
+        if json_specs_to_process:
+            if md_specs_to_process:
+                console.print("[yellow]Warning: Mixing JSON and .md specs - processing separately[/yellow]")
+            
+            # Process JSON specs with their mapped project directories
+            from scheduler import TmuxOrchestratorScheduler
+            scheduler = TmuxOrchestratorScheduler()
+            
+            batch_id = str(uuid.uuid4())
+            console.print(f"[cyan]JSON batch mode: Processing {len(json_specs_to_process)} spec(s) with batch ID: {batch_id}[/cyan]")
+            
+            # Separate new projects from existing projects
+            new_projects = []
+            existing_projects = []
+            
+            for json_spec_path, json_project_dir, is_new_project in json_specs_to_process:
+                if is_new_project:
+                    new_projects.append((json_spec_path, json_project_dir))
+                else:
+                    existing_projects.append((json_spec_path, json_project_dir))
+            
+            # Handle new projects first
+            if new_projects:
+                console.print(f"\n[cyan]Creating {len(new_projects)} new project(s)...[/cyan]")
+                for spec_path, json_project_dir in new_projects:
+                    # Generate unique project name and create in project's parent directory
+                    project_name = f"{Path(spec_path).stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    parent_dir = Path(json_project_dir).parent if json_project_dir else Path.home() / 'projects'
+                    parent_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    new_project_path = parent_dir / project_name
+                    try:
+                        # Create the project directory
+                        new_project_path.mkdir(parents=True, exist_ok=True)
+                        
+                        # Copy spec to project
+                        dest_spec = new_project_path / Path(spec_path).name
+                        shutil.copy(str(spec_path), str(dest_spec))
+                        
+                        # Initialize git repo
+                        subprocess.run(['git', 'init', str(new_project_path)], check=True, capture_output=True)
+                        subprocess.run(['git', '-C', str(new_project_path), 'add', Path(spec_path).name], check=True)
+                        subprocess.run(['git', '-C', str(new_project_path), 'commit', '-m', 'Initial commit: Add specification file'], check=True)
+                        
+                        project_id = scheduler.enqueue_project(str(dest_spec), str(new_project_path), batch_id)
+                        console.print(f"[green]✓ Created new project: {new_project_path} (ID: {project_id})[/green]")
+                    except Exception as e:
+                        console.print(f"[red]✗ Failed to create project for {spec_path}: {e}[/red]")
+                        if json_batch_config.continue_on_error:
+                            continue
+                        else:
+                            sys.exit(1)
+            
+            # Handle existing projects
+            if existing_projects:
+                console.print(f"\n[cyan]Enqueuing {len(existing_projects)} spec(s) for existing projects...[/cyan]")
+                for json_spec_path, json_project_dir in existing_projects:
+                    # Ensure project directory exists
+                    json_project_path = Path(json_project_dir)
+                    if not json_project_path.exists():
+                        console.print(f"[yellow]Creating project directory: {json_project_path}[/yellow]")
+                        json_project_path.mkdir(parents=True, exist_ok=True)
+                    
+                    project_id = scheduler.enqueue_project(str(json_spec_path), str(json_project_path), batch_id)
+                    console.print(f"[green]✓ Enqueued: {json_spec_path} → {json_project_path} (ID: {project_id})[/green]")
+            
+            if not md_specs_to_process:
+                console.print("\n[yellow]JSON specs enqueued for batch processing.[/yellow]")
+                console.print("[cyan]To start processing:[/cyan] uv run scheduler.py --queue-daemon")
+                console.print("[cyan]To view queue status:[/cyan] uv run scheduler.py --queue-list")
+                return
+        
+        # Update spec_paths to only include .md specs for the rest of the processing
+        spec_paths = md_specs_to_process
         
         console.print(f"[blue]Creating new projects for {len(spec_paths)} spec(s)...[/blue]")
         
@@ -6333,7 +6654,6 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
     if (len(spec) > 1 or batch) and not project_id:
         # Import scheduler
         from scheduler import TmuxOrchestratorScheduler
-        import uuid
         
         scheduler = TmuxOrchestratorScheduler()
         
@@ -6441,7 +6761,85 @@ def main(project: Optional[str], spec: Tuple[str, ...], batch: bool, size: str, 
     if not spec:
         console.print("[red]Error: --spec is required when not using --resume[/red]")
         sys.exit(1)
-        
+    
+    # Check if the spec is a JSON file
+    spec_path = Path(spec[0])
+    if spec_path.suffix.lower() == '.json':
+        # Handle JSON spec files
+        try:
+            json_specs, json_batch_config = load_json_specs(spec_path, list(filter_tags) if filter_tags else None)
+            
+            if not json_specs:
+                console.print("[red]Error: No enabled specs found in JSON file[/red]")
+                sys.exit(1)
+            
+            # Process JSON specs with their mapped project directories
+            from scheduler import TmuxOrchestratorScheduler
+            scheduler = TmuxOrchestratorScheduler()
+            
+            batch_id = str(uuid.uuid4())
+            console.print(f"[cyan]JSON batch mode: Enqueuing {len(json_specs)} project(s) with batch ID: {batch_id}[/cyan]")
+            
+            # Process each spec based on its new_project flag
+            new_project_count = 0
+            existing_project_count = 0
+            for json_spec_path, json_project_dir, is_new_project in json_specs:
+                if is_new_project:
+                    # Create new project
+                    project_name = f"{Path(json_spec_path).stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    parent_dir = Path(json_project_dir).parent if json_project_dir else Path.home() / 'projects'
+                    parent_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    new_project_path = parent_dir / project_name
+                    try:
+                        # Create the project directory
+                        new_project_path.mkdir(parents=True, exist_ok=True)
+                        
+                        # Copy spec to project
+                        dest_spec = new_project_path / Path(json_spec_path).name
+                        shutil.copy(str(json_spec_path), str(dest_spec))
+                        
+                        # Initialize git repo
+                        subprocess.run(['git', 'init', str(new_project_path)], check=True, capture_output=True)
+                        subprocess.run(['git', '-C', str(new_project_path), 'add', Path(json_spec_path).name], check=True)
+                        subprocess.run(['git', '-C', str(new_project_path), 'commit', '-m', 'Initial commit: Add specification file'], check=True)
+                        
+                        project_id = scheduler.enqueue_project(str(dest_spec), str(new_project_path), batch_id)
+                        console.print(f"[green]✓ Created new project: {new_project_path} → {dest_spec} (ID: {project_id})[/green]")
+                        new_project_count += 1
+                    except Exception as e:
+                        console.print(f"[red]✗ Failed to create project for {json_spec_path}: {e}[/red]")
+                        if json_batch_config.continue_on_error:
+                            continue
+                        else:
+                            sys.exit(1)
+                else:
+                    # Use existing project
+                    json_project_path = Path(json_project_dir)
+                    if not json_project_path.exists():
+                        console.print(f"[yellow]Creating project directory: {json_project_path}[/yellow]")
+                        json_project_path.mkdir(parents=True, exist_ok=True)
+                    
+                    project_id = scheduler.enqueue_project(str(json_spec_path), str(json_project_path), batch_id)
+                    console.print(f"[green]✓ Enqueued: {json_spec_path} → {json_project_path} (ID: {project_id})[/green]")
+                    existing_project_count += 1
+            
+            console.print("\n[yellow]JSON specs enqueued for batch processing:[/yellow]")
+            if new_project_count > 0:
+                console.print(f"  - {new_project_count} new project(s) created")
+            if existing_project_count > 0:
+                console.print(f"  - {existing_project_count} spec(s) for existing projects")
+            console.print("\n[cyan]To start processing:[/cyan] uv run scheduler.py --queue-daemon")
+            console.print("[cyan]To view queue status:[/cyan] uv run scheduler.py --queue-list")
+            return
+        except Exception as e:
+            import traceback
+            console.print(f"[red]Error loading JSON spec {spec_path}: {e}[/red]")
+            console.print("[red]Traceback:[/red]")
+            traceback.print_exc()
+            sys.exit(1)
+    
+    # Regular .md spec processing
     orchestrator = AutoOrchestrator(project or 'auto', spec[0], batch_mode=batch, overwrite=overwrite, daemon=daemon)
     orchestrator.manual_size = size if size != 'auto' else None
     orchestrator.team_type = team_type if team_type != 'auto' else None

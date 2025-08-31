@@ -58,6 +58,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.prompt import Confirm
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -144,7 +145,7 @@ def find_all_worktree_directories(project_path: Path, spec_info: Optional[Dict] 
         worktree_dirs.append(standard_worktrees)
     
     # Look for spec-specific worktrees
-    if spec_info and 'spec_path' in spec_info:
+    if spec_info and spec_info.get('spec_path'):
         spec_name = Path(spec_info['spec_path']).stem.lower().replace('_', '-')
         # Search for directories matching pattern
         for item in parent_dir.iterdir():
@@ -1429,8 +1430,20 @@ Notes:
         # Check if --all-agents flag is set
         if args.all_agents:
             # Get spec info for finding spec-specific worktrees
+            # Try to get spec_path from database
+            spec_path = None
+            try:
+                from list_completed_projects import get_completed_projects_from_db
+                db_projects = get_completed_projects_from_db()
+                for proj in db_projects:
+                    if proj['name'] == selected['project_name']:
+                        spec_path = proj.get('spec_path')
+                        break
+            except:
+                pass
+            
             spec_info = {
-                'spec_path': selected.get('spec_path'),
+                'spec_path': spec_path,
                 'project_name': selected['project_name']
             }
             success = merge_all_agents(to_path, spec_info, dry_run=args.dry_run)

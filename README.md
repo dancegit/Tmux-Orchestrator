@@ -893,6 +893,93 @@ uv run scheduler.py --queue-daemon
 ./auto_orchestrate.py --spec spec.md --enable-orchestrator-scheduling --global-mcp-init
 ```
 
+### 🆕 JSON Spec Mapping (NEW!)
+
+The `auto_orchestrate.py` script now supports JSON configuration files that map specification files to their target project directories. This enables centralized spec management and batch processing with custom project locations.
+
+#### JSON Schema
+```json
+{
+  "version": "1.0",
+  "specs": [
+    {
+      "spec_file": "path/to/spec.md",
+      "project_directory": "/absolute/path/to/project",
+      "enabled": true,
+      "tags": ["integration", "backend"],
+      "new_project": false
+    }
+  ],
+  "batch_config": {
+    "parallel": false,
+    "continue_on_error": true,
+    "log_level": "INFO"
+  }
+}
+```
+
+**Field Descriptions:**
+- `spec_file`: Path to the .md specification file (relative paths resolved from JSON location)
+- `project_directory`: Target directory for the project
+- `enabled`: Whether to process this spec (default: true)
+- `tags`: Optional tags for filtering with `--filter-tags`
+- `new_project`: **NEW!** Whether to create a new project (true) or use existing (false, default)
+
+**How `new_project` Works:**
+- When `true`: Creates a new git repository at `{project_directory}_YYYYMMDD_HHMMSS`
+- When `false`: Uses the existing directory specified in `project_directory`
+- Mixed mode supported: Some specs can create new projects while others use existing ones
+- New projects get the spec file copied and committed as the initial commit
+
+#### JSON Usage Examples
+```bash
+# Process a single JSON spec mapping
+./auto_orchestrate.py --spec integration_config.json
+
+# Validate JSON without processing
+./auto_orchestrate.py --spec integration_config.json --validate-json
+
+# Filter specs by tags
+./auto_orchestrate.py --spec integration_batch.json --filter-tags backend api
+
+# Mix JSON and regular specs
+./auto_orchestrate.py --spec config.json --spec additional_spec.md
+```
+
+#### Example JSON Configuration
+```json
+{
+  "version": "1.0",
+  "specs": [
+    {
+      "spec_file": "./integrate_web_server.md",
+      "project_directory": "/home/user/web_server_v2",
+      "enabled": true,
+      "tags": ["backend", "api", "integration"],
+      "new_project": false
+    },
+    {
+      "spec_file": "./new_mobile_app.md", 
+      "project_directory": "/home/user/projects/mobile",
+      "enabled": true,
+      "tags": ["mobile", "android", "client"],
+      "new_project": true
+    },
+    {
+      "spec_file": "./integrate_shared_auth.md",
+      "project_directory": "/home/user/shared_libs/auth",
+      "enabled": false,
+      "tags": ["library", "authentication"]
+    }
+  ],
+  "batch_config": {
+    "parallel": false,
+    "continue_on_error": true,
+    "log_level": "INFO"
+  }
+}
+```
+
 ### Option 2: Basic Setup (Single Project)
 
 ```bash
@@ -949,6 +1036,7 @@ The `auto_orchestrate.py` script provides fully automated setup:
 - **Automatic Project Detection**: Finds git root automatically - just provide the spec file
 - **New Project Creation**: `--new-project` flag creates new git repositories from specs
 - **Batch Processing**: Queue multiple specs for sequential processing without conflicts
+- **JSON Spec Mapping**: Map specs to specific project directories using JSON configuration files
 - **Context-Aware**: Uses `/context-prime` to understand your project before planning
 - **Spec Analysis**: Claude analyzes your markdown specifications intelligently
 - **Dynamic Team Composition**: Automatically selects appropriate roles based on project type
@@ -1414,6 +1502,15 @@ The orchestrator can share insights between projects:
   --spec mvp.md \
   --plan pro \
   --size small
+
+# NEW: JSON spec mapping
+./auto_orchestrate.py --spec integration_batch.json
+
+# NEW: Validate JSON configuration
+./auto_orchestrate.py --spec config.json --validate-json
+
+# NEW: Filter by tags
+./auto_orchestrate.py --spec batch.json --filter-tags backend integration
 ```
 
 #### `send-claude-message.sh` - Agent Communication

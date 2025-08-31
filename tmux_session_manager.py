@@ -42,6 +42,10 @@ class TmuxSessionManager:
             logger.error(f"Error checking session {session_name}: {e}")
             return False
     
+    def session_exists(self, session_name: str) -> bool:
+        """Alias for is_session_alive for consistency with zombie detection code"""
+        return self.is_session_alive(session_name)
+    
     def get_active_sessions(self) -> List[str]:
         """Get list of all active tmux sessions"""
         try:

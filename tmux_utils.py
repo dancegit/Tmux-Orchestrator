@@ -299,24 +299,52 @@ class TmuxManager:
             logger.error(f"Failed to create session {session_name}: {e}")
             return False
     
-    def kill_session(self, session_name: str) -> bool:
+    def kill_session(self, session_name: str, force: bool = False) -> bool:
         """
         Kill a tmux session
         
         Args:
             session_name: Name of the session to kill
+            force: If True, use SIGKILL for unresponsive sessions
             
         Returns:
             True if session was killed successfully, False otherwise
         """
         try:
+            # First attempt with standard kill
             result = self._run_tmux_command(["kill-session", "-t", session_name])
             if result.returncode == 0:
                 logger.info(f"Killed tmux session: {session_name}")
                 return True
-            else:
-                logger.warning(f"Failed to kill session {session_name}: {result.stderr}")
-                return False
+                
+            # If force is True and standard kill failed, use SIGKILL
+            if force:
+                logger.warning(f"Standard kill failed for {session_name}, attempting force kill")
+                # Get session PID and kill all processes
+                try:
+                    import psutil
+                    # Find tmux server processes for this session
+                    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                        if proc.info['name'] == 'tmux' and session_name in str(proc.info['cmdline']):
+                            try:
+                                parent = psutil.Process(proc.info['pid'])
+                                # Kill all children (Claude agents, etc.) with SIGKILL
+                                for child in parent.children(recursive=True):
+                                    child.kill()
+                                # Kill parent tmux process
+                                parent.kill()
+                                logger.info(f"Force killed tmux session {session_name} and all child processes")
+                                return True
+                            except psutil.ProcessLookupError:
+                                continue
+                            except psutil.AccessDenied:
+                                logger.warning(f"Access denied killing process for session {session_name}")
+                                continue
+                except ImportError:
+                    logger.warning("psutil not available for force kill, falling back to standard behavior")
+                    
+            logger.warning(f"Failed to kill session {session_name}: {result.stderr}")
+            return False
         except TmuxError as e:
             logger.error(f"Failed to kill session {session_name}: {e}")
             return False

@@ -12,7 +12,6 @@ import sqlite3
 import json
 import signal
 import sys
-import subprocess
 from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
@@ -21,8 +20,6 @@ import argparse
 from completion_manager import CompletionManager
 from session_state import SessionStateManager
 from scheduler import TmuxOrchestratorScheduler
-from completion_detector import CompletionDetector, create_completion_marker
-from agent_health_monitor import AgentHealthMonitor, AgentHealthDatabase
 
 # Configure logging
 logging.basicConfig(
@@ -54,11 +51,6 @@ class CompletionMonitorDaemon:
         self.session_state_manager = SessionStateManager(self.tmux_orchestrator_path)
         self.completion_manager = CompletionManager(self.session_state_manager)
         self.scheduler = TmuxOrchestratorScheduler()  # For database operations
-        self.completion_detector = CompletionDetector(self.tmux_orchestrator_path)
-        
-        # Initialize health monitoring
-        self.health_monitor = AgentHealthMonitor()
-        self.health_database = AgentHealthDatabase(str(self.tmux_orchestrator_path / 'task_queue.db'))
         
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -123,7 +115,6 @@ class CompletionMonitorDaemon:
     def check_project_completion(self, project: Dict[str, Any]) -> str:
         """
         Check if a project is completed, failed, or still processing.
-        Uses multiple detection methods for reliability.
         
         Returns: 'completed', 'failed', 'processing'
         """
@@ -133,88 +124,39 @@ class CompletionMonitorDaemon:
         logger.debug(f"Checking completion for project {project_id}: {session_name}")
         
         # First check if session still exists
-        session_exists = self.check_session_exists(session_name)
-        if not session_exists:
-            logger.warning(f"Session {session_name} not found for project {project_id} - checking for completion signals before marking failed")
-            
-            # Get project path for enhanced detection even without session
-            project_path = None
-            try:
-                import sqlite3
-                conn = sqlite3.connect(str(self.tmux_orchestrator_path / 'task_queue.db'))
-                cursor = conn.cursor()
-                cursor.execute("SELECT project_path FROM project_queue WHERE id = ?", (project_id,))
-                row = cursor.fetchone()
-                if row:
-                    project_path = row[0]
-                conn.close()
-            except Exception as e:
-                logger.debug(f"Could not get project path for offline analysis: {e}")
-            
-            # Enhanced project info for detector
-            offline_enhanced_project = {
-                **project,
-                'project_path': project_path
-            }
-            
-            # Hybrid check: Verify if other signals indicate completion despite missing session
-            status, reason = self.completion_detector.detect_completion(offline_enhanced_project)
-            if status == 'completed':
-                logger.info(f"Session missing but completion detected: {reason} - marking as completed")
-                # Create marker to prevent re-processing
-                from completion_utils import create_completion_marker
-                create_completion_marker(session_name, project_id, reason)
-                return 'completed'
-            else:
-                logger.info(f"Session {session_name} no longer exists and no completion signals found - marking as failed")
-                return 'failed'
+        if not self.check_session_exists(session_name):
+            logger.info(f"Session {session_name} no longer exists - marking as failed")
+            return 'failed'
         
         try:
-            # Get project path from database for enhanced detection
-            db_path = self.tmux_orchestrator_path / 'task_queue.db'
-            project_path = None
-            with sqlite3.connect(str(db_path)) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT project_path FROM project_queue WHERE id = ?", (project_id,))
-                row = cursor.fetchone()
-                if row:
-                    project_path = row[0]
+            # Use the external completion check script for consistency
+            import subprocess
             
-            # Enhanced project info for detector
-            enhanced_project = {
-                **project,
-                'project_path': project_path
-            }
+            logger.debug(f"Running completion check for project {project_id}")
+            result = subprocess.run([
+                'python3', 
+                str(self.tmux_orchestrator_path / 'check_project_completion.py'),
+                str(project_id)
+            ], capture_output=True, text=True, timeout=120, cwd=str(self.tmux_orchestrator_path))
             
-            # Use enhanced completion detector
-            status, reason = self.completion_detector.detect_completion(enhanced_project)
+            logger.debug(f"Completion check result for project {project_id}: returncode={result.returncode}")
             
-            if status == 'completed':
-                logger.info(f"Project {project_id} detected as complete: {reason}")
-                # Create completion marker for future reference
-                create_completion_marker(session_name, project_id, reason)
-                return 'completed'
-            elif status == 'failed':
-                logger.info(f"Project {project_id} detected as failed: {reason}")
-                return 'failed'
+            if result.returncode == 0:
+                # Parse the output to determine completion status
+                output = result.stdout
+                logger.debug(f"Completion check output: {output}")
+                
+                if "Project appears complete!" in output:
+                    logger.info(f"Project {project_id} detected as complete")
+                    return 'completed'
+                elif "Project appears failed" in output or "ERROR" in output:
+                    logger.info(f"Project {project_id} detected as failed")
+                    return 'failed'
+                else:
+                    logger.debug(f"Project {project_id} still processing")
+                    return 'processing'
             else:
-                logger.debug(f"Project {project_id} still processing: {reason}")
-                
-                # Fallback to old method if needed (but with improved logic)
-                try:
-                    result = subprocess.run([
-                        'python3', 
-                        str(self.tmux_orchestrator_path / 'check_project_completion.py'),
-                        str(project_id)
-                    ], capture_output=True, text=True, timeout=120, cwd=str(self.tmux_orchestrator_path))
-                    
-                    if result.returncode == 0 and "Project appears complete!" in result.stdout:
-                        logger.info(f"Project {project_id} detected as complete by fallback method")
-                        create_completion_marker(session_name, project_id, "Detected by check_project_completion.py")
-                        return 'completed'
-                except:
-                    pass
-                
+                logger.warning(f"Completion check failed for project {project_id}: {result.stderr}")
                 return 'processing'
                 
         except Exception as e:
@@ -327,68 +269,7 @@ class CompletionMonitorDaemon:
             except Exception as e:
                 logger.error(f"Error processing project {project['id']}: {e}")
         
-        # Perform agent health monitoring
-        self.health_monitoring_cycle()
-        
         logger.debug("Monitoring cycle completed")
-    
-    def health_monitoring_cycle(self):
-        """Check health of all active agent sessions"""
-        try:
-            processing_projects = self.get_processing_projects()
-            
-            for project in processing_projects:
-                session_name = project.get('main_session')
-                if not session_name:
-                    continue
-                    
-                # Check if session exists
-                try:
-                    result = subprocess.run([
-                        'tmux', 'has-session', '-t', session_name
-                    ], capture_output=True, timeout=5)
-                    
-                    if result.returncode != 0:
-                        logger.debug(f"Session {session_name} not found, skipping health check")
-                        continue
-                        
-                except Exception as e:
-                    logger.debug(f"Failed to check session {session_name}: {e}")
-                    continue
-                
-                # Perform health check
-                health_status = self.health_monitor.check_agent_health(session_name)
-                
-                if health_status:
-                    # Record health check in database
-                    self.health_database.record_health_check(session_name, health_status)
-                    
-                    # Check for stuck agents that need recovery
-                    stuck_agents = [
-                        (name, status) for name, status in health_status.items() 
-                        if status.get('needs_recovery', False)
-                    ]
-                    
-                    if stuck_agents:
-                        logger.warning(f"Found {len(stuck_agents)} stuck agents in session {session_name}")
-                        
-                        for agent_name, agent_status in stuck_agents:
-                            window_idx = agent_status.get('window_index')
-                            if window_idx is not None:
-                                logger.info(f"Attempting recovery for stuck agent {agent_name} in {session_name}:{window_idx}")
-                                
-                                success = self.health_monitor.auto_recover_stuck_agent(session_name, window_idx)
-                                self.health_database.record_recovery_attempt(session_name, agent_name, success)
-                                
-                                if success:
-                                    logger.info(f"Successfully recovered {agent_name}")
-                                else:
-                                    logger.error(f"Failed to recover {agent_name} - manual intervention may be required")
-                    else:
-                        logger.debug(f"All agents healthy in session {session_name}")
-                        
-        except Exception as e:
-            logger.error(f"Error during health monitoring cycle: {e}")
     
     def run(self):
         """Main daemon loop"""

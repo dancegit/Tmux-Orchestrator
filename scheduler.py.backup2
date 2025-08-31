@@ -26,7 +26,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable, Tuple
 import psutil  # For process scanning
-from enum import Enum
 
 # NEW: Imports for inter-process locking
 import json
@@ -55,29 +54,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-
-class ProjectState(Enum):
-    """State machine for project lifecycle management"""
-    QUEUED = 'queued'          # Initial state
-    PROCESSING = 'processing'   # Active
-    TIMING_OUT = 'timing_out'   # New: Pre-kill grace period
-    ZOMBIE = 'zombie'           # New: Detected hang (PID alive, session dead)
-    FAILED = 'failed'           # Terminal failure
-    COMPLETED = 'completed'     # Terminal success
-
-    @classmethod
-    def valid_transitions(cls):
-        """Define valid state transitions"""
-        return {
-            cls.QUEUED: [cls.PROCESSING],
-            cls.PROCESSING: [cls.TIMING_OUT, cls.ZOMBIE, cls.FAILED, cls.COMPLETED],
-            cls.TIMING_OUT: [cls.FAILED, cls.COMPLETED],  # Recovered or killed
-            cls.ZOMBIE: [cls.FAILED],                      # Always fails
-            cls.FAILED: [],                                # Terminal
-            cls.COMPLETED: []                              # Terminal
-        }
-
 
 class DependencyChecker:
     """Ensures critical dependencies are available at runtime with auto-installation."""
@@ -167,10 +143,7 @@ class TmuxOrchestratorScheduler:
                 max_runtime=int(os.getenv('MAX_AUTO_ORCHESTRATE_RUNTIME_SEC', 1800)),  # Default 30 minutes for Claude analysis
                 monitor_interval=int(os.getenv('PROCESS_MONITOR_INTERVAL_SEC', 30))   # Check every 30 seconds
             )
-            # Set up ProcessManager callbacks and managers
-            self.process_manager.set_status_callback(self.update_project_status_with_state)
-            self.process_manager.set_tmux_manager(self.tmux_manager)
-            logger.info(f"ProcessManager initialized with {self.process_manager.max_runtime}s timeout, zombie detection enabled")
+            logger.info(f"ProcessManager initialized with {self.process_manager.max_runtime}s timeout")
         else:
             self.process_manager = None
         
@@ -187,22 +160,14 @@ class TmuxOrchestratorScheduler:
         self.last_orphaned_reconcile = 0
         logger.info(f"Orphaned session reconciliation configured with {self.orphaned_reconcile_interval}s interval")
         
-        # NEW: Configurable reboot detection threshold (for extended downtime without reboot)
-        self.reboot_threshold_sec = int(os.getenv('REBOOT_DETECTION_THRESHOLD_SEC', 300))  # Default 5 min
-        logger.info(f"Reboot detection threshold set to {self.reboot_threshold_sec}s")
-        
         self.setup_database()
         
         # Clean stale registry entries on startup (only for write operations)
         if not read_only:
             self.session_state_manager.cleanup_stale_registries()
             
-            # MODIFIED: Conditionally recover from reboot or extended downtime
-            if self._detect_reboot_or_downtime():
-                logger.warning("Reboot or extended downtime detected - running recovery logic")
-                self._recover_from_reboot()
-            else:
-                logger.info("No reboot/extended downtime detected - skipping reboot recovery")
+            # NEW: Reboot recovery - handle projects that were processing before shutdown
+            self._recover_from_reboot()
             
             # Auto-subscribe default completion handler
             self.subscribe('task_complete', self._handle_task_completion)
@@ -657,25 +622,8 @@ class TmuxOrchestratorScheduler:
                 else:
                     elapsed = 0
                 
-                # Dynamic grace: Extend based on phase progress
-                extension = 0
-                session_name = orch_session or main_session or f"{project_name}-impl-unknown"
-                try:
-                    from completion_detector import CompletionDetector
-                    detector = CompletionDetector()
-                    phase_complete, completed_phases, total_phases = detector.check_phase_completion(session_name)
-                    if total_phases > 0:
-                        progress_pct = completed_phases / total_phases
-                        if progress_pct > 0.5:  # Threshold for extension
-                            extension = completed_phases * 300  # +300s per completed phase
-                            logger.debug(f"Extending grace for project {project_id}: {completed_phases}/{total_phases} phases ({progress_pct:.0%}), adding {extension}s")
-                except Exception as e:
-                    logger.debug(f"Could not check phase progress for project {project_id}: {e}")
-                
-                dynamic_grace = grace_period + extension
-                
-                if started_at and elapsed < dynamic_grace:
-                    logger.debug(f"Project {project_id} is within dynamic grace period ({dynamic_grace}s), skipping (elapsed: {elapsed:.0f}s)")
+                if started_at and elapsed < grace_period:
+                    logger.debug(f"Project {project_id} is within grace period ({grace_period}s), skipping (elapsed: {elapsed:.0f}s)")
                     continue
                 
                 # Check 1: No session name set (auto_orchestrate.py failed before session creation)
@@ -931,11 +879,10 @@ class TmuxOrchestratorScheduler:
                     if state and state.session_name:
                         session_name = state.session_name
             
-            # Kill the session if found - use force for failed projects
+            # Kill the session if found
             if session_name:
-                use_force = not success  # Use force kill for failed projects
-                if self.tmux_manager.kill_session(session_name, force=use_force):
-                    logger.info(f"Successfully killed session {session_name} for {'failed' if use_force else 'completed'} project {project_id} (force={use_force})")
+                if self.tmux_manager.kill_session(session_name):
+                    logger.info(f"Successfully killed session {session_name} for completed project {project_id}")
                     # Optional: Clean up registry immediately
                     self.session_state_manager.cleanup_stale_registries()
                 else:
@@ -1520,47 +1467,6 @@ class TmuxOrchestratorScheduler:
             
             self.conn.commit()
         
-    def _detect_reboot_or_downtime(self) -> bool:
-        """Detect if a system reboot or extended scheduler downtime occurred."""
-        try:
-            current_boot_time = psutil.boot_time()  # Timestamp of last system boot
-            logger.debug(f"Current system boot time: {datetime.fromtimestamp(current_boot_time)}")
-            
-            # Store/retrieve last known boot time from DB (add a simple key-value table if needed)
-            cursor = self.conn.cursor()
-            cursor.execute("CREATE TABLE IF NOT EXISTS scheduler_state (key TEXT PRIMARY KEY, value TEXT)")
-            cursor.execute("SELECT value FROM scheduler_state WHERE key = 'last_boot_time'")
-            row = cursor.fetchone()
-            last_boot_time = float(row[0]) if row else 0
-            
-            # Check for reboot (boot time changed)
-            if last_boot_time != current_boot_time:
-                logger.info(f"Boot time changed (prev: {last_boot_time}, now: {current_boot_time}) - reboot detected")
-                # Update stored boot time
-                cursor.execute("REPLACE INTO scheduler_state (key, value) VALUES ('last_boot_time', ?)", (current_boot_time,))
-                self.conn.commit()
-                return True
-            
-            # Check for extended downtime using lock heartbeat (integrates with existing lock_manager and heartbeat_thread)
-            if self.lock_manager.lock_fd:
-                self.lock_manager.lock_fd.seek(0)
-                lock_content = self.lock_manager.lock_fd.read()
-                if lock_content:
-                    try:
-                        lock_data = json.loads(lock_content)
-                        last_heartbeat = datetime.fromisoformat(lock_data.get('timestamp', '1970-01-01'))
-                        downtime_sec = (datetime.now() - last_heartbeat).total_seconds()
-                        if downtime_sec > self.reboot_threshold_sec:
-                            logger.warning(f"Extended downtime detected: {downtime_sec}s since last heartbeat")
-                            return True
-                    except (json.JSONDecodeError, ValueError) as e:
-                        logger.debug(f"Lock file parse error (expected on first run): {e}")
-            
-            return False
-        except Exception as e:
-            logger.error(f"Failed to detect reboot/downtime: {e} - assuming no reboot to avoid false positives")
-            return False  # Fail-safe: Don't trigger recovery on detection errors
-    
     def setup_database(self):
         """Initialize SQLite database for persistent task storage"""
         self.conn = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
@@ -1632,24 +1538,11 @@ class TmuxOrchestratorScheduler:
         except sqlite3.OperationalError:
             pass  # Columns already exist
         
-        # Add constraint to prevent duplicate processing sessions (prevents unknown-spec issues)
-        try:
-            self.conn.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_processing_session 
-                ON project_queue(main_session) 
-                WHERE status = 'processing' AND main_session IS NOT NULL
-            """)
-            logger.info("Added UNIQUE constraint for processing sessions")
-        except sqlite3.OperationalError as e:
-            if "already exists" not in str(e).lower():
-                logger.warning("Could not add processing session constraint: %s", e)
-        
         # Add indexes for performance
         self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_status ON project_queue(status);')
         self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_priority ON project_queue(priority, enqueued_at);')
         self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_batch ON project_queue(batch_id);')
         self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_retry ON project_queue(retry_count);')
-        self.conn.execute('CREATE INDEX IF NOT EXISTS idx_project_queue_main_session ON project_queue(main_session);')
         self.conn.commit()
         logger.info("Database initialized")
         
@@ -2116,206 +2009,6 @@ class TmuxOrchestratorScheduler:
             cursor.execute("UPDATE project_queue SET status = ? WHERE id = ?", (status, project_id))
         self.conn.commit()
         logger.info(f"Updated project {project_id} to status: {status}")
-    
-    def get_current_state(self, project_id: int) -> ProjectState:
-        """Get current state of a project"""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT status FROM project_queue WHERE id = ?", (project_id,))
-            row = cursor.fetchone()
-            if row:
-                status_str = row[0]
-                try:
-                    return ProjectState(status_str)  # Maps string to enum
-                except ValueError:
-                    logger.warning(f"Unknown state '{status_str}' for project {project_id}; defaulting to PROCESSING")
-                    return ProjectState.PROCESSING  # Backward-compatible fallback
-        raise ValueError(f"Project {project_id} not found")
-    
-    def update_project_status_with_state(self, project_id: int, new_state: str, reason: str = None):
-        """Update project status with state machine validation (for ProcessManager callback)"""
-        try:
-            # Convert string to enum if needed
-            if isinstance(new_state, str):
-                new_state = ProjectState(new_state)
-            
-            current_state = self.get_current_state(project_id)
-            valid_next = ProjectState.valid_transitions().get(current_state, [])
-            
-            if new_state not in valid_next:
-                logger.error(f"Invalid transition for project {project_id}: {current_state} -> {new_state}")
-                # For backward compatibility, allow if it's a terminal state
-                if new_state in [ProjectState.FAILED, ProjectState.COMPLETED]:
-                    logger.warning(f"Allowing terminal state transition for compatibility")
-                else:
-                    raise ValueError(f"Invalid state transition: {current_state.name} to {new_state.name}")
-            
-            # Use existing update_project_status with string value
-            self.update_project_status(project_id, new_state.value, reason)
-            logger.info(f"Project {project_id} transitioned to {new_state.name}: {reason}")
-            
-        except Exception as e:
-            logger.error(f"Error updating project state: {e}")
-            # Fallback to direct update for compatibility
-            self.update_project_status(project_id, str(new_state), reason)
-    
-    def mark_as_zombie(self, project_id: int):
-        """Mark a project as zombie, then transition to failed"""
-        try:
-            self.update_project_status_with_state(project_id, ProjectState.ZOMBIE, "Zombie process detected")
-            # Immediately transition to failed
-            self.update_project_status_with_state(project_id, ProjectState.FAILED, "Zombie process terminated")
-        except Exception as e:
-            logger.error(f"Error marking project {project_id} as zombie: {e}")
-            # Fallback to direct failed status
-            self.update_project_status(project_id, 'failed', "Zombie process detected")
-    
-    def is_stuck_or_zombie(self, project_id: int) -> Tuple[bool, str]:
-        """Check if a project is stuck or zombie"""
-        try:
-            state = self.get_current_state(project_id)
-            
-            # Check if it's in a stuck state
-            if state in [ProjectState.ZOMBIE, ProjectState.TIMING_OUT]:
-                return True, f"Project in {state.name} state"
-            
-            # Check if it's failed but still has active session (orphaned session)
-            if state == ProjectState.FAILED:
-                cursor = self.conn.cursor()
-                cursor.execute("SELECT spec_path FROM project_queue WHERE id = ?", (project_id,))
-                row = cursor.fetchone()
-                if row:
-                    spec_path = Path(row[0])
-                    sessions = self.tmux_manager.get_active_sessions()
-                    for session in sessions:
-                        if session.startswith(spec_path.stem) or session.endswith(spec_path.stem):
-                            return True, "Failed project with active session (orphaned session)"
-            
-            # Check if it's processing but has issues
-            if state == ProjectState.PROCESSING:
-                # Check with ProcessManager
-                if self.process_manager:
-                    info = self.process_manager.get_process_info(project_id)
-                    if info:
-                        # Check if process is dead
-                        if not info['is_alive']:
-                            return True, "Process is dead but marked as processing"
-                        
-                        # Check if it's been running too long
-                        if info['runtime_seconds'] > info['effective_timeout_seconds']:
-                            return True, f"Process exceeded timeout ({info['runtime_seconds']}s > {info['effective_timeout_seconds']}s)"
-                        
-                        # Check if heartbeat is stale
-                        if info['heartbeat_age_seconds'] > 600:  # 10 minutes
-                            return True, f"Stale heartbeat ({info['heartbeat_age_seconds']}s)"
-                
-                # Check tmux session
-                cursor = self.conn.cursor()
-                cursor.execute("SELECT spec_path FROM project_queue WHERE id = ?", (project_id,))
-                row = cursor.fetchone()
-                if row:
-                    spec_path = Path(row[0])
-                    session_name = f"{spec_path.stem}-impl-*"
-                    sessions = self.tmux_manager.get_active_sessions()
-                    if not any(s.startswith(spec_path.stem) for s in sessions):
-                        return True, "Tmux session not found"
-            
-            return False, "Not stuck"
-            
-        except Exception as e:
-            logger.error(f"Error checking if project {project_id} is stuck: {e}")
-            return False, f"Error: {e}"
-    
-    def force_cleanup(self, project_id: int, reason: str = "Manual recovery") -> bool:
-        """Force cleanup of a stuck project"""
-        try:
-            logger.warning(f"Force cleanup of project {project_id}: {reason}")
-            
-            # Kill process if tracked
-            if self.process_manager:
-                self.process_manager.kill(project_id, force=True, reason=reason)
-            
-            # Kill tmux session
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT spec_path FROM project_queue WHERE id = ?", (project_id,))
-            row = cursor.fetchone()
-            if row:
-                spec_path = Path(row[0])
-                sessions = self.tmux_manager.get_active_sessions()
-                for session in sessions:
-                    if session.startswith(spec_path.stem):
-                        logger.info(f"Killing tmux session: {session}")
-                        subprocess.run(['tmux', 'kill-session', '-t', session], capture_output=True)
-            
-            # Update status to failed
-            self.update_project_status(project_id, 'failed', reason)
-            
-            # Mark orchestration as inactive
-            project_info = self.get_project_status(project_id)
-            if project_info and 'session_name' in project_info:
-                self.session_state_manager.mark_orchestration_inactive(project_info['session_name'])
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error during force cleanup of project {project_id}: {e}")
-            return False
-    
-    def get_recovery_diagnostics(self) -> Dict[str, Any]:
-        """Get comprehensive diagnostics for recovery operations"""
-        try:
-            diagnostics = {
-                'timestamp': datetime.now().isoformat(),
-                'process_manager': {},
-                'stuck_projects': [],
-                'tmux_sessions': [],
-                'active_orchestrations': []
-            }
-            
-            # Process manager info
-            if self.process_manager:
-                diagnostics['process_manager'] = {
-                    'active_count': self.process_manager.get_active_count(),
-                    'processes': self.process_manager.get_all_processes()
-                }
-            
-            # Check all processing projects
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT id, spec_path, status FROM project_queue WHERE status = 'processing'")
-            for row in cursor.fetchall():
-                project_id, spec_file, status = row
-                is_stuck, reason = self.is_stuck_or_zombie(project_id)
-                diagnostics['stuck_projects'].append({
-                    'id': project_id,
-                    'spec_file': spec_file,
-                    'status': status,
-                    'is_stuck': is_stuck,
-                    'reason': reason
-                })
-            
-            # Tmux sessions
-            diagnostics['tmux_sessions'] = self.tmux_manager.get_active_sessions()
-            
-            # Active orchestrations
-            registry_path = self.tmux_orchestrator_path / 'registry' / 'active_orchestrations.json'
-            if registry_path.exists():
-                try:
-                    with open(registry_path) as f:
-                        data = json.load(f)
-                        # Handle both list and dict formats
-                        if isinstance(data, dict):
-                            diagnostics['active_orchestrations'] = data
-                        else:
-                            diagnostics['active_orchestrations'] = {}
-                except Exception as e:
-                    logger.warning(f"Error reading active orchestrations: {e}")
-                    diagnostics['active_orchestrations'] = {}
-            
-            return diagnostics
-            
-        except Exception as e:
-            logger.error(f"Error getting recovery diagnostics: {e}")
-            return {'error': str(e)}
     
     def has_active_orchestrations(self):
         """Check if there are any active orchestrations"""
@@ -3481,139 +3174,5 @@ if __name__ == '__main__':
             except ValueError:
                 print("❌ Invalid project ID")
                 sys.exit(1)
-        
-        # Recovery CLI commands
-        elif sys.argv[1] == '--recovery-list-stuck':
-            # List all stuck or zombie projects
-            scheduler = TmuxOrchestratorScheduler(read_only=True)
-            cursor = scheduler.conn.cursor()
-            cursor.execute("SELECT id, spec_path, status FROM project_queue WHERE status IN ('processing', 'timing_out', 'zombie', 'failed')")
-            
-            print("📋 Checking for stuck projects...")
-            print("-" * 80)
-            print(f"{'ID':<5} {'Status':<12} {'Spec File':<30} {'Stuck?':<8} {'Reason':<30}")
-            print("-" * 80)
-            
-            stuck_count = 0
-            for row in cursor.fetchall():
-                project_id, spec_file, status = row
-                is_stuck, reason = scheduler.is_stuck_or_zombie(project_id)
-                if is_stuck:
-                    stuck_count += 1
-                    print(f"{project_id:<5} {status:<12} {Path(spec_file).name:<30} {'YES':<8} {reason:<30}")
-                else:
-                    print(f"{project_id:<5} {status:<12} {Path(spec_file).name:<30} {'NO':<8} {'-':<30}")
-            
-            print("-" * 80)
-            print(f"Total stuck projects: {stuck_count}")
-            sys.exit(0)
-            
-        elif sys.argv[1] == '--recovery-reset-project' and len(sys.argv) > 2:
-            # Reset a specific stuck project
-            try:
-                project_id = int(sys.argv[2])
-                scheduler = TmuxOrchestratorScheduler()
-                
-                # Check if it's actually stuck
-                is_stuck, reason = scheduler.is_stuck_or_zombie(project_id)
-                if not is_stuck:
-                    print(f"ℹ️  Project {project_id} is not stuck (reason: {reason})")
-                    if '--force' not in sys.argv:
-                        print("   Use --force to reset anyway")
-                        sys.exit(1)
-                
-                print(f"🔧 Resetting project {project_id} (stuck reason: {reason})")
-                
-                # Force cleanup
-                if scheduler.force_cleanup(project_id, f"Manual recovery: {reason}"):
-                    print(f"✅ Project {project_id} has been reset to failed state")
-                    print("   The queue daemon will pick up new projects on next cycle")
-                else:
-                    print(f"❌ Failed to reset project {project_id}")
-                    
-                sys.exit(0)
-            except ValueError:
-                print("❌ Invalid project ID")
-                sys.exit(1)
-                
-        elif sys.argv[1] == '--recovery-kill-zombie' and len(sys.argv) > 2:
-            # Kill a zombie process
-            try:
-                project_id = int(sys.argv[2])
-                scheduler = TmuxOrchestratorScheduler()
-                
-                if scheduler.process_manager:
-                    info = scheduler.process_manager.get_process_info(project_id)
-                    if info:
-                        print(f"🧟 Killing zombie process for project {project_id}")
-                        print(f"   PID: {info['pid']}")
-                        print(f"   Runtime: {info['runtime_seconds']:.1f}s")
-                        print(f"   Heartbeat age: {info['heartbeat_age_seconds']:.1f}s")
-                        
-                        if scheduler.process_manager.kill(project_id, force=True, reason="Manual zombie kill"):
-                            print(f"✅ Zombie process killed")
-                            scheduler.mark_as_zombie(project_id)
-                        else:
-                            print(f"❌ Failed to kill zombie process")
-                    else:
-                        print(f"❌ No process found for project {project_id}")
-                else:
-                    print("❌ ProcessManager not available")
-                    
-                sys.exit(0)
-            except ValueError:
-                print("❌ Invalid project ID")
-                sys.exit(1)
-                
-        elif sys.argv[1] == '--recovery-diagnostics':
-            # Get comprehensive diagnostics
-            scheduler = TmuxOrchestratorScheduler(read_only=True)
-            diagnostics = scheduler.get_recovery_diagnostics()
-            
-            print("🔍 Recovery Diagnostics")
-            print("=" * 80)
-            print(f"Timestamp: {diagnostics.get('timestamp', 'N/A')}")
-            print()
-            
-            # Process Manager
-            pm_info = diagnostics.get('process_manager', {})
-            print(f"📊 ProcessManager: {pm_info.get('active_count', 0)} active processes")
-            for proj_id, proc_info in pm_info.get('processes', {}).items():
-                print(f"   Project {proj_id}:")
-                print(f"     PID: {proc_info.get('pid', 'N/A')}")
-                print(f"     Runtime: {proc_info.get('runtime_seconds', 0):.1f}s")
-                print(f"     Timeout remaining: {proc_info.get('timeout_remaining_seconds', 0):.1f}s")
-                print(f"     Alive: {proc_info.get('is_alive', False)}")
-            print()
-            
-            # Stuck Projects
-            stuck_projects = diagnostics.get('stuck_projects', [])
-            print(f"🚫 Stuck Projects: {len(stuck_projects)} found")
-            for proj in stuck_projects:
-                if proj['is_stuck']:
-                    print(f"   Project {proj['id']}: {proj['reason']}")
-            print()
-            
-            # Tmux Sessions
-            tmux_sessions = diagnostics.get('tmux_sessions', [])
-            print(f"📺 Tmux Sessions: {len(tmux_sessions)} active")
-            for session in tmux_sessions:
-                print(f"   {session}")
-            print()
-            
-            # Active Orchestrations
-            active_orch = diagnostics.get('active_orchestrations', {})
-            if isinstance(active_orch, dict):
-                print(f"🎭 Active Orchestrations: {len(active_orch)} registered")
-                for session_name, orch_info in active_orch.items():
-                    if isinstance(orch_info, dict):
-                        print(f"   {session_name}: PID {orch_info.get('pid', 'N/A')}")
-                    else:
-                        print(f"   {session_name}: {orch_info}")
-            else:
-                print(f"🎭 Active Orchestrations: 0 registered")
-            
-            print("=" * 80)
-            sys.exit(0)
     
     main()
