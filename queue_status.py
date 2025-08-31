@@ -54,12 +54,15 @@ def reconcile_orphaned_sessions(cursor, conn, projects, active_sessions):
     if os.getenv('DISABLE_RECONCILIATION', 'false').lower() == 'true':
         return reconciled
     
-    # Get all main_session values from projects
+    # Get all session identifiers from projects (both main_session and session_name)
     tracked_sessions = set()
     for proj in projects:
-        main_session = proj[4]  # main_session is at index 4
+        main_session = proj[4]      # main_session is at index 4
+        session_name = proj[5]      # session_name is at index 5 (NEW!)
         if main_session:
             tracked_sessions.add(main_session)
+        if session_name:
+            tracked_sessions.add(session_name)
     
     # Load exclusion list
     excluded_sessions = set()
@@ -365,7 +368,7 @@ Examples:
 
     # Get all projects
     cursor.execute("""
-        SELECT id, spec_path, status, orchestrator_session, main_session, 
+        SELECT id, spec_path, status, orchestrator_session, main_session, session_name,
                enqueued_at, started_at, completed_at, error_message, fresh_start, priority
         FROM project_queue 
         ORDER BY priority DESC, enqueued_at ASC
@@ -381,7 +384,7 @@ Examples:
     # If we reconciled any sessions, re-fetch projects to include them
     if reconciled_sessions:
         cursor.execute("""
-            SELECT id, spec_path, status, orchestrator_session, main_session, 
+            SELECT id, spec_path, status, orchestrator_session, main_session, session_name,
                    enqueued_at, started_at, completed_at, error_message, fresh_start, priority
             FROM project_queue 
             ORDER BY priority DESC, enqueued_at ASC
@@ -436,7 +439,7 @@ Examples:
     print("-" * 80)
     
     for proj in projects:
-        project_id, spec_path, status, orch_session, main_session, enqueued_at, started_at, completed_at, error_message, fresh_start, priority = proj
+        project_id, spec_path, status, orch_session, main_session, session_name, enqueued_at, started_at, completed_at, error_message, fresh_start, priority = proj
         
         # Extract project name
         project_name = Path(spec_path).stem.replace('_', ' ').title()
