@@ -659,11 +659,12 @@ class TmuxOrchestratorScheduler:
                 
                 # Dynamic grace: Extend based on phase progress
                 extension = 0
-                session_name = orch_session or main_session or f"{project_name}-impl-unknown"
+                # Use the correct session name for phase completion check (preserve database value)
+                phase_check_session = orch_session or main_session or session_name or f"{project_name}-impl-unknown"
                 try:
                     from completion_detector import CompletionDetector
                     detector = CompletionDetector()
-                    phase_complete, completed_phases, total_phases = detector.check_phase_completion(session_name)
+                    phase_complete, completed_phases, total_phases = detector.check_phase_completion(phase_check_session)
                     if total_phases > 0:
                         progress_pct = completed_phases / total_phases
                         if progress_pct > 0.5:  # Threshold for extension
