@@ -3165,7 +3165,14 @@ This file is automatically read by Claude Code when working in this directory.
             
             if self.daemon_mode or self.batch_mode:
                 # In non-interactive mode, use automatic resolution
-                return self._auto_resolve_conflict(session_name, session_info)
+                resolved = self._auto_resolve_conflict(session_name, session_info)
+                if not resolved:
+                    # CRITICAL FIX: Never fall back to interactive mode in daemon mode
+                    console.print(f"[red]DAEMON MODE: Auto-resolution failed for '{session_name}'[/red]")
+                    console.print(f"[red]Cannot proceed in daemon mode - session conflict unresolvable[/red]")
+                    console.print(f"[yellow]Suggestion: Use --force flag or manually clean up session[/yellow]")
+                    return False  # Fail cleanly instead of hanging
+                return resolved
             else:
                 # In interactive mode, prompt user for resolution strategy
                 return self._interactive_resolve_conflict(session_name, session_info)
@@ -3267,7 +3274,12 @@ This file is automatically read by Claude Code when working in this directory.
                 console.print(f"[green]Auto-resolved: Renamed conflicting session to '{backup_name}'[/green]")
                 return True
             
-            # Strategy 5: Give up - cannot resolve automatically
+            # Strategy 5: In daemon mode, force kill as last resort
+            if self.daemon_mode or self.batch_mode:
+                console.print(f"[yellow]DAEMON MODE: Force-killing conflicting session as last resort[/yellow]")
+                return self._kill_session_safely(session_name)
+            
+            # Strategy 6: Give up - cannot resolve automatically (interactive mode only)
             console.print(f"[red]Cannot auto-resolve conflict for session '{session_name}'[/red]")
             console.print("[yellow]Use --force to override, or manually resolve the conflict[/yellow]")
             return False
@@ -3278,6 +3290,12 @@ This file is automatically read by Claude Code when working in this directory.
     
     def _interactive_resolve_conflict(self, session_name: str, session_info: dict) -> bool:
         """Interactively resolve session conflicts with user prompts"""
+        # SAFETY CHECK: Never run interactive mode in daemon mode
+        if self.daemon_mode or self.batch_mode:
+            console.print(f"[red]CRITICAL ERROR: Interactive mode called in daemon mode![/red]")
+            console.print(f"[red]This should never happen - falling back to force kill[/red]")
+            return self._kill_session_safely(session_name)
+            
         console.print(f"\n[bold]Session Conflict Resolution[/bold]")
         console.print(f"Session: {session_name}")
         
