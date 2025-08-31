@@ -1114,17 +1114,17 @@ def check_integration_merge_status(integration: Dict[str, any]) -> tuple[str, st
                 # Commit doesn't exist in main project at all
                 return "not_merged", "Ready to merge"
             
-            # If commit exists, check which branches contain it (excluding worktree-specific branches)
+            # If commit exists, check which branches contain it (only consider main branches as merged)
             branch_result = run_git_command(['branch', '--contains', commit_hash], str(project_path))
             if branch_result.returncode == 0 and branch_result.stdout.strip():
-                # Filter out worktree-specific branches
+                # Filter to only consider main branches as "merged"
                 branches = [b.strip().strip('*').strip() for b in branch_result.stdout.strip().split('\n')]
-                non_worktree_branches = [b for b in branches 
-                                       if not any(role in b for role in ['testrunner', 'developer', 'tester', 'orchestrator', 'project_manager'])]
+                main_branches = [b for b in branches 
+                               if b in ['main', 'master']]  # Only main/master count as merged
                 
-                if non_worktree_branches:
-                    # Found in a non-worktree branch, likely merged
-                    return "merged", f"In branch: {non_worktree_branches[0][:15]}"
+                if main_branches:
+                    # Found in main branch, actually merged
+                    return "merged", f"In branch: {main_branches[0]}"
             
             # Check if there's a merge commit that includes this commit
             merge_result = run_git_command(['log', '--oneline', '--merges', '--grep=integration', '-20'], str(project_path))

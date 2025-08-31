@@ -65,17 +65,19 @@ class ProjectState(Enum):
     ZOMBIE = 'zombie'           # New: Detected hang (PID alive, session dead)
     FAILED = 'failed'           # Terminal failure
     COMPLETED = 'completed'     # Terminal success
+    RECOVERED = 'recovered'     # New: Manually recovered from failed/stuck
 
     @classmethod
     def valid_transitions(cls):
         """Define valid state transitions"""
         return {
             cls.QUEUED: [cls.PROCESSING],
-            cls.PROCESSING: [cls.TIMING_OUT, cls.ZOMBIE, cls.FAILED, cls.COMPLETED],
-            cls.TIMING_OUT: [cls.FAILED, cls.COMPLETED],  # Recovered or killed
-            cls.ZOMBIE: [cls.FAILED],                      # Always fails
-            cls.FAILED: [],                                # Terminal
-            cls.COMPLETED: []                              # Terminal
+            cls.PROCESSING: [cls.TIMING_OUT, cls.ZOMBIE, cls.FAILED, cls.COMPLETED, cls.RECOVERED],  # Allow direct to recovered
+            cls.TIMING_OUT: [cls.FAILED, cls.COMPLETED, cls.RECOVERED],  # Allow recovery
+            cls.ZOMBIE: [cls.FAILED, cls.RECOVERED],                     # Allow recovery from zombie
+            cls.FAILED: [cls.RECOVERED],                                  # Allow manual recovery
+            cls.COMPLETED: [],                                            # Terminal
+            cls.RECOVERED: [cls.PROCESSING, cls.COMPLETED, cls.FAILED]   # Can resume or fail again
         }
 
 
@@ -164,7 +166,7 @@ class TmuxOrchestratorScheduler:
         # NEW: Initialize ProcessManager for subprocess tracking and timeout enforcement
         if not read_only:
             self.process_manager = ProcessManager(
-                max_runtime=int(os.getenv('MAX_AUTO_ORCHESTRATE_RUNTIME_SEC', 1800)),  # Default 30 minutes for Claude analysis
+                max_runtime=int(os.getenv('MAX_AUTO_ORCHESTRATE_RUNTIME_SEC', 10800)),  # Default 3 hours for complex orchestrations
                 monitor_interval=int(os.getenv('PROCESS_MONITOR_INTERVAL_SEC', 30))   # Check every 30 seconds
             )
             # Set up ProcessManager callbacks and managers
@@ -175,20 +177,20 @@ class TmuxOrchestratorScheduler:
             self.process_manager = None
         
         # Configure phantom detection grace period for long-running Claude analysis
-        self.phantom_grace_period = int(os.getenv('PHANTOM_GRACE_PERIOD_SEC', 900))  # Default 15 minutes instead of 2
+        self.phantom_grace_period = int(os.getenv('PHANTOM_GRACE_PERIOD_SEC', 1800))  # Increased to 30 min
         
         # NEW: State synchronization configuration
-        self.state_sync_interval = int(os.getenv('STATE_SYNC_INTERVAL_SEC', 300))  # 5 minutes default
+        self.state_sync_interval = int(os.getenv('STATE_SYNC_INTERVAL_SEC', 600))     # 10 min
         self.last_state_sync = 0
         logger.info(f"State synchronization configured with {self.state_sync_interval}s interval")
         
         # NEW: Orphaned session reconciliation configuration
-        self.orphaned_reconcile_interval = int(os.getenv('ORPHANED_RECONCILE_INTERVAL_SEC', 600))  # 10 minutes default
+        self.orphaned_reconcile_interval = int(os.getenv('ORPHANED_RECONCILE_INTERVAL_SEC', 1800))  # 30 min
         self.last_orphaned_reconcile = 0
         logger.info(f"Orphaned session reconciliation configured with {self.orphaned_reconcile_interval}s interval")
         
         # NEW: Configurable reboot detection threshold (for extended downtime without reboot)
-        self.reboot_threshold_sec = int(os.getenv('REBOOT_DETECTION_THRESHOLD_SEC', 300))  # Default 5 min
+        self.reboot_threshold_sec = int(os.getenv('REBOOT_DETECTION_THRESHOLD_SEC', 900))    # 15 min
         logger.info(f"Reboot detection threshold set to {self.reboot_threshold_sec}s")
         
         self.setup_database()
@@ -627,6 +629,12 @@ class TmuxOrchestratorScheduler:
             
             for row in cursor.fetchall():
                 project_id, project_path, orch_session, main_session, started_at, spec_path, session_name = row
+                
+                # NEW: Skip if project is in recovered state
+                current_state = self.get_current_state(project_id)
+                if current_state == ProjectState.RECOVERED:
+                    logger.info(f"Skipping phantom reset for project {project_id} - in recovered state")
+                    continue
                 
                 # Derive project name from spec path
                 project_name = None
@@ -1118,6 +1126,21 @@ class TmuxOrchestratorScheduler:
                 return False, f"Session '{session_name}' does not exist"
         except Exception as e:
             return False, f"Session existence check failed: {e}"
+        
+        # NEW: Check for recent session activity to detect manual recovery
+        try:
+            activity_result = subprocess.run(
+                ['tmux', 'display-message', '-p', '-t', session_name, '#{session_activity}'],
+                capture_output=True, text=True, check=True
+            )
+            last_active_str = activity_result.stdout.strip()
+            if last_active_str:
+                last_active = int(last_active_str)
+                idle_time = now - last_active
+                if idle_time < 600:  # 10 minutes - recent activity suggests manual intervention
+                    return True, f"Session '{session_name}' has recent activity (idle {idle_time}s) - likely manually recovered"
+        except Exception as e:
+            logger.debug(f"Could not check session activity: {e}")
         
         # Check for dead panes
         try:
@@ -3408,6 +3431,7 @@ def main():
     parser.add_argument('--queue-add', nargs=2, metavar=('SPEC', 'PROJECT'), help='Add project to queue')
     parser.add_argument('--queue-list', action='store_true', help='List queued projects')
     parser.add_argument('--queue-status', type=int, metavar='ID', help='Get status of project')
+    parser.add_argument('--mark-recovered', type=int, metavar='ID', help='Mark a project as recovered from failed/stuck state')
     
     args = parser.parse_args()
     
@@ -3475,6 +3499,33 @@ def main():
                 print(f"{col}: {val}")
         else:
             print(f"Project {args.queue_status} not found")
+    elif args.mark_recovered:
+        project_id = args.mark_recovered
+        try:
+            # Get current state
+            current_state = scheduler.get_current_state(project_id)
+            if current_state not in [ProjectState.FAILED, ProjectState.ZOMBIE, ProjectState.TIMING_OUT]:
+                print(f"❌ Project {project_id} is in {current_state.name} state - can only recover from FAILED, ZOMBIE, or TIMING_OUT")
+                sys.exit(1)
+            
+            # Update to recovered
+            scheduler.update_project_status_with_state(project_id, ProjectState.RECOVERED, "Manual recovery")
+            print(f"✅ Project {project_id} marked as RECOVERED")
+            
+            # Optional: Reset timers or other state
+            cursor = scheduler.conn.cursor()
+            cursor.execute("""
+                UPDATE project_queue 
+                SET started_at = strftime('%s', 'now'), 
+                    error_message = 'Manually recovered'
+                WHERE id = ?
+            """, (project_id,))
+            scheduler.conn.commit()
+            
+            sys.exit(0)
+        except ValueError as e:
+            print(f"❌ Invalid project ID or state: {e}")
+            sys.exit(1)
     else:
         parser.print_help()
 

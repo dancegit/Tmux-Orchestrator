@@ -73,7 +73,7 @@ class CompletionMonitorDaemon:
         self.running = False
     
     def get_processing_projects(self) -> List[Dict[str, Any]]:
-        """Get all projects that are currently PROCESSING"""
+        """Get all projects that are currently PROCESSING, RECOVERED, or FAILED (for completion verification)"""
         db_path = self.tmux_orchestrator_path / 'task_queue.db'
         
         try:
@@ -87,20 +87,34 @@ class CompletionMonitorDaemon:
                            COALESCE(session_name, orchestrator_session, main_session) as session_name, 
                            spec_path as spec_file, status, started_at
                     FROM project_queue 
-                    WHERE status = 'processing'
+                    WHERE status IN ('processing', 'recovered', 'failed')
                     ORDER BY started_at ASC
                 """)
                 
                 projects = []
                 for row in cursor.fetchall():
-                    projects.append({
+                    project = {
                         'id': row['id'],
                         'project_name': row['project_name'],
                         'session_name': row['session_name'],
                         'spec_file': row['spec_file'],
                         'status': row['status'],
                         'started_at': row['started_at']
-                    })
+                    }
+                    
+                    # Auto-transition RECOVERED to PROCESSING if agents are active
+                    if row['status'] == 'recovered' and self.is_agent_active(row['id'], row['session_name']):
+                        logger.info(f"Auto-transitioning project {row['id']} from RECOVERED to PROCESSING (agents detected)")
+                        self.update_project_status(row['id'], 'processing')
+                        project['status'] = 'processing'
+                    
+                    # Auto-transition FAILED to PROCESSING if agents are still active (wrongly failed projects)
+                    elif row['status'] == 'failed' and self.is_agent_active(row['id'], row['session_name']):
+                        logger.info(f"Auto-transitioning project {row['id']} from FAILED to PROCESSING (active agents detected, possible wrongly failed project)")
+                        self.update_project_status(row['id'], 'processing')
+                        project['status'] = 'processing'
+                    
+                    projects.append(project)
                 
                 return projects
                 
@@ -163,6 +177,43 @@ class CompletionMonitorDaemon:
             logger.warning(f"Failed to check session {session_name}: {e}")
             return False
     
+    def is_agent_active(self, project_id: int, session_name: str) -> bool:
+        """Check if agents are active for a project (for auto-transitioning RECOVERED/FAILED projects)"""
+        try:
+            # Method 1: Check if tmux session exists and has recent activity
+            if self.check_session_exists(session_name):
+                # Check for recent session activity via tmux
+                result = subprocess.run(
+                    ['tmux', 'display-message', '-p', '-t', session_name, '#{session_activity}'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    last_active = int(result.stdout.strip())
+                    idle_time = time.time() - last_active
+                    if idle_time < 600:  # Active in last 10 minutes
+                        logger.debug(f"Project {project_id}: Session active (idle {idle_time:.0f}s)")
+                        return True
+            
+            # Method 2: Check for COMPLETED marker file (agents trying to complete)
+            # Look for project worktrees pattern (project-tmux-worktrees)
+            import glob
+            possible_paths = [
+                f"/home/clauderun/*{session_name.replace('-impl-', '*')}*/COMPLETED",
+                f"/home/clauderun/*/*{session_name}*/orchestrator/COMPLETED",
+                f"/tmp/{session_name}*/COMPLETED"
+            ]
+            for pattern in possible_paths:
+                if glob.glob(pattern):
+                    logger.debug(f"Project {project_id}: Found COMPLETED marker")
+                    return True
+            
+            logger.debug(f"Project {project_id}: No agent activity detected")
+            return False
+            
+        except Exception as e:
+            logger.warning(f"Failed to check agent activity for project {project_id}: {e}")
+            return False
+    
     def check_project_completion(self, project: Dict[str, Any]) -> str:
         """
         Check if a project is completed, failed, or still processing.
@@ -183,7 +234,6 @@ class CompletionMonitorDaemon:
             # Get project path for enhanced detection even without session
             project_path = None
             try:
-                import sqlite3
                 conn = sqlite3.connect(str(self.tmux_orchestrator_path / 'task_queue.db'))
                 cursor = conn.cursor()
                 cursor.execute("SELECT project_path FROM project_queue WHERE id = ?", (project_id,))
@@ -205,7 +255,6 @@ class CompletionMonitorDaemon:
             if status == 'completed':
                 logger.info(f"Session missing but completion detected: {reason} - marking as completed")
                 # Create marker to prevent re-processing
-                from completion_utils import create_completion_marker
                 create_completion_marker(session_name, project_id, reason)
                 return 'completed'
             else:
@@ -354,12 +403,12 @@ class CompletionMonitorDaemon:
         logger.info(f"🔄 Recovering wrongly failed project {project_id}: {project['project_name']}")
         
         # Update database status to completed (preserve original completion timestamp if recent)
+        from datetime import datetime, timedelta
         completion_time = datetime.now().isoformat()
         
         # If failed recently (< 30 minutes ago), assume it was wrongly failed and use current time
         try:
             if project.get('completed_at'):
-                from datetime import datetime, timedelta
                 failed_time = datetime.fromisoformat(project['completed_at'])
                 if datetime.now() - failed_time < timedelta(minutes=30):
                     completion_time = project['completed_at']  # Keep original failure time as completion time

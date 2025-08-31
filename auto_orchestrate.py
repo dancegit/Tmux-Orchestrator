@@ -1713,6 +1713,19 @@ CLAUDE_EOF
                     f.write(prompt_script)
                 os.chmod(script_file, 0o755)
                 
+                # Pre-check Claude CLI responsiveness
+                try:
+                    logger.debug("Pre-checking Claude CLI availability...")
+                    claude_check = subprocess.run(['/usr/bin/claude', '--version'], 
+                                                capture_output=True, text=True, timeout=10)
+                    if claude_check.returncode != 0:
+                        raise RuntimeError(f"Claude CLI not responsive: {claude_check.stderr}")
+                    logger.debug(f"Claude CLI check passed: {claude_check.stdout.strip()}")
+                except subprocess.TimeoutExpired:
+                    raise RuntimeError("Claude CLI pre-check timed out - Claude may be unresponsive")
+                except Exception as e:
+                    raise RuntimeError(f"Claude CLI pre-check failed: {e}")
+
                 # Run subprocess in background with progress updates
                 result_container = {}
                 error_container = {}
@@ -1724,7 +1737,7 @@ CLAUDE_EOF
                             ['bash', script_file],
                             capture_output=True,
                             text=True,
-                            timeout=1200  # Increased timeout to 20 minutes for complex Claude analysis
+                            timeout=300  # Reduced to 5 minutes per attempt for faster hang detection
                         )
                         logger.info(f"Claude analysis completed with exit code: {result.returncode}")
                         if result.stderr:
@@ -1734,22 +1747,51 @@ CLAUDE_EOF
                         result_container['result'] = result
                     except Exception as e:
                         logger.error(f"Claude subprocess exception: {e}")
+                        # Kill any child processes on timeout/error
+                        try:
+                            import psutil
+                            parent = psutil.Process(os.getpid())
+                            for child in parent.children(recursive=True):
+                                logger.warning(f"Killing child process {child.pid}")
+                                child.kill()
+                        except Exception as kill_e:
+                            logger.warning(f"Failed to kill child processes: {kill_e}")
                         error_container['error'] = e
                 
-                claude_thread = threading.Thread(target=run_claude)
-                claude_thread.start()
+                max_retries = 3
+                retry_count = 0
+                success = False
                 
-                # Update progress with elapsed time while Claude runs
-                start_time = time.time()
-                while claude_thread.is_alive():
-                    elapsed = time.time() - start_time
-                    progress.update(task, description=f"Analyzing with Claude ({elapsed:.0f}s elapsed, est. 5-20min)...")
-                    time.sleep(5)  # Update every 5 seconds
+                while retry_count < max_retries:
+                    claude_thread = threading.Thread(target=run_claude)
+                    claude_thread.start()
+                    
+                    # Update progress with elapsed time while Claude runs
+                    start_time = time.time()
+                    while claude_thread.is_alive():
+                        elapsed = time.time() - start_time
+                        progress.update(task, description=f"Analyzing with Claude (attempt {retry_count+1}/{max_retries}, {elapsed:.0f}s elapsed, est. 5min)...")
+                        time.sleep(5)  # Update every 5 seconds
+                    
+                    claude_thread.join()
+                    
+                    if 'result' in result_container and result_container['result'].returncode == 0:
+                        success = True
+                        break
+                    
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(f"Claude analysis failed (attempt {retry_count}/{max_retries}) - retrying in 3 seconds...")
+                        time.sleep(3)  # Brief pause before retry
+                        # Clear containers for retry
+                        result_container.clear()
+                        error_container.clear()
                 
-                claude_thread.join()
-                
-                if 'error' in error_container:
-                    raise error_container['error']
+                if not success:
+                    if 'error' in error_container:
+                        raise error_container['error']
+                    else:
+                        raise RuntimeError(f"Claude analysis failed after {max_retries} attempts")
                 
                 result = result_container['result']
                 
@@ -2758,9 +2800,7 @@ Please provide a brief status update on your current work and any blockers."""
                 self.enable_mcp_servers_in_claude_config(worktree_path)
                 
                 # Set up hooks for this agent
-                # Note: We don't have the session name yet since we're setting up worktrees
-                # before creating the tmux session. Hooks will be configured after session creation.
-                # This is just preparation for when the session is created.
+                self.setup_autonomy_hooks(worktree_path, role_key)
                 
                 # Create .gitignore file for worktree
                 self.create_worktree_gitignore(worktree_path)
@@ -4332,6 +4372,8 @@ Maintain EXCEPTIONAL quality standards. No compromises.
 
 {self.create_uv_configuration_instructions()}
 
+{self.create_completion_protocol_instructions(role)}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'developer':
@@ -4434,6 +4476,8 @@ Your commits now trigger automatic notifications to downstream agents:
 
 {self.create_uv_configuration_instructions()}
 
+{self.create_completion_protocol_instructions(role)}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'tester':
@@ -4519,6 +4563,8 @@ You now receive Developer updates automatically:
 
 {self.create_uv_configuration_instructions()}
 
+{self.create_completion_protocol_instructions(role)}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'testrunner':
@@ -4584,6 +4630,8 @@ You now receive Tester updates automatically:
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
 
 {self.create_uv_configuration_instructions()}
+
+{self.create_completion_protocol_instructions(role)}
 
 {self.create_context_management_instructions(role)}"""
 
@@ -4668,6 +4716,8 @@ Start by:
 
 {self.create_uv_configuration_instructions()}
 
+{self.create_completion_protocol_instructions(role)}
+
 {self.create_context_management_instructions(role)}"""
 
         elif role == 'devops':
@@ -4706,6 +4756,8 @@ Coordinate with:
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
 
 {self.create_uv_configuration_instructions()}
+
+{self.create_completion_protocol_instructions(role)}
 
 {self.create_context_management_instructions(role)}"""
 
@@ -4854,6 +4906,8 @@ Report findings to:
 {self.create_git_sync_instructions(role, spec, worktree_paths)}
 
 {self.create_uv_configuration_instructions()}
+
+{self.create_completion_protocol_instructions(role)}
 
 {self.create_context_management_instructions(role)}"""
 
@@ -5488,6 +5542,38 @@ Leverage these tools as appropriate for your role."""
                 except:
                     pass
 
+    def setup_autonomy_hooks(self, worktree_path: Path, role: str):
+        """Setup git hooks for autonomous completion markers"""
+        try:
+            hooks_dir = worktree_path / '.git' / 'hooks'
+            hooks_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create post-commit hook for auto-completion detection
+            post_commit_script = hooks_dir / 'post-commit'
+            post_commit_content = f'''#!/bin/bash
+# Auto-completion marker hook for {role}
+MSG=$(git log -1 --pretty=%B)
+if [[ $MSG =~ complete|finished|done|COMPLETED ]]; then
+    echo "Auto-detected completion in commit message"
+    if [ ! -f "COMPLETED" ]; then
+        echo "COMPLETED: {role} - $(date -Iseconds) - Auto-detected from commit: $MSG" > COMPLETED
+        git add COMPLETED
+        git commit --amend --no-edit  # Amend to include marker
+        echo "✅ Auto-created COMPLETED marker for {role}"
+    fi
+fi
+'''
+            post_commit_script.write_text(post_commit_content)
+            
+            # Make executable
+            import stat
+            post_commit_script.chmod(post_commit_script.stat().st_mode | stat.S_IEXEC)
+            
+            logger.debug(f"Created autonomy hooks for {role} in {worktree_path}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to setup autonomy hooks for {role}: {e}")
+
     def setup_fast_lane_coordination(self, project_name: str, roles_to_deploy: List[Tuple[str, str]]):
         """Setup fast lane coordination for the project using the setup script"""
         
@@ -5861,6 +5947,24 @@ If you encounter conflicts:
 📦 **QUICK GIT COMMIT-TAG-PUSH**:
 Use the automated tool for consistent versioning:
 `python3 /home/clauderun/Tmux-Orchestrator/git_commit_manager.py "feat: your message" -a`
+"""
+
+    def create_completion_protocol_instructions(self, role: str) -> str:
+        """Create autonomous completion protocol instructions for all agents"""
+        
+        return f"""
+🚩 **Autonomous Completion Protocol** (MANDATORY)
+
+When YOU detect completion (phases done, criteria met):
+1. Create COMPLETED marker in YOUR worktree (NO permission needed!)
+   echo "COMPLETED: {role} - $(date -Iseconds) - [Details]" > COMPLETED
+2. Commit and push:
+   git add COMPLETED && git commit -m "completion: [summary]" && git push
+3. Report to Orchestrator (use report-completion.sh if available):
+   ./report-completion.sh {role} "Completion details"
+
+**NEVER** ask for permission—YOU ARE AUTHORIZED!
+Refer to CLAUDE.md for full completion ritual details.
 """
 
     def create_context_management_instructions(self, role: str) -> str:

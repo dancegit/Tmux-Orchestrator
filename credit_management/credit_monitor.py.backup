@@ -269,15 +269,6 @@ class CreditMonitor:
     
     def monitor_all_agents(self):
         """Check all active agents for credit status"""
-        # Skip if auto_orchestrate is running (setup in progress)
-        try:
-            result = subprocess.run(['pgrep', '-f', 'auto_orchestrate.py'], capture_output=True)
-            if result.returncode == 0:
-                logger.info("auto_orchestrate.py is running, skipping agent monitoring")
-                return {}
-        except:
-            pass
-            
         agents = self.get_active_agents()
         logger.info(f"Monitoring {len(agents)} active agents")
         
@@ -296,11 +287,6 @@ class CreditMonitor:
     
     def schedule_resume(self, agent: str, resume_time: str):
         """Schedule agent resume at given time"""
-        # Check if already scheduled
-        if agent in self.schedule.get('agents', {}) and            self.schedule['agents'][agent].get('resume_scheduled'):
-            logger.info(f"Resume already scheduled for {agent}, skipping duplicate")
-            return
-            
         resume_dt = datetime.fromisoformat(resume_time)
         
         # Add 2 minute buffer to ensure credits are available

@@ -65,15 +65,6 @@ def should_restart(error_info: Dict[str, Any]) -> bool:
     Returns:
         True if restart should be attempted
     """
-    # Check if auto_orchestrate.py is running (setup in progress)
-    try:
-        result = subprocess.run(['pgrep', '-f', 'auto_orchestrate.py'], capture_output=True)
-        if result.returncode == 0:
-            logger.info("auto_orchestrate.py is running, skipping restart to avoid interference")
-            return False
-    except:
-        pass
-    
     error_msg = error_info.get('message', '').lower()
     error_type = error_info.get('type', '').lower()
     

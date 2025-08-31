@@ -8,6 +8,7 @@ and enforce timeouts. Provides centralized PID registry with monitoring and clea
 
 import os
 import psutil
+import sqlite3
 import threading
 import time
 import logging
@@ -20,12 +21,12 @@ logger = logging.getLogger(__name__)
 class ProcessManager:
     """Manages subprocess PIDs for orchestration projects."""
     
-    def __init__(self, max_runtime: int = 1800, monitor_interval: int = 30):
+    def __init__(self, max_runtime: int = 10800, monitor_interval: int = 30):
         """
         Initialize ProcessManager.
         
         Args:
-            max_runtime: Maximum runtime in seconds before force-killing (default: 30 min)
+            max_runtime: Maximum runtime in seconds before force-killing (default: 3 hours)
             monitor_interval: How often to check processes in seconds (default: 30s)
         """
         self.active_processes = defaultdict(dict)  # project_id -> process info
@@ -41,6 +42,9 @@ class ProcessManager:
         self.max_extensions = int(os.getenv('MAX_TIMEOUT_EXTENSIONS', 3))  # Max 3 extensions
         self.extension_duration = int(os.getenv('EXTENSION_DURATION_SEC', 900))  # 15min per extension
         
+        # Database path for project status checking
+        self.db_path = "task_queue.db"
+        
         # Start background monitor thread
         self.monitor_thread = threading.Thread(target=self._monitor, daemon=True)
         self.monitor_thread.start()
@@ -53,6 +57,67 @@ class ProcessManager:
     def set_tmux_manager(self, tmux_manager):
         """Set TmuxSessionManager for zombie detection (optional)."""
         self.tmux_manager = tmux_manager
+
+    def _is_project_completed(self, project_id: int) -> bool:
+        """
+        Check if a project is marked as completed in the database.
+        
+        Args:
+            project_id: Project ID to check
+            
+        Returns:
+            True if project status is 'completed', False otherwise
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT status FROM project_queue WHERE id = ?", (project_id,))
+                result = cursor.fetchone()
+                if result:
+                    return result[0] == 'completed'
+                return False
+        except Exception as e:
+            logger.warning(f"Error checking completion status for project {project_id}: {e}")
+            return False
+
+    def _cleanup_completed_project(self, project_id: int, session_name: str) -> bool:
+        """
+        Gracefully cleanup a completed project's tmux session and process.
+        
+        Args:
+            project_id: Project ID to cleanup
+            session_name: Tmux session name to kill
+            
+        Returns:
+            True if cleanup was successful, False otherwise
+        """
+        try:
+            # First, gracefully terminate the tmux session
+            if self.tmux_manager and session_name:
+                logger.info(f"Gracefully terminating tmux session {session_name} for completed project {project_id}")
+                if self.tmux_manager.session_exists(session_name):
+                    # Kill the tmux session gracefully
+                    import subprocess
+                    result = subprocess.run(['tmux', 'kill-session', '-t', session_name], 
+                                          capture_output=True, text=True)
+                    if result.returncode == 0:
+                        logger.info(f"Successfully terminated tmux session {session_name}")
+                    else:
+                        logger.warning(f"Failed to terminate tmux session {session_name}: {result.stderr}")
+            
+            # Then terminate the process gracefully (SIGTERM, not SIGKILL)
+            success = self.kill(project_id, force=False, reason="Graceful cleanup of completed project")
+            
+            if success:
+                logger.info(f"Completed project {project_id} cleaned up successfully")
+            else:
+                logger.warning(f"Failed to cleanup completed project {project_id}")
+                
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error during graceful cleanup of project {project_id}: {e}")
+            return False
 
     def register(self, project_id: int, pid: int, cmd: Optional[str] = None, session_name: Optional[str] = None):
         """
@@ -349,6 +414,19 @@ class ProcessManager:
                         if self.kill(project_id, force=True, reason="Zombie process detected"):
                             to_remove.append(project_id)
                         continue
+                
+                # Check if project is already completed - offer graceful cleanup
+                if self._is_project_completed(project_id):
+                    session_name = info.get('session_name')
+                    logger.info(f"Project {project_id} is completed - performing graceful cleanup (PID {pid}, session: {session_name})")
+                    
+                    # Attempt graceful cleanup
+                    if self._cleanup_completed_project(project_id, session_name):
+                        to_remove.append(project_id)
+                    else:
+                        # Graceful cleanup failed, but don't force-kill completed projects
+                        logger.warning(f"Graceful cleanup failed for completed project {project_id}, but skipping force-kill")
+                    continue
                 
                 # Check for timeout using extended timeout
                 effective_timeout = info.get('extended_timeout', self.max_runtime)

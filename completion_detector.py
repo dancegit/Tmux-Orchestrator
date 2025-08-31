@@ -176,11 +176,38 @@ class CompletionDetector:
         else:
             indicators['confidence'] -= 0.1 * active_count
         
-        # Error indicators
-        error_phrases = ['error:', 'failed:', 'exception:', 'critical:']
-        if any(phrase in output_lower for phrase in error_phrases):
+        # Error indicators (with better context awareness)
+        # Only count as errors if they appear multiple times and not in normal messages
+        error_phrases = ['error:', 'failed:', 'exception:']
+        error_count = 0
+        false_positive_patterns = [
+            'critical: you work from',  # Part of orchestrator briefing
+            'error: /bin/bash',  # Normal bash command errors
+            'error: python3:',  # Normal python errors from wrong paths
+            'attempt 1/3',  # Retry messages
+            'command not found',  # Minor script errors
+        ]
+        
+        for line in output_lower.split('\n'):
+            # Skip lines that are known false positives
+            if any(pattern in line for pattern in false_positive_patterns):
+                continue
+            
+            # Count real errors
+            for phrase in error_phrases:
+                if phrase in line:
+                    # Check if it's a significant error (not just a path or command issue)
+                    if 'traceback' in line or 'assertion' in line or 'unhandled' in line:
+                        error_count += 2  # More serious errors
+                    else:
+                        error_count += 1
+        
+        # Only flag as error if we have multiple significant errors
+        if error_count >= 5:  # Threshold for real problems
             indicators['error_indicators'] = True
             indicators['confidence'] -= 0.2
+        elif error_count >= 3:
+            indicators['confidence'] -= 0.1  # Minor confidence reduction for some errors
         
         # Boost confidence based on output volume (indicates substantial work)
         if output:
@@ -214,12 +241,16 @@ class CompletionDetector:
         
         # Method 2: Check git for completion commits
         if project_path and self.check_git_completion(project_path, session_name):
-            return 'completed', 'Git commits indicate completion'
+            # Auto-create marker if git indicates completion but marker missing
+            self.auto_create_marker(project, 'Git commits indicate completion')
+            return 'completed', 'Git commits indicate completion (marker auto-created)'
         
         # Method 3: Check phase completion
         phase_complete, completed_phases, total_phases = self.check_phase_completion(session_name)
         if phase_complete:
-            return 'completed', f'All {total_phases} implementation phases completed'
+            # Auto-create marker if phases complete but marker missing
+            self.auto_create_marker(project, f'All {total_phases} implementation phases completed')
+            return 'completed', f'All {total_phases} implementation phases completed (marker auto-created)'
         
         # Method 4: Check for stuck agents (NEW)
         if self.health_monitor and session_name:
@@ -260,7 +291,10 @@ class CompletionDetector:
                 if indicators['decommission_ready']:
                     reasons.append('ready for decommission')
                 
-                return 'completed', f"High confidence ({indicators['confidence']:.2f}): {', '.join(reasons)}"
+                reason_text = f"High confidence ({indicators['confidence']:.2f}): {', '.join(reasons)}"
+                # Auto-create marker if tmux output indicates completion but marker missing
+                self.auto_create_marker(project, reason_text)
+                return 'completed', f"{reason_text} (marker auto-created)"
             
             # Check for failures
             if indicators['error_indicators'] and indicators['confidence'] < 0.3:
@@ -272,6 +306,47 @@ class CompletionDetector:
             progress_info.append(f"{completed_phases}/{total_phases} phases done")
         
         return 'processing', f"Still in progress: {', '.join(progress_info) if progress_info else 'no clear completion indicators'}"
+    
+    def auto_create_marker(self, project: Dict[str, Any], reason: str):
+        """Auto-create marker when completion detected but marker missing (enforces autonomy)"""
+        session_name = project.get('session_name', '')
+        project_id = project.get('id', 0)
+        project_path = project.get('project_path', '')
+        
+        if not session_name:
+            logger.warning("Cannot auto-create marker: missing session_name")
+            return
+            
+        try:
+            # Create the registry-based marker first
+            marker_path = create_completion_marker(session_name, project_id, f"Auto-created by monitor: {reason}")
+            logger.info(f"Auto-created registry marker for {session_name}")
+            
+            # Also try to create COMPLETED file in project worktree if path available
+            if project_path:
+                try:
+                    completed_file = Path(project_path) / 'COMPLETED'
+                    if not completed_file.exists():
+                        with open(completed_file, 'w') as f:
+                            f.write(f"Auto-created by monitor: {reason}\n{datetime.now().isoformat()}\n")
+                        logger.info(f"Auto-created COMPLETED file in {project_path}")
+                        
+                        # Try to git add/commit if in repo
+                        try:
+                            subprocess.run(['git', 'add', str(completed_file)], 
+                                         cwd=project_path, check=True, timeout=10)
+                            subprocess.run(['git', 'commit', '-m', 'auto: completion marker created by monitor'], 
+                                         cwd=project_path, check=True, timeout=10)
+                            logger.info(f"Auto-committed marker to git in {project_path}")
+                        except subprocess.CalledProcessError:
+                            logger.debug("Could not auto-commit marker to git (normal if not in repo)")
+                        except Exception as e:
+                            logger.debug(f"Git operations failed: {e}")
+                except Exception as e:
+                    logger.warning(f"Could not create worktree marker: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to auto-create marker for {session_name}: {e}")
 
 
 def create_completion_marker(session_name: str, project_id: int, reason: str = ""):
