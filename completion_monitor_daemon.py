@@ -23,6 +23,7 @@ from session_state import SessionStateManager
 from scheduler import TmuxOrchestratorScheduler
 from completion_detector import CompletionDetector, create_completion_marker
 from agent_health_monitor import AgentHealthMonitor, AgentHealthDatabase
+from scheduler_lock_manager import SchedulerLockManager
 
 # Configure logging
 logging.basicConfig(
@@ -330,8 +331,146 @@ class CompletionMonitorDaemon:
         # Perform agent health monitoring
         self.health_monitoring_cycle()
         
+        # Verify cleanup for recent completed projects
+        self.cleanup_verification_cycle()
+        
         logger.debug("Monitoring cycle completed")
     
+    def get_recent_completed_projects(self, limit: int = 3) -> List[Dict[str, Any]]:
+        """Get the most recently completed projects for cleanup verification"""
+        db_path = self.tmux_orchestrator_path / 'task_queue.db'
+        
+        try:
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT id, project_path, orchestrator_session, main_session, session_name, 
+                           status, completed_at
+                    FROM project_queue 
+                    WHERE status = 'completed' 
+                    ORDER BY completed_at DESC 
+                    LIMIT ?
+                """, (limit,))
+                
+                projects = []
+                for row in cursor.fetchall():
+                    projects.append({
+                        'id': row['id'],
+                        'project_path': row['project_path'],
+                        'orchestrator_session': row['orchestrator_session'],
+                        'main_session': row['main_session'], 
+                        'session_name': row['session_name'],
+                        'status': row['status'],
+                        'completed_at': row['completed_at']
+                    })
+                
+                return projects
+                
+        except Exception as e:
+            logger.error(f"Failed to get recent completed projects: {e}")
+            return []
+
+    def verify_project_cleanup(self, project: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Verify that a completed project has been properly cleaned up.
+        Checks for lingering sessions and registry directories.
+        
+        Returns: Dictionary with cleanup status and issues found
+        """
+        project_id = project['id']
+        issues = []
+        
+        # Check all possible session names
+        session_names = []
+        if project['orchestrator_session']:
+            session_names.append(project['orchestrator_session'])
+        if project['main_session'] and project['main_session'] not in session_names:
+            session_names.append(project['main_session'])
+        if project['session_name'] and project['session_name'] not in session_names:
+            session_names.append(project['session_name'])
+        
+        # Check for lingering tmux sessions
+        lingering_sessions = []
+        for session_name in session_names:
+            if session_name and self.check_session_exists(session_name):
+                lingering_sessions.append(session_name)
+                issues.append(f"Session {session_name} still exists")
+        
+        # Check for registry directory
+        registry_path = None
+        lingering_registry = False
+        if project['project_path']:
+            # Registry is typically in project-tmux-worktrees/registry/
+            project_path = Path(project['project_path'])
+            possible_registry = project_path.parent / f"{project_path.name}-tmux-worktrees" / "registry"
+            if possible_registry.exists():
+                registry_path = str(possible_registry)
+                lingering_registry = True
+                issues.append(f"Registry directory still exists: {registry_path}")
+        
+        cleanup_status = {
+            'project_id': project_id,
+            'completed_at': project['completed_at'],
+            'session_names_checked': session_names,
+            'lingering_sessions': lingering_sessions,
+            'registry_path': registry_path,
+            'lingering_registry': lingering_registry,
+            'issues': issues,
+            'needs_cleanup': len(issues) > 0
+        }
+        
+        return cleanup_status
+
+    def cleanup_verification_cycle(self):
+        """Verify cleanup for the last 3 completed projects"""
+        try:
+            logger.debug("Starting cleanup verification cycle...")
+            
+            recent_completed = self.get_recent_completed_projects(3)
+            if not recent_completed:
+                logger.debug("No recent completed projects to verify")
+                return
+            
+            logger.info(f"Verifying cleanup for {len(recent_completed)} recent completed projects")
+            
+            cleanup_issues = []
+            
+            for project in recent_completed:
+                cleanup_status = self.verify_project_cleanup(project)
+                
+                if cleanup_status['needs_cleanup']:
+                    cleanup_issues.append(cleanup_status)
+                    logger.warning(f"🧹 Project {project['id']} cleanup issues: {', '.join(cleanup_status['issues'])}")
+                else:
+                    logger.debug(f"✅ Project {project['id']} properly cleaned up")
+            
+            if cleanup_issues:
+                logger.warning(f"Found {len(cleanup_issues)} projects with cleanup issues")
+                
+                # Log detailed cleanup issues for manual intervention
+                for issue in cleanup_issues:
+                    logger.warning(f"Project {issue['project_id']} needs manual cleanup:")
+                    for problem in issue['issues']:
+                        logger.warning(f"  - {problem}")
+                    
+                    # Auto-cleanup if safe to do so
+                    if issue['lingering_sessions']:
+                        logger.info(f"Attempting to auto-cleanup lingering sessions for project {issue['project_id']}")
+                        for session_name in issue['lingering_sessions']:
+                            try:
+                                subprocess.run(['tmux', 'kill-session', '-t', session_name], 
+                                             capture_output=True, timeout=10)
+                                logger.info(f"Killed lingering session: {session_name}")
+                            except Exception as e:
+                                logger.error(f"Failed to kill session {session_name}: {e}")
+            else:
+                logger.debug("All recent completed projects properly cleaned up")
+                
+        except Exception as e:
+            logger.error(f"Error during cleanup verification cycle: {e}")
+
     def health_monitoring_cycle(self):
         """Check health of all active agent sessions"""
         try:
@@ -423,15 +562,41 @@ def main():
     
     args = parser.parse_args()
     
-    # Create and run the daemon
-    daemon = CompletionMonitorDaemon(poll_interval=args.poll_interval)
+    # SINGLETON PROTECTION: Prevent multiple completion monitor instances
+    lock_manager = SchedulerLockManager(mode="completion")
     
-    if args.test:
-        logger.info("Running test monitoring cycle...")
-        daemon.monitoring_cycle()
-        logger.info("Test completed")
-    else:
-        daemon.run()
+    try:
+        logger.info("Acquiring completion monitor lock...")
+        if not lock_manager.acquire_lock():
+            logger.error("Another completion monitor daemon is already running!")
+            logger.error("Check with: systemctl status tmux-orchestrator-completion")
+            logger.error("Or kill duplicate processes: ps aux | grep completion_monitor")
+            sys.exit(1)
+        
+        logger.info("✅ Completion monitor lock acquired successfully")
+        
+        # Create and run the daemon
+        daemon = CompletionMonitorDaemon(poll_interval=args.poll_interval)
+        
+        if args.test:
+            logger.info("Running test monitoring cycle...")
+            daemon.monitoring_cycle()
+            logger.info("Test completed")
+        else:
+            daemon.run()
+            
+    except KeyboardInterrupt:
+        logger.info("Received interrupt signal, shutting down...")
+    except Exception as e:
+        logger.error(f"Completion monitor daemon error: {e}")
+        raise
+    finally:
+        # Always release the lock
+        try:
+            lock_manager.release_lock()
+            logger.info("Completion monitor lock released")
+        except Exception as e:
+            logger.warning(f"Error releasing completion monitor lock: {e}")
 
 if __name__ == '__main__':
     main()
