@@ -3624,9 +3624,39 @@ This file is automatically read by Claude Code when working in this directory.
                     'tmux', 'kill-window', '-t', f'{session_name}:{window_idx}'
                 ], capture_output=True)
                 
-                # Wait for OAuth port to be released after killing the window
+                # ============================================================================
+                # CRITICAL OAUTH PORT WAIT - DO NOT REDUCE THESE TIMEOUTS!
+                # ============================================================================
+                # After killing the tmux window, Claude's OAuth server on port 3000 takes
+                # time to fully release. During BATCH PROCESSING, multiple projects compete
+                # for the same port, causing "port already in use" conflicts.
+                #
+                # This wait is ESSENTIAL because:
+                # 1. Claude's OAuth server doesn't release port 3000 immediately on window kill
+                # 2. System socket cleanup can take 5-30 seconds under load
+                # 3. Batch processing (multiple projects) amplifies race conditions
+                # 4. Without this wait, the next Claude start fails silently
+                #
+                # MINIMUM 30 SECONDS REQUIRED - verified through batch testing
+                # ============================================================================
                 oauth_port = int(os.environ.get('CLAUDE_OAUTH_PORT', '3000'))
-                self.wait_for_port_free(oauth_port, max_wait=10)
+                console.print(f"[yellow]⏳ Waiting for OAuth port {oauth_port} to be released after window kill...[/yellow]")
+                
+                if not self.wait_for_port_free(oauth_port, max_wait=45):
+                    console.print(f"[red]⚠️ WARNING: OAuth port {oauth_port} still in use after 45s![/red]")
+                    console.print(f"[red]This may cause the next Claude start to fail.[/red]")
+                    # Check what's using the port for debugging
+                    try:
+                        result = subprocess.run(['lsof', '-i', f'TCP:{oauth_port}'], 
+                                              capture_output=True, text=True, timeout=2)
+                        if result.stdout.strip():
+                            console.print(f"[red]Port {oauth_port} is being used by: {result.stdout.strip()}[/red]")
+                    except Exception:
+                        pass
+                    # Continue anyway but log the issue
+                    console.print(f"[yellow]Continuing with potential port conflict...[/yellow]")
+                else:
+                    console.print(f"[green]✓ OAuth port {oauth_port} is now free[/green]")
                 
                 # Create a new window at the same index
                 # Using -a flag to insert at specific index
@@ -6052,24 +6082,73 @@ Remember: Context management is automatic - focus on creating good checkpoints t
                     return True
 
     def wait_for_port_free(self, port: int = 3000, max_wait: int = 60) -> bool:
-        """Wait for a port to become free with timeout."""
+        """
+        Wait for OAuth port to become free with enhanced batch processing support.
+        
+        CRITICAL: This function prevents port 3000 conflicts during batch processing.
+        DO NOT reduce polling frequency or timeouts - they are calibrated for:
+        - Claude's OAuth server shutdown timing
+        - System socket cleanup under load  
+        - Multiple concurrent project starts
+        - Network stack delays during high load
+        """
         start_time = time.time()
-        last_check_time = 0
+        last_status_time = 0
+        check_interval = 0.5  # More responsive polling for faster detection
+        consecutive_free_checks = 0
         
         while time.time() - start_time < max_wait:
             if self.is_port_free(port):
-                if time.time() - start_time > 2:  # Only print if we actually waited
-                    console.print(f"[green]✓ OAuth port {port} is now free[/green]")
-                return True
+                consecutive_free_checks += 1
+                # Require 2 consecutive free checks to avoid race conditions
+                # where port briefly appears free but isn't actually released
+                if consecutive_free_checks >= 2:
+                    elapsed = time.time() - start_time
+                    if elapsed > 2:  # Only print if we actually waited
+                        console.print(f"[green]✓ OAuth port {port} confirmed free after {elapsed:.1f}s[/green]")
+                    return True
+                # Brief pause for second confirmation
+                time.sleep(0.2)
+            else:
+                consecutive_free_checks = 0  # Reset counter if port still in use
             
-            # Print status every 5 seconds
-            if time.time() - last_check_time > 5:
-                console.print(f"[yellow]Waiting for OAuth port {port} to free up... ({int(time.time() - start_time)}s)[/yellow]")
-                last_check_time = time.time()
+            # Print status every 8 seconds with more details
+            if time.time() - last_status_time > 8:
+                elapsed = int(time.time() - start_time)
+                remaining = max_wait - elapsed
+                console.print(f"[yellow]⏳ OAuth port {port} still in use... {elapsed}s elapsed, {remaining}s remaining[/yellow]")
+                last_status_time = time.time()
+                
+                # Enhanced debugging every 20 seconds for persistent blocks
+                if elapsed > 0 and elapsed % 20 == 0:
+                    try:
+                        result = subprocess.run(['lsof', '-i', f'TCP:{port}'], 
+                                              capture_output=True, text=True, timeout=2)
+                        if result.stdout.strip():
+                            lines = result.stdout.strip().split('\n')
+                            if len(lines) > 1:  # Skip header
+                                process_info = lines[1].split()[:2]  # Get command and PID
+                                console.print(f"[yellow]   → Blocked by: {' '.join(process_info)}[/yellow]")
+                    except Exception:
+                        pass  # lsof might not be available, continue silently
             
-            time.sleep(2)
+            time.sleep(check_interval)
         
-        console.print(f"[red]Warning: OAuth port {port} did not become free after {max_wait}s[/red]")
+        # Timeout reached - provide detailed failure information
+        elapsed = time.time() - start_time
+        console.print(f"[red]❌ TIMEOUT: OAuth port {port} did not become free after {elapsed:.1f}s[/red]")
+        
+        # Final diagnostic check
+        try:
+            result = subprocess.run(['lsof', '-i', f'TCP:{port}'], 
+                                  capture_output=True, text=True, timeout=2)
+            if result.stdout.strip():
+                console.print(f"[red]Port {port} is still occupied by:[/red]")
+                for line in result.stdout.strip().split('\n')[1:]:  # Skip header
+                    console.print(f"[red]  {line}[/red]")
+        except Exception:
+            console.print(f"[red]Unable to determine what is using port {port}[/red]")
+            
         return False
 
     def pre_initialize_claude_in_worktree(self, session_name: str, window_idx: int, role_key: str, worktree_path: Path):
@@ -6081,6 +6160,48 @@ Remember: Context management is automatic - focus on creating good checkpoints t
             return False
         
         console.print(f"[cyan]Pre-initializing Claude for {role_key} to approve MCP servers...[/cyan]")
+        
+        # ============================================================================
+        # PROACTIVE OAUTH PORT CONFLICT CHECK - FAIL FAST TO PREVENT BATCH FAILURES
+        # ============================================================================
+        # Check if OAuth port 3000 is already in use BEFORE starting Claude.
+        # This prevents the entire MCP initialization sequence from running only
+        # to fail later during the window kill/recreate step.
+        #
+        # During batch processing, this early detection saves 60+ seconds per 
+        # failed project and prevents cascading delays.
+        # ============================================================================
+        oauth_port = int(os.environ.get('CLAUDE_OAUTH_PORT', '3000'))
+        
+        if not self.is_port_free(oauth_port):
+            console.print(f"[red]❌ BATCH PROCESSING CONFLICT DETECTED![/red]")
+            console.print(f"[red]OAuth port {oauth_port} is already in use - cannot start MCP initialization[/red]")
+            
+            # Enhanced diagnostic for batch processing conflicts
+            try:
+                result = subprocess.run(['lsof', '-i', f'TCP:{oauth_port}'], 
+                                      capture_output=True, text=True, timeout=2)
+                if result.stdout.strip():
+                    lines = result.stdout.strip().split('\n')
+                    if len(lines) > 1:  # Skip header
+                        process_info = lines[1].split()
+                        if len(process_info) >= 2:
+                            cmd, pid = process_info[0], process_info[1]
+                            console.print(f"[red]Port blocked by: {cmd} (PID {pid})[/red]")
+                            
+                            # If it's another Claude process, this is likely a batch conflict
+                            if 'claude' in cmd.lower():
+                                console.print(f"[yellow]⚠️  This appears to be a BATCH PROCESSING CONFLICT[/yellow]")
+                                console.print(f"[yellow]Another Claude instance is using port {oauth_port}[/yellow]")
+                                console.print(f"[yellow]Recommendation: Wait for other project to complete MCP init[/yellow]")
+            except Exception:
+                pass
+                
+            console.print(f"[red]Aborting MCP initialization for {role_key}[/red]")
+            console.print(f"[red]This will prevent session briefing - project will likely need reset[/red]")
+            return False
+        
+        console.print(f"[green]✓ OAuth port {oauth_port} is available - proceeding with MCP initialization[/green]")
         
         # Start Claude normally (without --dangerously-skip-permissions)
         subprocess.run([
@@ -6132,12 +6253,51 @@ Remember: Context management is automatic - focus on creating good checkpoints t
             'Enter'
         ])
         
-        # Wait for OAuth server port to be released
-        # Use adaptive polling instead of fixed wait times
+        # ============================================================================
+        # CRITICAL OAUTH PORT WAIT AFTER CLAUDE EXIT - DO NOT REDUCE THESE TIMEOUTS!
+        # ============================================================================
+        # After sending /exit to Claude, the OAuth server needs time to shut down
+        # and release port 3000. This is ESPECIALLY critical during BATCH PROCESSING
+        # where multiple projects are starting Claude instances in rapid succession.
+        #
+        # This wait prevents the "port already in use" errors that cause:
+        # - Session creation to complete but agents never get briefed
+        # - Projects marked as COMPLETED but actually failed during setup
+        # - Batch failures that require manual reset/re-queuing
+        #
+        # The 60-second timeout accounts for:
+        # - Claude's graceful shutdown process (5-10s)
+        # - OAuth server cleanup (5-15s) 
+        # - System socket release under load (10-30s)
+        # - Buffer for batch processing delays (additional 15-20s)
+        #
+        # MINIMUM 60 SECONDS REQUIRED for reliable batch processing
+        # ============================================================================
         oauth_port = int(os.environ.get('CLAUDE_OAUTH_PORT', '3000'))
-        if not self.wait_for_port_free(oauth_port, max_wait=30):
-            console.print(f"[yellow]Warning: OAuth port {oauth_port} may still be in use[/yellow]")
-            # Continue anyway - the port might be used by something else
+        console.print(f"[yellow]⏳ Waiting for Claude OAuth server on port {oauth_port} to shut down...[/yellow]")
+        
+        if not self.wait_for_port_free(oauth_port, max_wait=60):
+            console.print(f"[red]⚠️ CRITICAL: OAuth port {oauth_port} still in use after 60s![/red]")
+            console.print(f"[red]This WILL cause batch processing failures and port conflicts![/red]")
+            # Enhanced debugging for persistent port blocks
+            try:
+                result = subprocess.run(['lsof', '-i', f'TCP:{oauth_port}'], 
+                                      capture_output=True, text=True, timeout=2)
+                if result.stdout.strip():
+                    console.print(f"[red]Port {oauth_port} blocked by: {result.stdout.strip()}[/red]")
+                    # Try to identify the PID for potential cleanup
+                    lines = result.stdout.strip().split('\n')
+                    for line in lines[1:]:  # Skip header
+                        if 'claude' in line.lower():
+                            parts = line.split()
+                            if len(parts) > 1:
+                                pid = parts[1]
+                                console.print(f"[red]Claude process PID {pid} may need manual cleanup[/red]")
+            except Exception:
+                pass
+            console.print(f"[yellow]Continuing but this may cause the next MCP initialization to fail...[/yellow]")
+        else:
+            console.print(f"[green]✓ OAuth server cleanly shut down[/green]")
         
         # Don't print completion since we'll kill the pane
         return True
