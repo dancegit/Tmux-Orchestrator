@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Tmux Orchestrator Self-Healing Monitor every 30 minutes
+Requires=tmux-orchestrator-self-healing-monitor.service
+
+[Timer]
+OnCalendar=*:0/30
+Persistent=true
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target
