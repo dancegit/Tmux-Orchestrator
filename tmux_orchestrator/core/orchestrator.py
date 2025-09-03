@@ -303,6 +303,14 @@ class Orchestrator:
         Returns:
             Dict containing parsed implementation spec or None if failed
         """
+        import os
+        
+        # Check if we should skip Claude analysis (batch mode)
+        if os.environ.get('CLAUDE_SKIP_ANALYSIS') == '1' or os.environ.get('BATCH_MODE') == '1':
+            console.print(f"[yellow]⚡ Skipping Claude analysis in batch mode[/yellow]")
+            # Return a minimal spec structure that bypasses Claude
+            return self._create_default_spec(spec_file, project_path)
+        
         try:
             from ..claude.spec_analyzer import SpecificationAnalyzer
             
@@ -324,6 +332,83 @@ class Orchestrator:
         except Exception as e:
             console.print(f"[red]Failed to analyze spec with modular system: {e}[/red]")
             return None
+    
+    def _create_default_spec(self, spec_file: Path, project_path: Path) -> Dict[str, Any]:
+        """
+        Create a default specification structure for batch mode.
+        This bypasses Claude analysis and uses sensible defaults.
+        """
+        spec_name = spec_file.stem.replace('-', '_').replace(' ', '_')
+        
+        return {
+            'project': {
+                'name': spec_name,
+                'description': f"Automated orchestration for {spec_name}",
+                'path': str(project_path),
+                'type': 'development',
+                'main_tech': ['python', 'typescript', 'bash']
+            },
+            'implementation_plan': {
+                'phases': [
+                    {
+                        'name': 'Phase 1: Implementation',
+                        'duration_hours': 8,
+                        'tasks': ['Setup', 'Core implementation', 'Testing']
+                    }
+                ],
+                'total_estimated_hours': 8
+            },
+            'team_composition': {
+                'orchestrator': {
+                    'role': 'Orchestrator',
+                    'responsibilities': ['High-level coordination', 'Architecture decisions'],
+                    'expertise_required': ['System design', 'Project management']
+                },
+                'developer': {
+                    'role': 'Developer',
+                    'responsibilities': ['Implementation', 'Code review'],
+                    'expertise_required': ['Full-stack development']
+                },
+                'tester': {
+                    'role': 'Tester',
+                    'responsibilities': ['Test creation', 'Quality assurance'],
+                    'expertise_required': ['Testing frameworks', 'QA']
+                }
+            },
+            'roles': {
+                'Orchestrator': {
+                    'responsibilities': ['High-level coordination', 'Architecture decisions'],
+                    'check_in_interval': 30,
+                    'initial_commands': ['echo "Orchestrator ready"']
+                },
+                'Developer': {
+                    'responsibilities': ['Implementation', 'Code review'],
+                    'check_in_interval': 30,
+                    'initial_commands': ['git status', 'ls -la']
+                },
+                'Tester': {
+                    'responsibilities': ['Test creation', 'Quality assurance'],
+                    'check_in_interval': 30,
+                    'initial_commands': ['echo "Ready to test"']
+                }
+            },
+            'git_workflow': {
+                'parent_branch': 'main',
+                'branch_name': f'feature/{spec_name}',
+                'commit_interval': 30,
+                'pr_title': f'Implement {spec_name}'
+            },
+            'success_criteria': [
+                'All tests pass',
+                'Code review complete',
+                'Documentation updated'
+            ],
+            'project_size': {
+                'size': 'medium',
+                'estimated_loc': 1000,
+                'complexity': 'medium'
+            }
+        }
     
     def _parse_implementation_spec(self, spec_dict: Dict[str, Any]) -> Any:
         """

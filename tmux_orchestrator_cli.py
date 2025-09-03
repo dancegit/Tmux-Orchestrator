@@ -21,9 +21,38 @@ from tmux_orchestrator.main import (
 )
 
 
+def find_git_root(start_path):
+    """Find the nearest parent directory containing a .git folder"""
+    from pathlib import Path
+    current = Path(start_path).resolve()
+    max_depth = 10  # Prevent infinite traversal
+    depth = 0
+    while current != current.parent and depth < max_depth:
+        if (current / '.git').exists():
+            return str(current)
+        current = current.parent
+        depth += 1
+    return None
+
 def cmd_run_orchestrator(args):
     """Run the full orchestrator using the modular system."""
     print("🚀 Running Tmux Orchestrator (Modular v2.0)...")
+    
+    # Auto-detect project from spec file if not provided
+    if hasattr(args, 'spec') and args.spec and (not hasattr(args, 'project') or not args.project):
+        from pathlib import Path
+        spec_path = Path(args.spec).resolve()
+        if spec_path.exists():
+            # Try to find git root from spec location
+            git_root = find_git_root(spec_path.parent)
+            if git_root:
+                args.project = git_root
+                print(f"✅ Auto-detected project root: {git_root}")
+            else:
+                print("⚠️  No git repository found from spec location")
+                # Use spec's parent directory as fallback
+                args.project = str(spec_path.parent)
+                print(f"📁 Using spec directory as project: {args.project}")
     
     # Handle batch mode - automatically detect JSON batch files
     if hasattr(args, 'spec') and args.spec:
@@ -87,10 +116,15 @@ def cmd_run_orchestrator(args):
     if hasattr(args, 'batch') and args.batch:
         # Enable non-interactive mode
         os.environ['BATCH_MODE'] = '1'
+        os.environ['CLAUDE_SKIP_ANALYSIS'] = '1'  # Skip Claude analysis in batch mode
+        os.environ['AUTO_CONFIRM'] = '1'  # Auto-confirm all prompts
         print("🤖 Running in batch mode (non-interactive)")
-    
-    if hasattr(args, 'daemon') and args.daemon:
-        # Enable daemon mode with auto-defaults
+        
+        # In batch mode, daemon is implied (no need for separate flag)
+        os.environ['DAEMON_MODE'] = '1'
+        print("📦 Batch mode enabled - running unattended with auto-defaults")
+    elif hasattr(args, 'daemon') and args.daemon:
+        # Enable daemon mode with auto-defaults (when not in batch)
         os.environ['DAEMON_MODE'] = '1'
         print("👻 Running in daemon mode (unattended)")
         
