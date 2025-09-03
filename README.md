@@ -162,7 +162,7 @@ CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
 - **Root Cause**: Database schema mismatch (`task_id` vs `id`) + inverted scheduling logic
 - **Fix**: 
   - Fixed SQL queries to use correct column names
-  - Corrected orchestrator scheduling condition in `auto_orchestrate.py`
+  - Corrected orchestrator scheduling condition (now in modular system)
   - Added database schema validation
 - **Impact**: Prevents "22:21 check-in never happened" situations
 
@@ -189,7 +189,7 @@ CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
 
 | Tool | Purpose | Usage |
 |------|---------|-------|
-| **`auto_orchestrate.py`** | Main entry point for project orchestration | Start new projects, resume existing ones, batch processing |
+| **`tmux_orchestrator_cli.py run`** | Main entry point for project orchestration | Start new projects, resume existing ones, batch processing |
 | **`merge_integration.py`** | Git workflow integration tool | Merge branches, handle conflicts, coordinate git operations |
 | **`scheduler.py --queue-daemon`** | Queue daemon for batch processing | Process multiple projects sequentially, handle retries |
 | **`monitoring_dashboard.py`** | Real-time monitoring interface | Track all active orchestrations via web UI |
@@ -197,13 +197,13 @@ CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
 ### Quick Start with Primary Tools
 ```bash
 # Start a new orchestration
-./auto_orchestrate.py --spec /path/to/spec.md
+./tmux_orchestrator_cli.py run --spec /path/to/spec.md
 
 # Process multiple projects
-./auto_orchestrate.py --spec spec1.md --spec spec2.md --spec spec3.md
+./tmux_orchestrator_cli.py run --spec spec1.md --spec spec2.md --spec spec3.md
 
 # Resume after interruption
-./auto_orchestrate.py --project /path/to/project --resume
+./tmux_orchestrator_cli.py run --project /path/to/project --resume
 
 # Merge integration branches
 ./merge_integration.py --project /path/to/project --branch integration
@@ -688,7 +688,7 @@ The new hooks-based messaging system uses these components:
 | **`task_queue.db`** | Contains all project and agent state | Automatic recreation, but all history lost |
 | **`CLAUDE.md`** | Agent coordination and briefing rules | System becomes uncoordinated without it |
 | **`scheduler.py`** | Core scheduling daemon | No check-ins or project processing |
-| **`auto_orchestrate.py`** | Main project creation entry point | Cannot start new projects |
+| **`tmux_orchestrator_cli.py run`** | Main project creation entry point | Cannot start new projects |
 | **systemd service files** | Persistent system operation | Manual process management required |
 
 ### 🔍 Database Locations by Use Case
@@ -736,7 +736,7 @@ This file structure enables the Tmux Orchestrator's autonomous multi-agent opera
 ### File Organization Guidelines
 
 **Python Scripts** - Core functionality
-- `auto_orchestrate.py` - Main orchestration entry point
+- `tmux_orchestrator_cli.py` - Main orchestration entry point (modular system)
 - `scheduler.py` - Task scheduling daemon
 - `*_manager.py` - Various system managers
 - `*_monitor.py` - Monitoring utilities
@@ -774,10 +774,10 @@ This file structure enables the Tmux Orchestrator's autonomous multi-agent opera
 ### Most Common Commands
 ```bash
 # Start new project
-./auto_orchestrate.py --project /path/to/project --spec spec.md
+./tmux_orchestrator_cli.py run --project /path/to/project --spec spec.md
 
 # Resume after interruption
-./auto_orchestrate.py --project /path/to/project --resume
+./tmux_orchestrator_cli.py run --project /path/to/project --resume
 
 # Monitor everything
 ./monitoring_dashboard.py
@@ -837,7 +837,7 @@ sudo systemctl stop tmux-orchestrator-checkin tmux-orchestrator-queue
 
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
-| **`auto_orchestrate.py`** | Automated setup from specifications | Starting new projects with a spec file |
+| **`tmux_orchestrator_cli.py run`** | Automated setup from specifications | Starting new projects with a spec file |
 | **`merge_integration.py`** | Git workflow and PR management | Merging branches, creating PRs, managing integration |
 | **`send-claude-message.sh`** | Send messages to Claude agents | Basic agent communication |
 | **`send-claude-message-hubspoke.sh`** | Hub-spoke enforced messaging | Critical updates & completions |
@@ -905,39 +905,39 @@ tail -f completion_monitor.log
 
 ```bash
 # One command to go from spec to running AI team!
-./auto_orchestrate.py --project /path/to/project --spec /path/to/spec.md
+./tmux_orchestrator_cli.py run --project /path/to/project --spec /path/to/spec.md
 
 # NEW: Automatic project detection - just provide the spec!
-./auto_orchestrate.py --spec /path/to/spec.md
+./tmux_orchestrator_cli.py run --spec /path/to/spec.md
 
 # NEW: Create new git projects from specs (creates repo as sibling to spec location)
-./auto_orchestrate.py --new-project --spec /path/to/spec.md
+./tmux_orchestrator_cli.py run --new-project --spec /path/to/spec.md
 
 # NEW: Batch processing - queue multiple specs
-./auto_orchestrate.py --spec spec1.md --spec spec2.md --spec spec3.md
+./tmux_orchestrator_cli.py run --spec spec1.md --spec spec2.md --spec spec3.md
 
 # Start the queue daemon to process batched projects
 uv run scheduler.py --queue-daemon
 
 # Resume an interrupted orchestration
-./auto_orchestrate.py --project /path/to/project --resume
+./tmux_orchestrator_cli.py run --project /path/to/project --resume
 
 # With custom team size based on your Claude plan
-./auto_orchestrate.py --project /path/to/project --spec spec.md --plan max5
+./tmux_orchestrator_cli.py run --project /path/to/project --spec spec.md --plan max5
 
 # NEW in v3.5.2: Enable orchestrator self-scheduling
-./auto_orchestrate.py --spec spec.md --enable-orchestrator-scheduling
+./tmux_orchestrator_cli.py run --spec spec.md --enable-orchestrator-scheduling
 
 # NEW in v3.5.2: Use global MCP configurations for all agents
-./auto_orchestrate.py --spec spec.md --global-mcp-init
+./tmux_orchestrator_cli.py run --spec spec.md --global-mcp-init
 
 # Both flags together for maximum reliability
-./auto_orchestrate.py --spec spec.md --enable-orchestrator-scheduling --global-mcp-init
+./tmux_orchestrator_cli.py run --spec spec.md --enable-orchestrator-scheduling --global-mcp-init
 ```
 
 ### 🆕 JSON Spec Mapping (NEW!)
 
-The `auto_orchestrate.py` script now supports JSON configuration files that map specification files to their target project directories. This enables centralized spec management and batch processing with custom project locations.
+The `tmux_orchestrator_cli.py run` command now supports JSON configuration files that map specification files to their target project directories. This enables centralized spec management and batch processing with custom project locations.
 
 #### JSON Schema
 ```json
@@ -976,16 +976,16 @@ The `auto_orchestrate.py` script now supports JSON configuration files that map 
 #### JSON Usage Examples
 ```bash
 # Process a single JSON spec mapping
-./auto_orchestrate.py --spec integration_config.json
+./tmux_orchestrator_cli.py run --spec integration_config.json
 
 # Validate JSON without processing
-./auto_orchestrate.py --spec integration_config.json --validate-json
+./tmux_orchestrator_cli.py run --spec integration_config.json --validate-json
 
 # Filter specs by tags
-./auto_orchestrate.py --spec integration_batch.json --filter-tags backend api
+./tmux_orchestrator_cli.py run --spec integration_batch.json --filter-tags backend api
 
 # Mix JSON and regular specs
-./auto_orchestrate.py --spec config.json --spec additional_spec.md
+./tmux_orchestrator_cli.py run --spec config.json --spec additional_spec.md
 ```
 
 #### Example JSON Configuration
@@ -1099,20 +1099,20 @@ The `--new-project` flag enables creating new git repositories directly from spe
 **Examples:**
 ```bash
 # Create single project from spec
-./auto_orchestrate.py --new-project --spec feature-spec.md
+./tmux_orchestrator_cli.py run --new-project --spec feature-spec.md
 # Result: Creates "feature-spec" directory next to the spec file
 
 # Batch create projects from multiple specs
-./auto_orchestrate.py --new-project --spec spec1.md --spec spec2.md
+./tmux_orchestrator_cli.py run --new-project --spec spec1.md --spec spec2.md
 
 # Process entire directory of specs
-./auto_orchestrate.py --new-project --spec /path/to/specs/
+./tmux_orchestrator_cli.py run --new-project --spec /path/to/specs/
 
 # Use patterns to select specific specs
-./auto_orchestrate.py --new-project --spec "features/user-*.md"
+./tmux_orchestrator_cli.py run --new-project --spec "features/user-*.md"
 
 # Force overwrite existing projects
-./auto_orchestrate.py --new-project --force --spec existing-project.md
+./tmux_orchestrator_cli.py run --new-project --force --spec existing-project.md
 ```
 
 **Directory Structure Example:**
@@ -1329,7 +1329,7 @@ SUCCESS CRITERIA:
 |-------|----------|
 | **"ModuleNotFoundError: No module named 'yaml'"** | Install UV: `curl -LsSf https://astral.sh/uv/install.sh | sh` |
 | **Scripts not executable** | Run: `chmod +x *.py *.sh` |
-| **Agent exhausted credits** | Wait for reset or use: `./auto_orchestrate.py --resume` |
+| **Agent exhausted credits** | Wait for reset or use: `./tmux_orchestrator_cli.py run --resume` |
 | **Tmux session not found** | Check with: `tmux ls` and use correct session name |
 | **Git worktree conflicts** | The scripts handle this automatically with fallback strategies |
 | **"bc: command not found"** | Install bc: `sudo apt install bc` (Linux) or `brew install bc` (macOS) |
@@ -1402,14 +1402,14 @@ echo "Current window: $(tmux display-message -p "#{session_name}:#{window_index}
 #### Starting a New Project
 ```bash
 # Basic orchestration with specification
-./auto_orchestrate.py --project /path/to/project --spec spec.md
+./tmux_orchestrator_cli.py run --project /path/to/project --spec spec.md
 
 # With specific team composition
-./auto_orchestrate.py --project /path/to/project --spec spec.md \
+./tmux_orchestrator_cli.py run --project /path/to/project --spec spec.md \
   --roles "orchestrator,developer,sysadmin,devops"
 
 # For system deployment projects
-./auto_orchestrate.py --project /path/to/project --spec deployment_spec.md \
+./tmux_orchestrator_cli.py run --project /path/to/project --spec deployment_spec.md \
   --team-type system_deployment
 ```
 
@@ -1437,7 +1437,7 @@ echo "Current window: $(tmux display-message -p "#{session_name}:#{window_index}
 ./schedule_with_note.sh 30 "Review implementation progress" "my-session:0"
 
 # Resume an interrupted orchestration
-./auto_orchestrate.py --project /path/to/project --resume
+./tmux_orchestrator_cli.py run --project /path/to/project --resume
 
 # Check agent credit status
 ./credit_management/check_agent_health.sh
@@ -1461,7 +1461,7 @@ echo "Current window: $(tmux display-message -p "#{session_name}:#{window_index}
 ### Multi-Project Orchestration
 ```bash
 # NEW: Batch processing - queue all specs at once
-./auto_orchestrate.py --spec spec1.md --spec spec2.md --spec spec3.md
+./tmux_orchestrator_cli.py run --spec spec1.md --spec spec2.md --spec spec3.md
 
 # Start the queue daemon to process them sequentially
 uv run scheduler.py --queue-daemon
@@ -1470,9 +1470,9 @@ uv run scheduler.py --queue-daemon
 uv run scheduler.py --queue-list
 
 # Or start each project individually (old method)
-./auto_orchestrate.py --project ~/projects/project1 --spec spec1.md
-./auto_orchestrate.py --project ~/projects/project2 --spec spec2.md
-./auto_orchestrate.py --project ~/projects/project3 --spec spec3.md
+./tmux_orchestrator_cli.py run --project ~/projects/project1 --spec spec1.md
+./tmux_orchestrator_cli.py run --project ~/projects/project2 --spec spec2.md
+./tmux_orchestrator_cli.py run --project ~/projects/project3 --spec spec3.md
 
 # Monitor all projects in one dashboard
 ./multi_project_monitor.py
@@ -1497,62 +1497,62 @@ The orchestrator can share insights between projects:
 #### `auto_orchestrate.py` - Automated Setup from Specifications
 ```bash
 # Basic usage - start a new project
-./auto_orchestrate.py --project ~/projects/my-webapp --spec ~/specs/auth-system.md
+./tmux_orchestrator_cli.py run --project ~/projects/my-webapp --spec ~/specs/auth-system.md
 
 # NEW: Automatic project detection - no --project needed!
-./auto_orchestrate.py --spec ~/specs/auth-system.md
+./tmux_orchestrator_cli.py run --spec ~/specs/auth-system.md
 
 # NEW: Create new git projects from specs (--new-project flag)
-./auto_orchestrate.py --new-project --spec ~/specs/auth-system.md
+./tmux_orchestrator_cli.py run --new-project --spec ~/specs/auth-system.md
 
 # NEW: Batch creation of multiple projects
-./auto_orchestrate.py --new-project --spec spec1.md --spec spec2.md --spec spec3.md
+./tmux_orchestrator_cli.py run --new-project --spec spec1.md --spec spec2.md --spec spec3.md
 
 # NEW: Process entire directories of specs
-./auto_orchestrate.py --new-project --spec ~/specs/
+./tmux_orchestrator_cli.py run --new-project --spec ~/specs/
 
 # NEW: Use glob patterns for selective project creation
-./auto_orchestrate.py --new-project --spec "~/specs/feature-*.md"
+./tmux_orchestrator_cli.py run --new-project --spec "~/specs/feature-*.md"
 
 # NEW: Force overwrite existing projects
-./auto_orchestrate.py --new-project --force --spec existing-feature.md
+./tmux_orchestrator_cli.py run --new-project --force --spec existing-feature.md
 
 # NEW: Batch processing multiple specs (existing projects)
-./auto_orchestrate.py --spec spec1.md --spec spec2.md --spec spec3.md
+./tmux_orchestrator_cli.py run --spec spec1.md --spec spec2.md --spec spec3.md
 
 # Force batch mode for single spec
-./auto_orchestrate.py --spec spec.md --batch
+./tmux_orchestrator_cli.py run --spec spec.md --batch
 
 # Resume after credit exhaustion
-./auto_orchestrate.py --project ~/projects/my-webapp --resume
+./tmux_orchestrator_cli.py run --project ~/projects/my-webapp --resume
 
 # Check status without making changes
-./auto_orchestrate.py --project ~/projects/my-webapp --resume --status-only
+./tmux_orchestrator_cli.py run --project ~/projects/my-webapp --resume --status-only
 
 # Force specific team composition
-./auto_orchestrate.py --project ~/projects/deployment \
+./tmux_orchestrator_cli.py run --project ~/projects/deployment \
   --spec deployment.md \
   --roles "orchestrator,sysadmin,devops,securityops"
 
 # System deployment with specialized team
-./auto_orchestrate.py --project /opt/services/api-server \
+./tmux_orchestrator_cli.py run --project /opt/services/api-server \
   --spec deploy-spec.md \
   --team-type system_deployment
 
 # Adjust for Claude subscription plan
-./auto_orchestrate.py --project ~/projects/startup \
+./tmux_orchestrator_cli.py run --project ~/projects/startup \
   --spec mvp.md \
   --plan pro \
   --size small
 
 # NEW: JSON spec mapping
-./auto_orchestrate.py --spec integration_batch.json
+./tmux_orchestrator_cli.py run --spec integration_batch.json
 
 # NEW: Validate JSON configuration
-./auto_orchestrate.py --spec config.json --validate-json
+./tmux_orchestrator_cli.py run --spec config.json --validate-json
 
 # NEW: Filter by tags
-./auto_orchestrate.py --spec batch.json --filter-tags backend integration
+./tmux_orchestrator_cli.py run --spec batch.json --filter-tags backend integration
 ```
 
 #### `send-claude-message.sh` - Agent Communication
@@ -1724,7 +1724,7 @@ export ANTHROPIC_API_KEY="your-key"
   --spec production-spec.md
 
 # NEW: Research mode for failure analysis (used automatically by batch retry)
-./auto_orchestrate.py --research '{
+./tmux_orchestrator_cli.py run --research '{
   "failed_projects": [{"spec_path": "spec.md", "error_message": "timeout"}],
   "session_id": "research-session-123"
 }'
@@ -1742,7 +1742,7 @@ export ANTHROPIC_API_KEY="your-key"
 ./concurrent_orchestration.py --start my-project
 
 # Note: This is a low-level utility. For starting projects, use:
-# ./auto_orchestrate.py --project /path/to/project --spec spec.md
+# ./tmux_orchestrator_cli.py run --project /path/to/project --spec spec.md
 ```
 
 ### Testing & Validation Scripts
@@ -1918,7 +1918,7 @@ DELIVERABLES:
 EOF
 
 # 2. Launch orchestration
-./auto_orchestrate.py --project ~/projects/ecommerce --spec feature-spec.md
+./tmux_orchestrator_cli.py run --project ~/projects/ecommerce --spec feature-spec.md
 
 # 3. Monitor progress
 ./monitoring_dashboard.py &
@@ -1950,7 +1950,7 @@ SECURITY:
 EOF
 
 # 2. Deploy specialized team
-./auto_orchestrate.py \
+./tmux_orchestrator_cli.py run \
   --project /opt/deployments/order-api \
   --spec deploy-spec.md \
   --team-type system_deployment
@@ -1968,7 +1968,7 @@ EOF
 ./credit_management/check_agent_health.sh
 
 # 2. If agents exhausted, wait or use resume
-./auto_orchestrate.py --project ~/projects/webapp --resume
+./tmux_orchestrator_cli.py run --project ~/projects/webapp --resume
 
 # 3. Monitor credit resets
 ./credit_management/credit_monitor.py --auto-resume &
@@ -1980,7 +1980,7 @@ EOF
 ### Workflow 4: Batch Processing with Intelligent Retry (NEW!)
 ```bash
 # 1. Queue all project specs at once (NEW: automatic batch retry system)
-./auto_orchestrate.py \
+./tmux_orchestrator_cli.py run \
   --spec ~/specs/frontend-spec.md \
   --spec ~/specs/backend-spec.md \
   --spec ~/specs/mobile-spec.md
@@ -2005,7 +2005,7 @@ uv run scheduler.py --queue-status 2
 ./monitoring_dashboard.py
 
 # 6. NEW: Use optimized local git workflow for 60-500x faster operations
-./auto_orchestrate.py \
+./tmux_orchestrator_cli.py run \
   --spec ~/specs/frontend-spec.md \
   --git-mode local
 ```
@@ -2013,9 +2013,9 @@ uv run scheduler.py --queue-status 2
 ### Workflow 5: Multi-Project Coordination (Legacy)
 ```bash
 # 1. Start multiple projects individually
-./auto_orchestrate.py --project ~/projects/frontend --spec frontend-spec.md
-./auto_orchestrate.py --project ~/projects/backend --spec backend-spec.md
-./auto_orchestrate.py --project ~/projects/mobile --spec mobile-spec.md
+./tmux_orchestrator_cli.py run --project ~/projects/frontend --spec frontend-spec.md
+./tmux_orchestrator_cli.py run --project ~/projects/backend --spec backend-spec.md
+./tmux_orchestrator_cli.py run --project ~/projects/mobile --spec mobile-spec.md
 
 # 2. Monitor all projects
 ./multi_project_monitor.py

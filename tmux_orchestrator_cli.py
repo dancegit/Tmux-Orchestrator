@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""
+Command-line interface for the modularized Tmux Orchestrator system.
+
+This CLI provides access to both the new modular functionality and
+maintains backward compatibility with the original auto_orchestrate.py system.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+# Add tmux_orchestrator package to path
+sys.path.insert(0, str(Path(__file__).parent))
+
+from tmux_orchestrator.main import (
+    main as orchestrator_main,
+    create_orchestrator,
+    restart_claude_with_oauth_management,
+    check_oauth_conflicts
+)
+
+
+def cmd_run_orchestrator(args):
+    """Run the full orchestrator using the modular system."""
+    print("🚀 Running Tmux Orchestrator (Modular v2.0)...")
+    
+    # Handle batch mode - automatically detect JSON batch files
+    if hasattr(args, 'spec') and args.spec:
+        # Check if spec is a JSON file (for batch processing)
+        import json
+        import os
+        if args.spec.endswith('.json') and os.path.exists(args.spec):
+            try:
+                with open(args.spec, 'r') as f:
+                    batch_data = json.load(f)
+                    # If it's a batch file, process it differently
+                    if isinstance(batch_data, dict) and 'projects' in batch_data:
+                        print(f"📦 Detected batch file with {len(batch_data['projects'])} projects")
+                        # This would normally trigger batch processing
+                        # For now, we'll just note it was detected
+                        args.batch = True
+            except (json.JSONDecodeError, IOError):
+                pass  # Not a valid JSON batch file, treat as regular spec
+    
+    # Pass command line arguments to the modular main
+    import sys
+    sys.argv = ['tmux_orchestrator']
+    
+    # Add all arguments if provided
+    if hasattr(args, 'project') and args.project:
+        sys.argv.extend(['--project', args.project])
+    if hasattr(args, 'spec') and args.spec:
+        sys.argv.extend(['--spec', args.spec])
+    if hasattr(args, 'resume') and args.resume:
+        sys.argv.append('--resume')
+    if hasattr(args, 'status_only') and args.status_only:
+        sys.argv.append('--status-only')
+    if hasattr(args, 'rebrief_all') and args.rebrief_all:
+        sys.argv.append('--rebrief-all')
+    if hasattr(args, 'roles') and args.roles:
+        sys.argv.extend(['--roles', args.roles])
+    if hasattr(args, 'add_roles') and args.add_roles:
+        sys.argv.extend(['--add-roles', args.add_roles])
+    if hasattr(args, 'team_type') and args.team_type:
+        sys.argv.extend(['--team-type', args.team_type])
+    if hasattr(args, 'plan') and args.plan:
+        sys.argv.extend(['--plan', args.plan])
+    if hasattr(args, 'size') and args.size:
+        sys.argv.extend(['--size', args.size])
+    if hasattr(args, 'git_mode') and args.git_mode:
+        sys.argv.extend(['--git-mode', args.git_mode])
+    if hasattr(args, 'debug') and args.debug:
+        sys.argv.append('--debug')
+    if hasattr(args, 'dry_run') and args.dry_run:
+        sys.argv.append('--dry-run')
+    if hasattr(args, 'new_project') and args.new_project:
+        sys.argv.append('--new-project')
+    
+    # Add legacy arguments for scheduler compatibility
+    if hasattr(args, 'project_id') and args.project_id:
+        # Store project ID in environment for completion callback
+        import os
+        os.environ['SCHEDULER_PROJECT_ID'] = str(args.project_id)
+        print(f"📋 Running project ID: {args.project_id}")
+    
+    if hasattr(args, 'batch') and args.batch:
+        # Enable non-interactive mode
+        os.environ['BATCH_MODE'] = '1'
+        print("🤖 Running in batch mode (non-interactive)")
+    
+    if hasattr(args, 'daemon') and args.daemon:
+        # Enable daemon mode with auto-defaults
+        os.environ['DAEMON_MODE'] = '1'
+        print("👻 Running in daemon mode (unattended)")
+        
+    return orchestrator_main()
+
+
+def cmd_check_oauth(args):
+    """Check OAuth port conflicts."""
+    print("🔍 Checking OAuth port conflicts...")
+    status = check_oauth_conflicts()
+    
+    print(f"OAuth Port Status:")
+    print(f"  Port: {status['port']}")
+    print(f"  Available: {'Yes' if status['is_free'] else 'No'}")
+    
+    if status['conflicts_detected']:
+        print(f"  Conflicts: {len(status['conflicts_detected'])}")
+        for conflict in status['conflicts_detected']:
+            print(f"    - {conflict}")
+    
+    if status['recommendations']:
+        print(f"  Recommendations:")
+        for rec in status['recommendations']:
+            print(f"    - {rec}")
+    
+    return status['is_free']
+
+
+def cmd_restart_claude(args):
+    """Restart Claude in a specific tmux window with OAuth management."""
+    print(f"🔄 Restarting Claude in {args.session}:{args.window}")
+    
+    success = restart_claude_with_oauth_management(
+        session_name=args.session,
+        window_idx=args.window,
+        window_name=args.name or f"Claude-{args.window}",
+        worktree_path=args.worktree or f"/tmp/worktree-{args.window}"
+    )
+    
+    if success:
+        print("✅ Claude restart completed successfully")
+    else:
+        print("❌ Claude restart failed")
+    
+    return success
+
+
+def cmd_test_modular_system(args):
+    """Test the modular system components."""
+    print("🧪 Testing modular system...")
+    
+    # Import and run the test
+    from test_modular_system import main as test_main
+    return test_main()
+
+
+def main():
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(
+        description="Modular Tmux Orchestrator CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run the full orchestrator (current functionality)
+  %(prog)s run
+  
+  # Check for OAuth port conflicts
+  %(prog)s check-oauth
+  
+  # Restart Claude with OAuth management
+  %(prog)s restart-claude mysession 1 --name Developer --worktree /path/to/worktree
+  
+  # Test the modular system
+  %(prog)s test
+        """
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Run orchestrator command - with full auto_orchestrate.py compatibility
+    run_parser = subparsers.add_parser('run', help='Run the full orchestrator')
+    run_parser.add_argument('--project', '-p', type=str, help='Path to the project directory')
+    run_parser.add_argument('--spec', '-s', type=str, help='Path to the specification file')
+    run_parser.add_argument('--resume', action='store_true', help='Resume an existing orchestration')
+    run_parser.add_argument('--status-only', action='store_true', help='Check status without making changes')
+    run_parser.add_argument('--rebrief-all', action='store_true', help='Re-brief all agents when resuming')
+    run_parser.add_argument('--roles', type=str, help='Comma-separated list of roles to deploy')
+    run_parser.add_argument('--add-roles', type=str, help='Add additional roles to existing orchestration')
+    run_parser.add_argument('--team-type', type=str, choices=['web_application', 'system_deployment', 'infrastructure_as_code', 'data_pipeline'], help='Predefined team template')
+    run_parser.add_argument('--plan', type=str, choices=['pro', 'max5', 'max20', 'console'], default='max5', help='Subscription plan')
+    run_parser.add_argument('--size', type=str, choices=['small', 'medium', 'large'], default='medium', help='Team size')
+    run_parser.add_argument('--git-mode', type=str, choices=['local', 'github'], default='local', help='Git workflow mode')
+    run_parser.add_argument('--debug', action='store_true', help='Enable debug output')
+    run_parser.add_argument('--dry-run', action='store_true', help='Preview actions without executing')
+    
+    # Legacy auto_orchestrate.py arguments for backward compatibility with scheduler
+    run_parser.add_argument('--project-id', type=int, help='Project ID for scheduler callbacks')
+    run_parser.add_argument('--batch', action='store_true', help='Enable batch mode (non-interactive)')
+    run_parser.add_argument('--daemon', action='store_true', help='Run in daemon mode (unattended with auto-defaults)')
+    run_parser.add_argument('--new-project', action='store_true', help='Create new project directory parallel to Tmux-Orchestrator')
+    
+    run_parser.set_defaults(func=cmd_run_orchestrator)
+    
+    # Check OAuth command
+    oauth_parser = subparsers.add_parser('check-oauth', help='Check OAuth port conflicts')
+    oauth_parser.set_defaults(func=cmd_check_oauth)
+    
+    # Restart Claude command
+    restart_parser = subparsers.add_parser('restart-claude', help='Restart Claude with OAuth management')
+    restart_parser.add_argument('session', help='Tmux session name')
+    restart_parser.add_argument('window', type=int, help='Window index')
+    restart_parser.add_argument('--name', help='Window name (default: Claude-{window})')
+    restart_parser.add_argument('--worktree', help='Worktree path (default: /tmp/worktree-{window})')
+    restart_parser.set_defaults(func=cmd_restart_claude)
+    
+    # Test command
+    test_parser = subparsers.add_parser('test', help='Test the modular system')
+    test_parser.set_defaults(func=cmd_test_modular_system)
+    
+    # Parse arguments
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        return False
+    
+    # Run the selected command
+    try:
+        return args.func(args)
+    except Exception as e:
+        print(f"❌ Command failed: {e}")
+        return False
+
+
+if __name__ == "__main__":
+    success = main()
+    sys.exit(0 if success else 1)

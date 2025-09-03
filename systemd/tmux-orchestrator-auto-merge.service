@@ -1,0 +1,25 @@
+[Unit]
+Description=Tmux Orchestrator Auto-Merge Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/clauderun/Tmux-Orchestrator
+ExecStart=/usr/bin/python3 /home/clauderun/Tmux-Orchestrator/auto_merge_runner.py
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment=TMUX_ORCHESTRATOR_HOME=/home/clauderun/Tmux-Orchestrator
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/clauderun/.local/bin
+
+# Resource limits
+MemoryMax=1G
+CPUQuota=70%
+TasksMax=10
+
+# Timeout for the service (10 minutes max)
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

@@ -46,6 +46,53 @@ def format_timestamp(timestamp):
             return str(timestamp)
     return "Never"
 
+def reconcile_missing_sessions(cursor, conn, projects, active_sessions):
+    """Reconcile projects in PROCESSING state with missing tmux sessions - mark as FAILED."""
+    reconciled = []
+    
+    # Check if reconciliation is disabled
+    if os.getenv('DISABLE_RECONCILIATION', 'false').lower() == 'true':
+        return reconciled
+    
+    for proj in projects:
+        proj_id = proj[0]      # id
+        spec_path = proj[1]    # spec_path
+        status = proj[2]       # status 
+        main_session = proj[4] # main_session
+        session_name = proj[5] # session_name
+        
+        # Check if project is PROCESSING and session is missing
+        if status in ('PROCESSING', 'processing'):
+            session_to_check = session_name or main_session
+            if session_to_check and session_to_check not in active_sessions:
+                # Double-check with direct tmux command to avoid false positives
+                import subprocess
+                try:
+                    result = subprocess.run(['tmux', 'has-session', '-t', session_to_check], 
+                                          capture_output=True, text=True)
+                    if result.returncode != 0:
+                        # Session truly doesn't exist
+                        print(f"⚠️  Detected missing session for project ID {proj_id}: {Path(spec_path).name}")
+                        print(f"    Session checked: {session_to_check}")
+                        
+                        # Update DB to FAILED 
+                        cursor.execute(
+                            "UPDATE project_queue SET status = 'FAILED', completed_at = ?, error_message = 'Session disappeared - auto-recovered' WHERE id = ?",
+                            (datetime.now().timestamp(), proj_id)
+                        )
+                        reconciled.append(proj_id)
+                    else:
+                        # False positive - session exists but not in active_sessions list
+                        print(f"ℹ️  Session '{session_to_check}' exists but was missing from active_sessions cache")
+                except Exception as e:
+                    print(f"❌ Error verifying session {session_to_check}: {e}")
+    
+    if reconciled:
+        conn.commit()
+        print(f"✅ Marked {len(reconciled)} missing sessions as FAILED")
+    
+    return reconciled
+
 def reconcile_orphaned_sessions(cursor, conn, projects, active_sessions):
     """Reconcile tmux sessions that exist but aren't tracked in project_queue"""
     reconciled = []
@@ -244,6 +291,47 @@ Examples:
         )
     """)
     
+    # Handle filter options
+    if len(sys.argv) > 1 and sys.argv[1] == '--merged':
+        # Show only merged projects
+        cursor.execute("""
+            SELECT id, spec_path, status, orchestrator_session, main_session, session_name,
+                   enqueued_at, started_at, completed_at, error_message, fresh_start, priority,
+                   merged_status, merged_at
+            FROM project_queue 
+            WHERE merged_status = 'merged'
+            ORDER BY merged_at DESC
+        """)
+        projects = cursor.fetchall()
+        print("🔀 MERGED PROJECTS:")
+        for proj in projects:
+            project_id = proj[0]
+            spec_path = proj[1]
+            merged_at = proj[13]
+            project_name = Path(spec_path).stem.replace('_', ' ').title()
+            print(f"  ✅ [{project_id:2d}] {project_name} - Merged: {format_timestamp(merged_at)}")
+        return
+    
+    if len(sys.argv) > 1 and sys.argv[1] == '--pending-merge':
+        # Show only pending merge projects
+        cursor.execute("""
+            SELECT id, spec_path, status, orchestrator_session, main_session, session_name,
+                   enqueued_at, started_at, completed_at, error_message, fresh_start, priority,
+                   merged_status, merged_at
+            FROM project_queue 
+            WHERE merged_status = 'pending_merge'
+            ORDER BY completed_at ASC
+        """)
+        projects = cursor.fetchall()
+        print("⏳ PROJECTS PENDING MERGE:")
+        for proj in projects:
+            project_id = proj[0]
+            spec_path = proj[1]
+            completed_at = proj[8]
+            project_name = Path(spec_path).stem.replace('_', ' ').title()
+            print(f"  ⏳ [{project_id:2d}] {project_name} - Completed: {format_timestamp(completed_at)}")
+        return
+    
     # Handle cleanup-stale (no ID needed)
     if len(sys.argv) > 1 and sys.argv[1] == '--cleanup-stale':
         from session_state import SessionStateManager
@@ -369,7 +457,8 @@ Examples:
     # Get all projects
     cursor.execute("""
         SELECT id, spec_path, status, orchestrator_session, main_session, session_name,
-               enqueued_at, started_at, completed_at, error_message, fresh_start, priority
+               enqueued_at, started_at, completed_at, error_message, fresh_start, priority,
+               merged_status, merged_at
         FROM project_queue 
         ORDER BY priority DESC, enqueued_at ASC
     """)
@@ -379,13 +468,20 @@ Examples:
     active_sessions = get_active_tmux_sessions()
     
     # Reconcile orphaned sessions (tmux sessions not in queue)
-    reconciled_sessions = reconcile_orphaned_sessions(cursor, conn, projects, active_sessions)
+    # Reconcile orphaned sessions (sessions exist but not tracked)
+    reconciled_orphaned = reconcile_orphaned_sessions(cursor, conn, projects, active_sessions)
+    
+    # Reconcile missing sessions (projects PROCESSING but sessions gone)
+    reconciled_missing = reconcile_missing_sessions(cursor, conn, projects, active_sessions)
+    
+    reconciled_sessions = reconciled_orphaned + reconciled_missing
     
     # If we reconciled any sessions, re-fetch projects to include them
     if reconciled_sessions:
         cursor.execute("""
             SELECT id, spec_path, status, orchestrator_session, main_session, session_name,
-                   enqueued_at, started_at, completed_at, error_message, fresh_start, priority
+                   enqueued_at, started_at, completed_at, error_message, fresh_start, priority,
+                   merged_status, merged_at
             FROM project_queue 
             ORDER BY priority DESC, enqueued_at ASC
         """)
@@ -439,7 +535,13 @@ Examples:
     print("-" * 80)
     
     for proj in projects:
-        project_id, spec_path, status, orch_session, main_session, session_name, enqueued_at, started_at, completed_at, error_message, fresh_start, priority = proj
+        # Handle both old and new schema (with merged_status fields)
+        if len(proj) >= 14:
+            project_id, spec_path, status, orch_session, main_session, session_name, enqueued_at, started_at, completed_at, error_message, fresh_start, priority, merged_status, merged_at = proj
+        else:
+            project_id, spec_path, status, orch_session, main_session, session_name, enqueued_at, started_at, completed_at, error_message, fresh_start, priority = proj
+            merged_status = None
+            merged_at = None
         
         # Extract project name
         project_name = Path(spec_path).stem.replace('_', ' ').title()
@@ -456,7 +558,16 @@ Examples:
         fresh_indicator = ' 🆕' if fresh_start else ''
         priority_indicator = f' (P{priority})' if priority != 0 else ''
         
-        print(f"{status_emoji} [{project_id:2d}] {project_name}{fresh_indicator}{priority_indicator}")
+        # Add merge status indicator
+        merge_indicator = ''
+        if merged_status == 'merged':
+            merge_indicator = ' 🔀[MERGED]'
+        elif merged_status == 'pending_merge':
+            merge_indicator = ' ⏳[PENDING MERGE]'
+        elif merged_status == 'merge_failed':
+            merge_indicator = ' ❌[MERGE FAILED]'
+        
+        print(f"{status_emoji} [{project_id:2d}] {project_name}{fresh_indicator}{priority_indicator}{merge_indicator}")
         print(f"     Status: {status.upper()}")
         print(f"     Spec: {spec_path}")
         print(f"     Enqueued: {format_timestamp(enqueued_at)}")
@@ -465,6 +576,9 @@ Examples:
             print(f"     Started: {format_timestamp(started_at)}")
         if completed_at:
             print(f"     Completed: {format_timestamp(completed_at)}")
+        
+        if merged_at:
+            print(f"     Merged: {format_timestamp(merged_at)}")
         if main_session:
             session_status = "🟢 ACTIVE" if main_session in active_sessions else "🔴 DEAD"
             print(f"     Session: {main_session} ({session_status})")

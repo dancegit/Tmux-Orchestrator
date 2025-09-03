@@ -1,8 +1,8 @@
-# Auto-Orchestrate Documentation
+# Auto-Orchestrate Documentation (Modular System v2.0)
 
 ## Overview
 
-The `auto_orchestrate.py` script provides fully automated setup of a Tmux Orchestrator environment from a specification file. It analyzes your project requirements using Claude and automatically configures a complete team of AI agents to implement your specification.
+The `tmux_orchestrator_cli.py run` command provides fully automated setup of a Tmux Orchestrator environment from a specification file. It analyzes your project requirements using Claude and automatically configures a complete team of AI agents to implement your specification.
 
 ## Features
 
@@ -33,7 +33,7 @@ git clone https://github.com/yourusername/Tmux-Orchestrator.git
 cd Tmux-Orchestrator
 
 # Run directly - UV handles dependencies automatically!
-./auto_orchestrate.py --help
+./tmux_orchestrator_cli.py run --help
 ```
 
 **Important**: Make sure you're using Claude Code (not the old Claude CLI). The script uses `/usr/bin/claude` to avoid conflicts with any Python packages named 'claude'.
@@ -53,7 +53,7 @@ On first run, the script will:
 ### Basic Command
 
 ```bash
-./auto_orchestrate.py \
+./tmux_orchestrator_cli.py run \
   --project /path/to/your/project \
   --spec /path/to/specification.md
 ```
@@ -62,26 +62,26 @@ On first run, the script will:
 
 ```bash
 # Manually specify project size
-./auto_orchestrate.py \
+./tmux_orchestrator_cli.py run \
   --project /path/to/project \
   --spec spec.md \
   --size large
 
 # Add specific roles
-./auto_orchestrate.py \
+./tmux_orchestrator_cli.py run \
   --project /path/to/project \
   --spec spec.md \
   --roles researcher \
   --roles documentation_writer
 
 # Force overwrite existing session/worktrees
-./auto_orchestrate.py \
+./tmux_orchestrator_cli.py run \
   --project /path/to/project \
   --spec spec.md \
   --force
 
 # Specify subscription plan (affects team size)
-./auto_orchestrate.py \
+./tmux_orchestrator_cli.py run \
   --project /path/to/project \
   --spec spec.md \
   --plan max5  # Options: pro, max5, max20, console
@@ -90,7 +90,7 @@ On first run, the script will:
 ### Example
 
 ```bash
-./auto_orchestrate.py \
+./tmux_orchestrator_cli.py run \
   --project /home/user/myapp \
   --spec /home/user/myapp/docs/new_feature_spec.md
 
@@ -340,13 +340,13 @@ The auto-orchestrate script now supports intelligent resume of existing orchestr
 
 ```bash
 # Basic resume - restarts dead agents and re-briefs all
-./auto_orchestrate.py --project /path/to/project --resume
+./tmux_orchestrator_cli.py run --project /path/to/project --resume
 
 # Check status only without making changes
-./auto_orchestrate.py --project /path/to/project --resume --status-only
+./tmux_orchestrator_cli.py run --project /path/to/project --resume --status-only
 
 # Resume with forced re-briefing of all agents
-./auto_orchestrate.py --project /path/to/project --resume --rebrief-all
+./tmux_orchestrator_cli.py run --project /path/to/project --resume --rebrief-all
 ```
 
 ### How Resume Works
@@ -378,7 +378,7 @@ The auto-orchestrate script now supports intelligent resume of existing orchestr
 #### Scenario 1: Credit Exhaustion
 ```bash
 # Check status when agents are exhausted
-./auto_orchestrate.py --project /path/to/project --resume --status-only
+./tmux_orchestrator_cli.py run --project /path/to/project --resume --status-only
 
 # Output shows exhausted agents with reset times
 # System will suggest using credit_monitor.py for auto-resume
@@ -387,7 +387,7 @@ The auto-orchestrate script now supports intelligent resume of existing orchestr
 #### Scenario 2: Terminal Crash
 ```bash
 # Resume after terminal/system crash
-./auto_orchestrate.py --project /path/to/project --resume
+./tmux_orchestrator_cli.py run --project /path/to/project --resume
 
 # Choose option 3 (Both) to restart dead agents and re-brief all
 ```
@@ -395,7 +395,7 @@ The auto-orchestrate script now supports intelligent resume of existing orchestr
 #### Scenario 3: Context Loss
 ```bash
 # When agents have used /compact and lost context
-./auto_orchestrate.py --project /path/to/project --resume --rebrief-all
+./tmux_orchestrator_cli.py run --project /path/to/project --resume --rebrief-all
 
 # All agents receive context restoration messages
 ```
@@ -517,7 +517,7 @@ The script uses UV for automatic dependency management. If issues occur:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Then run the script
-./auto_orchestrate.py --help
+./tmux_orchestrator_cli.py run --help
 ```
 
 ## Token Usage and Plan Optimization

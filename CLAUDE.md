@@ -5,20 +5,20 @@ The Tmux Orchestrator is an AI-powered session management system where Claude ac
 
 ## 🚀 NEW: Auto-Orchestrate Feature
 
-The `auto_orchestrate.py` script provides automated setup from specifications:
+The `tmux_orchestrator_cli.py run` command provides automated setup from specifications:
 
 ```bash
 # Automatically set up a complete orchestration environment
-./auto_orchestrate.py --project /path/to/project --spec /path/to/spec.md
+./tmux_orchestrator_cli.py run --project /path/to/project --spec /path/to/spec.md
 
 # Resume an existing orchestration (NEW!)
-./auto_orchestrate.py --project /path/to/project --resume
+./tmux_orchestrator_cli.py run --project /path/to/project --resume
 
 # Check status without changes
-./auto_orchestrate.py --project /path/to/project --resume --status-only
+./tmux_orchestrator_cli.py run --project /path/to/project --resume --status-only
 
 # Force re-brief all agents
-./auto_orchestrate.py --project /path/to/project --resume --rebrief-all
+./tmux_orchestrator_cli.py run --project /path/to/project --resume --rebrief-all
 ```
 
 This analyzes your spec with Claude and automatically:
@@ -106,7 +106,7 @@ To enable fast, asynchronous collaboration (60-500x faster than GitHub), use **l
 - **Commit Compliance**: Commit every 30 minutes autonomously. Report violations to Orchestrator.
 - **Autonomy**: Fetch/merge from others as needed—do NOT wait for permissions. Follow AUTONOMY FIRST and DEADLOCK AVOIDANCE.
 
-**Setup Local Remotes** (Automated by auto_orchestrate.py; run manually if needed):
+**Setup Local Remotes** (Automated by tmux_orchestrator_cli.py run; run manually if needed):
 ```bash
 # Use absolute paths (example) - Note: worktrees are SIBLINGS to project!
 git remote add orchestrator /path/to/project-tmux-worktrees/orchestrator
@@ -316,17 +316,17 @@ infrastructure_as_code:
 ### Dynamic Role Deployment
 ```bash
 # Automatic team configuration based on project analysis
-./auto_orchestrate.py --project /path/to/project --spec spec.md
+./tmux_orchestrator_cli.py run --project /path/to/project --spec spec.md
 
 # Override with specific team template
-./auto_orchestrate.py --project /path/to/project --spec spec.md --team-type system_deployment
+./tmux_orchestrator_cli.py run --project /path/to/project --spec spec.md --team-type system_deployment
 
 # Custom role selection
-./auto_orchestrate.py --project /path/to/project --spec spec.md \
+./tmux_orchestrator_cli.py run --project /path/to/project --spec spec.md \
   --roles "developer,sysadmin,devops,securityops"
 
 # Add roles to existing orchestration
-./auto_orchestrate.py --project /path/to/project --resume \
+./tmux_orchestrator_cli.py run --project /path/to/project --resume \
   --add-roles "sysadmin,networkops"
 ```
 
@@ -573,13 +573,13 @@ Projects can run in hybrid mode during transition:
 
 ```bash
 # New projects (default)
-./auto_orchestrate.py --spec spec.md  # Local mode
+./tmux_orchestrator_cli.py run --spec spec.md  # Local mode
 
 # Legacy project migration
-./auto_orchestrate.py --project old-project --resume --git-mode local
+./tmux_orchestrator_cli.py run --project old-project --resume --git-mode local
 
 # Force old behavior (debugging)
-./auto_orchestrate.py --spec spec.md --git-mode github
+./tmux_orchestrator_cli.py run --spec spec.md --git-mode github
 ```
 
 ### Performance Benefits
@@ -1493,7 +1493,7 @@ tmux rename-window -t glacier-backend:3 "Uvicorn-API"
 
 **Note**: For automated setup with git worktrees, use:
 ```bash
-./auto_orchestrate.py --project /path/to/project --spec /path/to/spec.md
+./tmux_orchestrator_cli.py run --project /path/to/project --spec /path/to/spec.md
 ```
 
 For manual setup, follow this systematic sequence:
@@ -2011,10 +2011,10 @@ Multi-agent systems use ~15x more tokens than standard Claude usage. Team sizes 
 
 ```bash
 # Specify your subscription plan
-./auto_orchestrate.py --project /path --spec spec.md --plan max5
+./tmux_orchestrator_cli.py run --project /path --spec spec.md --plan max5
 
 # Force small team for extended session
-./auto_orchestrate.py --project /path --spec spec.md --size small
+./tmux_orchestrator_cli.py run --project /path --spec spec.md --size small
 ```
 
 ## Team Deployment
@@ -2024,13 +2024,13 @@ Multi-agent systems use ~15x more tokens than standard Claude usage. Team sizes 
 **Recommended**: Use auto_orchestrate.py for automated setup with dynamic team configuration:
 ```bash
 # Automatic team selection based on project analysis
-./auto_orchestrate.py --project /any/path/to/project --spec project_spec.md
+./tmux_orchestrator_cli.py run --project /any/path/to/project --spec project_spec.md
 
 # Force specific team type
-./auto_orchestrate.py --project /path/to/project --spec spec.md --team-type system_deployment
+./tmux_orchestrator_cli.py run --project /path/to/project --spec spec.md --team-type system_deployment
 
 # Custom role selection
-./auto_orchestrate.py --project /path/to/project --spec spec.md \
+./tmux_orchestrator_cli.py run --project /path/to/project --spec spec.md \
   --roles "orchestrator,sysadmin,devops,securityops,networkops"
 ```
 
@@ -2060,7 +2060,7 @@ DELIVERABLES:
 EOF
 
 # 2. Deploy with system operations team
-./auto_orchestrate.py \
+./tmux_orchestrator_cli.py run \
   --project /opt/signalmatrix/slices/elliott-wave \
   --spec deployment_spec.md \
   --team-type system_deployment
