@@ -9,52 +9,63 @@
 - **Persist** - Work continues even when you close your laptop
 - **Scale** - Run multiple teams working on different projects simultaneously
 
-## 🚀 Latest Updates (v3.7.2) - Git Workflow Automation & Session Validation
+## 🚀 Latest Updates (v3.8.0) - Modular Scheduler & Enhanced Validation
 
-### 🔧 Major Fixes & Improvements
+### 🆕 Major Features & Improvements
 
-#### ✅ Git Commit-Tag-Push Automation (NEW!)
-**Automated git workflow with semantic versioning and one-command deployment**
+#### ✅ Modular Scheduler Architecture (NEW!)
+**Complete scheduler rewrite with modular, testable components**
 
-- **`git-ctp` Command**: Simple wrapper for commit-tag-push workflow
-- **Automatic Versioning**: Detects version bump type from commit messages (feat→minor, fix→patch, breaking→major)
+- **Clean Separation**: Scheduler split into focused modules (batch processor, queue manager, recovery manager)
+- **Event-Driven System**: New EventDispatcher for decoupled component communication
+- **Enhanced Recovery**: Sophisticated recovery manager handles stuck projects, phantom sessions
+- **State Synchronization**: Wrapper modules for seamless integration with existing system
+- **Dependency Checking**: Smart dependency resolution between projects and agents
+- **100% Test Coverage**: Comprehensive test suite for all scheduler modules
+
+#### ✅ Advanced Validation System (NEW!)
+**Spec-aware validation prevents empty or incomplete projects**
+
+- **Multi-Layer Validation**: Basic checks + spec parsing + code verification + AI analysis
+- **SpecParser Module**: Extracts requirements, user stories, and API endpoints from specs
+- **CodeVerifier**: Maps implementation to specification requirements
+- **TestVerifier**: Ensures test coverage matches user stories
+- **AI Validator**: Optional Claude/Grok-powered semantic validation
+- **Scoring System**: Projects scored on implementation (40%), tests (30%), AI assessment (30%)
+- **Auto-Merge Protection**: Projects below 70% validation score blocked from merge
+
+#### ✅ Queue Monitoring & Error Recovery (NEW!)
+**Robust monitoring system for project queue processing**
+
+- **Real-Time Monitoring**: Live queue status with error detection
+- **Automatic Recovery**: Failed projects analyzed and retried with enhanced specs
+- **Systemd Integration**: Production-ready service configurations
+- **Message Queue System**: Improved inter-agent communication via hooks
+- **Completion Detection**: Multiple layers of completion monitoring
+- **Project Lifecycle Tracking**: Complete audit trail from queue to completion
+
+#### ✅ OAuth Manager Improvements
+**Enhanced reliability for Claude initialization**
+
+- **Port Conflict Resolution**: Better handling of OAuth port conflicts
+- **Timeout Management**: Extended timeouts for slow systems
+- **Retry Logic**: Automatic retry on initialization failures
+- **Error Recovery**: Graceful fallback mechanisms
+
+#### ✅ Git Workflow Automation
+**Streamlined git operations with semantic versioning**
+
+- **`git-ctp` Command**: One-command commit-tag-push workflow
+- **Automatic Versioning**: Detects version bump type from commit messages
 - **GitCommitManager**: Full-featured Python module for git automation
-- **Agent Integration**: All orchestrated agents receive briefing about the feature
-- **Co-Author Attribution**: Automatically adds Tmux Orchestrator as co-author
+- **Agent Integration**: All agents receive workflow briefings
+- **Co-Author Attribution**: Automatic Tmux Orchestrator attribution
 
-**Usage**: `./git-ctp "feat: add new feature"` → Commits, tags v1.1.0, and pushes
-
-#### ✅ Scheduler Session Validation (NEW!)
-**Prevents non-project sessions from receiving orchestrator messages**
-
-- **Flexible Pattern Validation**: Accepts any session with hyphens (project-name, project-impl-uuid, etc.)
-- **Smart Filtering**: Rejects numeric sessions ("0", "1"), common shells ("bash", "main"), and very short names
-- **Automatic Cleanup**: Removes invalid tasks targeting regular tmux sessions
-- **Protection**: Personal work sessions are protected from orchestrator messages
-
-#### ✅ Agent Path Resolution Fixes
-**Fixed agent briefing paths for worktree environments**
-
-- **Absolute Path References**: Orchestrator CLAUDE.md now uses absolute paths
-- **Worktree-Aware Commands**: Initial commands check for shared directories first
-- **Fallback Support**: Gracefully handles both worktree and non-worktree environments
-
-#### ✅ Standardized Tmux Communication System
-**Complete overhaul of agent messaging to eliminate garbled output and ensure reliable delivery**
-
-- **Enhanced MCP Wrapper Removal**: Comprehensive pattern matching for all MCP contamination variants
-- **TmuxMessenger Class**: Unified messaging system replacing fragmented subprocess calls
-- **Shell-Level Prevention**: Enhanced `send-claude-message.sh` with multi-layer cleaning
-- **Guaranteed Enter Keys**: Reliable message delivery through existing script mechanisms
-- **`scm` Command**: Standardized wrapper with comprehensive contamination removal
-
-#### ✅ Project Recovery & Scheduling Reliability  
-**Fixed critical issues preventing proper orchestrator operation**
-
-- **Project Recovery**: Resolved false failure detection and session name repair
-- **Rogue Scheduler Cleanup**: Removed conflicting scheduler starts from scripts
-- **Systemd Integration**: Enhanced dual-service architecture for production reliability
-- **PATH Resolution**: Fixed UV command access issues in systemd services
+#### ✅ Previous Features (v3.7.2)
+- **Session Validation**: Smart filtering of non-project sessions
+- **Agent Path Resolution**: Fixed worktree path issues
+- **Standardized Communication**: MCP wrapper removal and reliable delivery
+- **Project Recovery**: Enhanced failure detection and recovery
 
 ### 🛠️ System Requirements & Essential Services
 
@@ -155,7 +166,16 @@ CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
 ./schedule_with_note.sh 1 "Test schedule for $CURRENT_WINDOW" "$CURRENT_WINDOW"
 ```
 
-### 🔧 Critical Bug Fixes (v3.6.0)
+### 🔧 Critical Bug Fixes & Improvements (v3.8.0)
+
+#### Latest Fixes (v3.8.0)
+- **Scheduler Modularization**: Complete rewrite resolving race conditions and lock management issues
+- **Validation System**: Prevents empty projects from being marked complete
+- **Queue Monitor**: Enhanced error detection and automatic recovery
+- **OAuth Timing**: Fixed port conflicts and timeout issues
+- **Recovery System**: Improved handling of stuck and phantom projects
+
+### Previous Critical Bug Fixes (v3.6.0)
 
 #### Orchestrator Self-Scheduling (RESOLVED)
 - **Issue**: Orchestrators weren't receiving scheduled check-ins, causing project stalls
@@ -178,7 +198,15 @@ CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
 - **Cleanup System**: Removed 49+ unused/duplicate files
 - **Essential File Restoration**: Restored `tmux_session_manager.py` (actively used)
 
-### Previous Release (v3.5.2)
+### Previous Releases
+
+#### v3.7.2 - Git Workflow & Communication
+- **Git Commit-Tag-Push**: Automated semantic versioning
+- **Session Validation**: Smart session filtering  
+- **Standardized Messaging**: MCP wrapper removal
+- **Path Resolution**: Fixed worktree issues
+
+#### v3.5.2 - Scheduling & MCP
 - **Orchestrator Self-Scheduling** - Added `--enable-orchestrator-scheduling` flag 
 - **MCP Global Initialization** - Added `--global-mcp-init` flag for system MCP configs
 - **Auto-Orchestrate Reliability** - Fixed critical deployment failures
@@ -214,19 +242,25 @@ CURRENT_WINDOW=$(tmux display-message -p "#{session_name}:#{window_index}")
 
 ## 🏗️ Architecture
 
-### 🆕 Modular Architecture v2.0
+### 🆕 Modular Architecture v2.1
 
-The Tmux Orchestrator has been completely rewritten with a modular architecture for better maintainability, testability, and extensibility:
+The Tmux Orchestrator features a fully modular architecture with enhanced scheduler components and validation systems:
 
 ```
 tmux_orchestrator/                    # Main package
 ├── core/                            # Core orchestration logic
 │   ├── orchestrator.py             # Main orchestrator with dependency injection
 │   ├── session_manager.py          # Session lifecycle management
-│   └── state_manager.py            # Global state coordination
+│   ├── state_manager.py            # Global state coordination
+│   ├── validation.py               # Basic project validation (NEW)
+│   ├── spec_parser.py              # Specification requirement extraction (NEW)
+│   ├── code_verifier.py            # Code implementation verification (NEW)
+│   ├── test_verifier.py            # Test coverage verification (NEW)
+│   └── ai_validator.py             # AI-powered semantic validation (NEW)
 ├── claude/                          # Claude initialization
 │   ├── initialization.py           # Claude startup with MCP
-│   └── oauth_manager.py            # Critical OAuth timing (45-60s)
+│   ├── oauth_manager.py            # Enhanced OAuth with retry logic (v2.1)
+│   └── spec_analyzer.py            # Specification analysis
 ├── agents/                          # Agent management
 │   ├── agent_factory.py            # Dynamic agent creation
 │   └── briefing_system.py          # Role-specific briefings
@@ -245,6 +279,19 @@ tmux_orchestrator/                    # Main package
 │   └── config_loader.py           # Configuration management
 └── cli/                            # Command-line interface
     └── enhanced_cli.py             # Rich CLI with progress tracking
+
+scheduler_modules/                    # Modular scheduler components (NEW)
+├── batch_processor.py               # Batch project processing
+├── queue_manager.py                 # Enhanced queue management
+├── recovery_manager.py              # Stuck/phantom project recovery
+├── event_dispatcher.py              # Event-driven communication
+├── dependency_checker.py            # Project dependency resolution
+├── session_monitor.py               # Session health monitoring
+├── process_manager_wrapper.py       # Process lifecycle management
+├── state_synchronizer_wrapper.py    # State consistency management
+├── core_scheduler.py                # Core scheduling logic
+├── config.py                        # Scheduler configuration
+└── utils.py                        # Scheduler utilities
 ```
 
 ### Key Architectural Improvements
