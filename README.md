@@ -1085,6 +1085,7 @@ The `auto_orchestrate.py` script provides fully automated setup:
 - **Git Worktree Isolation**: Each agent works in isolated git worktree to prevent conflicts
 - **Resume Capability**: Intelligently resume interrupted orchestrations
 - **Credit Management**: Automatic handling of Claude Code usage limits with pause/resume
+- **Spec Validation**: Comprehensive validation ensures implementation matches specification
 
 #### 🆕 New Project Creation (`--new-project` flag)
 The `--new-project` flag enables creating new git repositories directly from specification files:
@@ -1232,6 +1233,73 @@ When completion is detected, the system triggers coordinated cleanup:
 3. **Cleanup Available**: Manual cleanup with `--force` flag if desired
 4. **Metrics Collection**: Project duration, success rates, and failure reasons logged
 
+### 🔍 Spec-Aware Validation System
+
+**Comprehensive validation ensuring implementations match specifications**:
+
+The Tmux Orchestrator includes a sophisticated validation system that prevents empty or incomplete projects from being marked as complete. This addresses issues where projects were being merged without actual implementation.
+
+#### Validation Components
+
+1. **Basic Validation** (`tmux_orchestrator/core/validation.py`)
+   - Checks for source files in `src/` directory
+   - Requires minimum 3 meaningful git commits
+   - Verifies test files exist
+   - Confirms agent activity in logs
+
+2. **Spec-Aware Validation** (Advanced)
+   - **SpecParser**: Extracts user stories, acceptance criteria, and API endpoints from markdown specs
+   - **CodeVerifier**: Maps requirements to actual code implementation
+   - **TestVerifier**: Ensures tests validate the requirements
+   - **AIValidator**: Optional AI-powered semantic validation via Claude/Grok
+
+3. **Hybrid Validation**
+   - Combines programmatic checks with AI analysis
+   - Intelligent score weighting based on confidence
+   - Falls back to programmatic validation if AI unavailable
+
+#### How It Works
+
+When a project is marked as complete:
+1. Basic validation checks for file existence and commits
+2. Spec parser extracts requirements from the specification
+3. Code verifier confirms implementation matches requirements
+4. Test verifier ensures tests cover user stories
+5. Optional AI validation for semantic alignment
+6. Projects failing validation are marked as `failed` instead of `completed`
+
+#### Usage
+
+```bash
+# Enable AI validation
+export ENABLE_AI_VALIDATION=true
+
+# Validate a specific project
+python validate_with_ai.py --project-id 83
+
+# Re-process invalid projects
+python reprocess_invalid_projects.py --project-ids 83 84 --dry-run
+
+# Check validation scores
+sqlite3 task_queue.db "SELECT id, spec_path, validation_score FROM project_queue"
+```
+
+#### Validation Scoring
+
+Projects receive scores based on:
+- 40% Code implementation (APIs, user stories)
+- 30% Test quality and coverage
+- 30% AI semantic assessment (if enabled)
+
+Pass threshold: 70% (configurable)
+
+#### Auto-Merge Protection
+
+The `auto_merge_runner.py` validates projects before merging:
+- Projects with validation scores < 70% are not merged
+- Failed validations update merge_status to 'merge_failed'
+- Validation details stored in database for review
+
 ### Error Handling & Recovery
 
 **Multi-Level Safety Net**:
@@ -1242,6 +1310,7 @@ When completion is detected, the system triggers coordinated cleanup:
 - **Event Loops**: Prevented via event locks and processing state tracking
 - **Reboot Recovery**: `_recover_from_reboot` resets processing projects on startup
 - **Race Conditions**: Enhanced lock management prevents multiple scheduler instances
+- **Validation Failures**: Projects failing validation are auto-requeued with enhanced specs
 
 ### Key Benefits of This Lifecycle
 

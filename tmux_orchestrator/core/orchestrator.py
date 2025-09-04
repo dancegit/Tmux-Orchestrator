@@ -5,6 +5,7 @@ This module contains the main Orchestrator class that coordinates all subsystems
 It serves as the central hub for project lifecycle management and agent coordination.
 """
 
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from rich.console import Console
@@ -138,7 +139,41 @@ class Orchestrator:
                 console.print("[yellow]Setup cancelled by user.[/yellow]")
                 return False
             
-            # Step 5: Set up tmux session and orchestration
+            # Check if we're in batch mode - if so, add to queue instead of creating sessions
+            # UNLESS we have SCHEDULER_PROJECT_ID which means we're being run BY the scheduler
+            if os.environ.get('BATCH_MODE') == '1' and not os.environ.get('SCHEDULER_PROJECT_ID'):
+                # Batch mode without project_id - need to enqueue it
+                console.print("[cyan]Step 3:[/cyan] Adding project to queue (batch mode)...")
+                
+                # Use the modular BatchQueueManager instead of direct scheduler delegation
+                from ..claude.oauth_manager import BatchQueueManager
+                
+                # Initialize the batch queue manager
+                batch_manager = BatchQueueManager(self.tmux_orchestrator_path)
+                
+                # Enqueue the project using modular implementation
+                project_id = batch_manager.enqueue_project(
+                    spec_file=spec_file,
+                    project_path=project_path,
+                    batch_id=None,  # No batch_id in this context
+                    priority=5  # Default priority
+                )
+                
+                if project_id:
+                    console.print(f"[green]✓ Project added to queue with ID: {project_id}[/green]")
+                    console.print(f"[blue]Project will be processed by scheduler[/blue]")
+                    return True
+                else:
+                    console.print(f"[red]❌ Failed to add project to queue[/red]")
+                    return False
+            
+            # If we have SCHEDULER_PROJECT_ID, skip enqueue and continue with orchestration
+            scheduler_project_id = os.environ.get('SCHEDULER_PROJECT_ID')
+            if scheduler_project_id:
+                console.print(f"[cyan]Step 3:[/cyan] Processing project {scheduler_project_id} from scheduler queue")
+                console.print(f"[green]✓ Skipping enqueue - project already dequeued[/green]")
+            
+            # Step 5: Set up tmux session and orchestration (non-batch mode)
             console.print("[cyan]Step 3:[/cyan] Setting up tmux orchestration...")
             session_name = self._setup_orchestration_session(
                 implementation_spec, project_path, team_config
@@ -416,7 +451,7 @@ class Orchestrator:
         
         Uses the modular ImplementationSpec class to provide comprehensive spec parsing
         with Pydantic validation and structured data models. All specification parsing
-        is now handled by the modular system instead of legacy auto_orchestrate.py.
+        is now handled by the modular system instead of legacy the modular orchestrator.
         
         Args:
             spec_dict: Raw specification dictionary from Claude analysis
@@ -445,7 +480,7 @@ class Orchestrator:
         
         Uses the modular PlanDisplayManager to provide comprehensive plan visualization
         with rich formatting, role assignments, and approval workflows. All plan display
-        functionality is now handled by the modular system instead of legacy auto_orchestrate.py.
+        functionality is now handled by the modular system instead of legacy the modular orchestrator.
         
         Args:
             implementation_spec: Parsed implementation specification
@@ -457,6 +492,11 @@ class Orchestrator:
             from ..claude.oauth_manager import PlanDisplayManager
             
             console.print(f"[blue]📊 Using modular plan display manager[/blue]")
+            
+            # In batch mode, auto-approve without displaying
+            if os.environ.get('BATCH_MODE') == '1':
+                console.print(f"[cyan]Batch mode: Auto-approving plan without display[/cyan]")
+                return True
             
             # Create plan display manager
             plan_manager = PlanDisplayManager(
@@ -490,7 +530,7 @@ class Orchestrator:
         
         Uses the modular SessionOrchestrator to provide comprehensive session setup
         with tmux windows, agent deployment, and briefings. All session orchestration
-        is now handled by the modular system instead of legacy auto_orchestrate.py.
+        is now handled by the modular system instead of legacy the modular orchestrator.
         
         Args:
             implementation_spec: Parsed implementation specification

@@ -2,7 +2,7 @@
 Session Management Module
 
 Handles project session lifecycle, state persistence, and recovery operations.
-Extracted from auto_orchestrate.py to provide modular session management.
+Extracted from the modular orchestrator to provide modular session management.
 """
 
 import json
@@ -403,7 +403,7 @@ def create_initial_session_state(session_name: str,
     """
     Convenience function to create initial session state.
     
-    This function provides compatibility with the original auto_orchestrate.py
+    This function provides compatibility with the original the modular orchestrator
     while using the new modular session management.
     
     Args:

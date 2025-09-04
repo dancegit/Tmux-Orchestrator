@@ -445,9 +445,9 @@ class ProjectFailureHandler:
                 self._send_orchestration_alert(orchestrator_session, "ORCHESTRATION_LAUNCH_FAILURE", error_msg)
                 return
             
-            # Build the command to run auto_orchestrate.py
+            # Build the command to run orchestration
             cmd_parts = [
-                './auto_orchestrate.py',  # Use relative path since we're in the tmux orchestrator directory
+                './tmux_orchestrator_cli.py', 'run',  # Use relative path since we're in the tmux orchestrator directory
                 '--spec', spec_path
             ]
             if project_path:
@@ -467,14 +467,14 @@ class ProjectFailureHandler:
                 self._send_orchestration_alert(orchestrator_session, "ORCHESTRATION_LAUNCH_FAILURE", error_msg)
                 return
             
-            # Verify startup: Check that auto_orchestrate.py is running and making progress
+            # Verify startup: Check that orchestration is running and making progress
             import time
-            initial_verification_timeout = 30  # Wait for auto_orchestrate.py to start
+            initial_verification_timeout = 30  # Wait for orchestration to start
             start_time = time.time()
             
-            logger.info(f"Verifying auto_orchestrate.py started in session {orchestrator_session}...")
+            logger.info(f"Verifying orchestration started in session {orchestrator_session}...")
             
-            # First, verify the orchestrator session is running and has auto_orchestrate.py
+            # First, verify the orchestrator session is running and has orchestration
             orchestrator_running = False
             while time.time() - start_time < initial_verification_timeout:
                 # Check if the orchestrator session still exists
@@ -485,7 +485,7 @@ class ProjectFailureHandler:
                     self._update_project_status_with_error(project_id, 'failed', error_msg)
                     return
                 
-                # Check if auto_orchestrate.py is running
+                # Check if orchestration is running
                 capture_result = subprocess.run(
                     ['tmux', 'capture-pane', '-t', f'{orchestrator_session}:0', '-p'],
                     capture_output=True, text=True
@@ -494,13 +494,13 @@ class ProjectFailureHandler:
                     output = capture_result.stdout
                     if "Auto-Orchestrate" in output or "Analyzing specification" in output or "Step 1:" in output:
                         orchestrator_running = True
-                        logger.info(f"✅ Verified: auto_orchestrate.py is running in {orchestrator_session}")
+                        logger.info(f"✅ Verified: orchestration is running in {orchestrator_session}")
                         break
                 
                 time.sleep(2)
             
             if not orchestrator_running:
-                error_msg = f"auto_orchestrate.py failed to start properly in {orchestrator_session}"
+                error_msg = f"orchestration failed to start properly in {orchestrator_session}"
                 logger.error(error_msg)
                 # Capture final output for debugging
                 capture_result = subprocess.run(

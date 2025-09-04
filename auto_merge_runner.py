@@ -13,6 +13,13 @@ from datetime import datetime
 import time
 import os
 
+# Import validation module
+try:
+    from tmux_orchestrator.core.validation import ProjectValidator
+    validator_available = True
+except ImportError:
+    validator_available = False
+
 # Setup logging
 LOG_DIR = Path(__file__).parent / 'logs'
 LOG_DIR.mkdir(exist_ok=True)
@@ -84,6 +91,19 @@ class AutoMergeRunner:
         """Attempt to merge a single project"""
         project_name = Path(spec_path).stem if spec_path else "unknown"
         logger.info(f"Attempting to merge project {project_id}: {project_name}")
+        
+        # Validate project has actual implementation before merging
+        if validator_available and project_path and Path(project_path).exists():
+            logger.info(f"Validating project implementation at {project_path}")
+            if not ProjectValidator.validate_completion(Path(project_path)):
+                logger.error(f"❌ Project {project_id} validation failed - no implementation found")
+                self.update_status(project_id, 'merge_failed', 
+                                 'Validation failed: No implementation found, cannot merge empty project')
+                return False
+            logger.info(f"✓ Project {project_id} validation passed")
+        elif validator_available:
+            logger.warning(f"Project path not found for validation: {project_path}")
+            # Continue anyway if path doesn't exist (might be legacy project)
         
         # Always use project name for merging
         # The merge_integration.py script will find the correct worktree and commit

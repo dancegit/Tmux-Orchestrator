@@ -118,6 +118,76 @@ verify_message_delivered() {
     done
 }
 
+# Function to ensure pane is ready for input
+ensure_pane_ready() {
+    local window="$1"
+    
+    # Check if pane exists and is accessible
+    if ! tmux has-session -t "$window" 2>/dev/null; then
+        echo "ERROR: Window $window not found"
+        return 1
+    fi
+    
+    # Check if pane is in copy mode and exit it
+    local copy_mode=$(tmux display-message -p -t "$window" '#{pane_in_mode}' 2>/dev/null)
+    if [ "$copy_mode" = "1" ]; then
+        tmux send-keys -t "$window" q 2>/dev/null
+        sleep 0.2
+    fi
+    
+    # Send a harmless key to wake up the pane
+    tmux send-keys -t "$window" "" 2>/dev/null  # Send nothing to trigger prompt
+    sleep 0.1
+    
+    return 0
+}
+
+# Function for verified message sending with robust Enter handling
+send_message_with_verification() {
+    local window="$1"
+    local message="$2"
+    
+    # Send the message
+    tmux send-keys -l -t "$window" "$message" 2>/dev/null
+    sleep 0.3  # Slightly longer initial wait
+    
+    # Send Enter with multiple attempts and verification
+    local enter_attempts=0
+    while [ $enter_attempts -lt 3 ]; do
+        tmux send-keys -t "$window" Enter 2>/dev/null
+        
+        # Check if message was processed (look for prompt or response)
+        sleep 0.8  # Give more time for processing
+        local content=$(tmux capture-pane -p -t "$window" -S -10 2>/dev/null)
+        
+        # Look for signs that the message was executed (not still showing MCP patterns)
+        if ! echo "$content" | grep -q "TMUX_MCP_START\|TMUX_MCP_DONE"; then
+            # Also check for interactive prompts or responses
+            if echo "$content" | grep -E "(claude>|Assistant:|Human:|●|>|\$|#)" >/dev/null; then
+                echo "✅ Enter successfully processed (attempt $((enter_attempts + 1)))"
+                return 0
+            fi
+        fi
+        
+        enter_attempts=$((enter_attempts + 1))
+        echo "⚠️  Enter attempt $enter_attempts: Message may still be stuck, retrying..."
+        
+        # Progressive intervention for stuck messages
+        if [ $enter_attempts -eq 2 ]; then
+            # Send Ctrl-C to interrupt any stuck command, then retry
+            echo "   Sending interrupt signal before final Enter attempt"
+            tmux send-keys -t "$window" C-c 2>/dev/null
+            sleep 0.2
+        fi
+        
+        sleep 0.3
+    done
+    
+    echo "❌ Failed to verify Enter processing after 3 attempts"
+    echo "   Last captured content: $(echo "$content" | tail -3 | tr '\n' ' ')"
+    return 1
+}
+
 # Function to send message with retry logic
 send_with_retry() {
     local window="$1"
@@ -128,6 +198,12 @@ send_with_retry() {
     while [ $attempts -lt $MAX_ATTEMPTS ]; do
         attempts=$((attempts + 1))
         echo "📤 Attempt $attempts/$MAX_ATTEMPTS: Sending to $window"
+        
+        # Enhanced pane state check
+        if ! ensure_pane_ready "$window"; then
+            echo "⚠️  Pane not ready, skipping attempt"
+            continue
+        fi
         
         # Reset pane state before each attempt if enabled
         if [ $RESET_PANE_BEFORE_SEND -eq 1 ]; then
@@ -157,21 +233,19 @@ send_with_retry() {
             echo "✅ Compact command sent to $window"
             return 0
         else
-            # Normal message sending with literal flag to handle special characters
+            # Normal message sending with enhanced verification
             # Extra cleaning step right before sending
             local final_msg="$message"
             final_msg=$(echo "$final_msg" | sed -E 's/^echo[[:space:]]+["'\''"]*TMUX_MCP_START["'\''"]*[[:space:]]*;*[[:space:]]*//g')
             final_msg=$(echo "$final_msg" | sed -E 's/[[:space:]]*;*[[:space:]]*echo[[:space:]]+["'\''"]*TMUX_MCP_DONE_\$\?["'\''"]*[[:space:]]*$//g')
             
-            # Send the cleaned message
-            tmux send-keys -l -t "$window" "$final_msg" 2>/dev/null
-            sleep $delay
-            # Always ensure Enter key is sent
-            tmux send-keys -t "$window" Enter 2>/dev/null
-            # Double-send Enter if message might have been wrapped
-            if echo "$message" | grep -q "TMUX_MCP"; then
-                sleep 0.2
-                tmux send-keys -t "$window" Enter 2>/dev/null
+            # Use the new verified sending method
+            if send_message_with_verification "$window" "$final_msg"; then
+                echo "✅ Message verified as delivered to $window"
+                return 0
+            else
+                echo "❌ Message verification failed for $window"
+                # Continue to retry logic below
             fi
         fi
         

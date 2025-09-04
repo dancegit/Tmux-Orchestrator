@@ -45,16 +45,42 @@ from state_synchronizer import StateSynchronizer  # NEW: Import for proactive nu
 from project_lock import ProjectLock  # NEW: Import for cross-project interference prevention
 from tmux_session_manager import TmuxSessionManager  # Required for safe tmux operations
 
-# Setup logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('scheduler.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+# Phase 1: Import from modular components
+from scheduler_modules.dependency_checker import DependencyChecker
+from scheduler_modules.config import SchedulerConfig
+from scheduler_modules import utils
+
+# Phase 2: Import monitoring and recovery modules
+from scheduler_modules.session_monitor import SessionMonitor
+from scheduler_modules.recovery_manager import RecoveryManager
+from scheduler_modules.batch_processor import BatchProcessor
+from scheduler_modules.process_manager_wrapper import ProcessManagerWrapper
+from scheduler_modules.state_synchronizer_wrapper import StateSynchronizerWrapper
+
+# Setup logging with enhanced error handling
+try:
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('scheduler.log', mode='a'),  # Ensure append mode
+            logging.StreamHandler()
+        ]
+    )
+    # Test write access
+    with open('scheduler.log', 'a') as test_file:
+        test_file.write('')
+    logger = logging.getLogger(__name__)
+    logger.info("Scheduler started with enhanced logging")
+except PermissionError:
+    print("Warning: Cannot write to scheduler.log. Falling back to console-only logging.")
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+    logger = logging.getLogger(__name__)
+    logger.warning("Running with console-only logging due to file permissions")
 
 
 class ProjectState(Enum):
@@ -81,49 +107,7 @@ class ProjectState(Enum):
         }
 
 
-class DependencyChecker:
-    """Ensures critical dependencies are available at runtime with auto-installation."""
-    
-    @staticmethod
-    def verify_psutil():
-        """Verify psutil is available, auto-install if missing."""
-        try:
-            import psutil
-            logger.info(f"✓ psutil verified: version {psutil.__version__}")
-            return True
-        except ImportError:
-            logger.warning("⚠️  psutil missing - attempting auto-install")
-            try:
-                # Use uv to install psutil
-                result = subprocess.run(['uv', 'pip', 'install', 'psutil>=5.9.0'], 
-                                      check=True, capture_output=True, text=True)
-                logger.info(f"✓ psutil installation output: {result.stdout}")
-                
-                # Verify installation worked
-                import psutil
-                logger.info(f"✓ psutil installed successfully: version {psutil.__version__}")
-                return True
-            except subprocess.CalledProcessError as e:
-                logger.error(f"❌ Failed to install psutil via uv: {e}")
-                logger.error(f"Command output: {e.stdout}")
-                logger.error(f"Command error: {e.stderr}")
-                return False
-            except ImportError as e:
-                logger.error(f"❌ psutil still unavailable after installation attempt: {e}")
-                return False
-            except Exception as e:
-                logger.error(f"❌ Unexpected error during psutil installation: {e}")
-                return False
-    
-    @staticmethod
-    def verify_all_dependencies():
-        """Verify all critical dependencies are available."""
-        dependencies_ok = True
-        
-        if not DependencyChecker.verify_psutil():
-            dependencies_ok = False
-            
-        return dependencies_ok
+# DependencyChecker class moved to scheduler_modules/dependency_checker.py
 
 class TmuxOrchestratorScheduler:
     def __init__(self, db_path='task_queue.db', tmux_orchestrator_path=None, read_only=False, service_mode=None):
@@ -151,10 +135,10 @@ class TmuxOrchestratorScheduler:
             sys.exit(1)
         
         # Add configurable poll interval
-        self.poll_interval = int(os.getenv('POLL_INTERVAL_SEC', 60))
+        self.poll_interval = SchedulerConfig.POLL_INTERVAL_SEC
         
         # Add configurable concurrency limit (default 1 for sequential processing)
-        self.max_concurrent = int(os.getenv('MAX_CONCURRENT_PROJECTS', 1))
+        self.max_concurrent = SchedulerConfig.MAX_CONCURRENT_PROJECTS
         
         # NEW: For re-entrance protection to prevent notification loops
         self.processing_events = set()
@@ -166,8 +150,8 @@ class TmuxOrchestratorScheduler:
         # NEW: Initialize ProcessManager for subprocess tracking and timeout enforcement
         if not read_only:
             self.process_manager = ProcessManager(
-                max_runtime=int(os.getenv('MAX_AUTO_ORCHESTRATE_RUNTIME_SEC', 10800)),  # Default 3 hours for complex orchestrations
-                monitor_interval=int(os.getenv('PROCESS_MONITOR_INTERVAL_SEC', 30))   # Check every 30 seconds
+                max_runtime=SchedulerConfig.MAX_AUTO_ORCHESTRATE_RUNTIME_SEC,  # Default 3 hours for complex orchestrations
+                monitor_interval=SchedulerConfig.PROCESS_MONITOR_INTERVAL_SEC   # Check every 30 seconds
             )
             # Set up ProcessManager callbacks and managers
             self.process_manager.set_status_callback(self.update_project_status_with_state)
@@ -177,20 +161,20 @@ class TmuxOrchestratorScheduler:
             self.process_manager = None
         
         # Configure phantom detection grace period for long-running Claude analysis
-        self.phantom_grace_period = int(os.getenv('PHANTOM_GRACE_PERIOD_SEC', 1800))  # Increased to 30 min
+        self.phantom_grace_period = SchedulerConfig.PHANTOM_GRACE_PERIOD_SEC  # Increased to 30 min
         
         # NEW: State synchronization configuration
-        self.state_sync_interval = int(os.getenv('STATE_SYNC_INTERVAL_SEC', 600))     # 10 min
+        self.state_sync_interval = SchedulerConfig.STATE_SYNC_INTERVAL_SEC     # 10 min
         self.last_state_sync = 0
         logger.info(f"State synchronization configured with {self.state_sync_interval}s interval")
         
         # NEW: Orphaned session reconciliation configuration
-        self.orphaned_reconcile_interval = int(os.getenv('ORPHANED_RECONCILE_INTERVAL_SEC', 1800))  # 30 min
+        self.orphaned_reconcile_interval = SchedulerConfig.ORPHANED_RECONCILE_INTERVAL_SEC  # 30 min
         self.last_orphaned_reconcile = 0
         logger.info(f"Orphaned session reconciliation configured with {self.orphaned_reconcile_interval}s interval")
         
         # NEW: Configurable reboot detection threshold (for extended downtime without reboot)
-        self.reboot_threshold_sec = int(os.getenv('REBOOT_DETECTION_THRESHOLD_SEC', 900))    # 15 min
+        self.reboot_threshold_sec = SchedulerConfig.REBOOT_DETECTION_THRESHOLD_SEC    # 15 min
         logger.info(f"Reboot detection threshold set to {self.reboot_threshold_sec}s")
         
         self.setup_database()
@@ -225,6 +209,24 @@ class TmuxOrchestratorScheduler:
         # NEW: Register signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        # Phase 2: Initialize monitoring modules
+        if not read_only:
+            self.session_monitor_module = SessionMonitor(self.conn, self.session_state_manager, SchedulerConfig)
+            self.recovery_manager_module = RecoveryManager(self.conn, self.session_state_manager, SchedulerConfig)
+            self.batch_processor_module = BatchProcessor(self)
+            if self.process_manager:
+                self.process_manager_wrapper = ProcessManagerWrapper(self.process_manager, self.conn, SchedulerConfig)
+            else:
+                self.process_manager_wrapper = None
+            # Initialize StateSynchronizer if available
+            try:
+                state_sync = StateSynchronizer(self.db_path, self.tmux_orchestrator_path)
+                self.state_synchronizer_wrapper = StateSynchronizerWrapper(
+                    state_sync, self.conn, self.session_state_manager, SchedulerConfig
+                )
+            except:
+                self.state_synchronizer_wrapper = None
         
         # Start batch monitoring thread if enabled (only for write operations)
         self._monitoring_enabled = os.getenv('ENABLE_BATCH_MONITORING', 'true').lower() == 'true'
@@ -611,6 +613,17 @@ class TmuxOrchestratorScheduler:
             project_lock.release()
     
     def detect_and_reset_phantom_projects(self) -> int:
+        """Phase 2 shim: Delegate to SessionMonitor module."""
+        if hasattr(self, 'session_monitor_module'):
+            # Add dispatch event method if needed
+            if not hasattr(self.session_monitor_module, '_dispatch_event'):
+                self.session_monitor_module._dispatch_event = self._dispatch_event
+            return self.session_monitor_module.detect_and_reset_phantom_projects()
+        else:
+            # Fallback to legacy implementation
+            return self.detect_and_reset_phantom_projects_legacy()
+    
+    def detect_and_reset_phantom_projects_legacy(self) -> int:
         """
         CRITICAL: Detect and reset phantom PROCESSING projects that have no tmux sessions.
         Enhanced version with process scanning using psutil.
@@ -687,7 +700,7 @@ class TmuxOrchestratorScheduler:
                     logger.debug(f"Project {project_id} is within dynamic grace period ({dynamic_grace}s), skipping (elapsed: {elapsed:.0f}s)")
                     continue
                 
-                # Check 1: No session name set (auto_orchestrate.py failed before session creation)
+                # Check 1: No session name set (tmux_orchestrator_cli.py run failed before session creation)
                 if not orch_session and not main_session and not session_name:
                     # NEW: Check if process is still alive via ProcessManager before flagging
                     if self.process_manager.is_alive(project_id):
@@ -729,10 +742,10 @@ class TmuxOrchestratorScheduler:
                         reset_count += 1
                         continue
                 
-                # Check 3: Skip checking for auto_orchestrate.py process
-                # auto_orchestrate.py is just a setup script that exits after creating the project
+                # Check 3: Skip checking for tmux_orchestrator_cli.py run process
+                # tmux_orchestrator_cli.py run is just a setup script that exits after creating the project
                 # The actual work is done by the tmux sessions, which we already validated above
-                logger.debug(f"Project {project_id} has active tmux session - not checking for auto_orchestrate.py process")
+                logger.debug(f"Project {project_id} has active tmux session - not checking for tmux_orchestrator_cli.py run process")
             
             self.conn.commit()
         
@@ -764,12 +777,7 @@ class TmuxOrchestratorScheduler:
     
     def _session_exists(self, session_name: str) -> bool:
         """Check if a tmux session exists"""
-        try:
-            result = subprocess.run(['tmux', 'has-session', '-t', session_name], 
-                                  capture_output=True, text=True)
-            return result.returncode == 0
-        except:
-            return False
+        return utils.session_exists(session_name)
     
     def _find_lingering_sessions(self, active_sessions: List[str]) -> List[str]:
         """Find sessions that belong to completed/failed projects but are still active"""
@@ -780,42 +788,11 @@ class TmuxOrchestratorScheduler:
         """)
         completed_sessions = [row[0] for row in cursor.fetchall()]
         
-        return [sess for sess in active_sessions if sess in completed_sessions]
+        return utils.find_lingering_sessions(active_sessions, completed_sessions)
     
     def _is_session_ready(self, session_name: str, window_index: int) -> bool:
         """Validate if session exists and is running Claude (not bash)."""
-        # Check existence
-        if not self._session_exists(session_name):
-            logger.warning(f"Session {session_name} does not exist")
-            return False
-        
-        # Check pane command (should not be bash/sh)
-        target = f"{session_name}:{window_index}"
-        try:
-            result = subprocess.run(
-                ['tmux', 'display-message', '-p', '-t', target, '#{pane_current_command}'],
-                capture_output=True, text=True, check=True
-            )
-            command = result.stdout.strip().lower()
-            if 'bash' in command or 'sh' in command:
-                logger.warning(f"Target {target} is running {command}, not Claude")
-                return False
-            
-            # Check if pane is active (has recent activity, to detect dead Claude)
-            activity_result = subprocess.run(
-                ['tmux', 'display-message', '-p', '-t', target, '#{pane_dead} #{pane_active}'],
-                capture_output=True, text=True, check=True
-            )
-            activity = activity_result.stdout.strip().split()
-            if len(activity) >= 2 and (activity[0] == '1' or activity[1] == '0'):  # Dead or inactive
-                logger.warning(f"Target {target} is dead or inactive")
-                return False
-            
-            # Note: Claude might show as 'python' or other process names
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to check pane command for {target}: {e}")
-            return False
+        return utils.is_session_ready(session_name, window_index)
     
     def get_active_tmux_sessions(self):
         """Helper to get active tmux sessions (for sequential processing check)."""
@@ -983,32 +960,35 @@ class TmuxOrchestratorScheduler:
             else:
                 logger.warning(f"No session found for project {project_id} - skipping cleanup")
             
-            # NEW: Always trigger event (even for manual re-marks), but guard against loops
-            event_key = f"complete_{project_id}_{success}"
-            with self._event_lock:
-                if event_key not in self.processing_events:
-                    self.processing_events.add(event_key)
-                    try:
-                        # Dispatch project completion event
-                        self._dispatch_event('project_complete', {
-                            'project_id': project_id,
-                            'status': 'completed' if success else 'failed',
-                            'error_message': error_message,
-                            'manual_update': not updated
-                        })
-                        logger.info(f"Dispatched project_complete event for {project_id} (manual: {not updated})")
-                        
-                        # Also trigger task completion for monitoring (if session available)
-                        if session_name:
-                            self.complete_task(f"project_{project_id}", session_name, "orchestrator", 
-                                             f"Project marked as {'completed' if success else 'failed'}")
-                        else:
-                            logger.debug(f"Skipping task completion trigger for project {project_id} - no session name")
-                    finally:
-                        # Remove from processing set after a delay
-                        threading.Timer(1.0, lambda: self.processing_events.discard(event_key)).start()
-                else:
-                    logger.debug(f"Skipped duplicate event for {project_id}")
+            # FIX: Only trigger event for SUCCESSFUL completions to prevent empty deployments
+            if success:  # Only dispatch event for completed projects, not failed ones
+                event_key = f"complete_{project_id}_{success}"
+                with self._event_lock:
+                    if event_key not in self.processing_events:
+                        self.processing_events.add(event_key)
+                        try:
+                            # Dispatch project completion event (only for success)
+                            self._dispatch_event('project_complete', {
+                                'project_id': project_id,
+                                'status': 'completed',
+                                'error_message': error_message,
+                                'manual_update': not updated
+                            })
+                            logger.info(f"Dispatched project_complete event for successful project {project_id} (manual: {not updated})")
+                            
+                            # Also trigger task completion for monitoring (if session available)
+                            if session_name:
+                                self.complete_task(f"project_{project_id}", session_name, "orchestrator", 
+                                                 f"Project marked as completed")
+                            else:
+                                logger.debug(f"Skipping task completion trigger for project {project_id} - no session name")
+                        finally:
+                            # Remove from processing set after a delay
+                            threading.Timer(1.0, lambda: self.processing_events.discard(event_key)).start()
+                    else:
+                        logger.debug(f"Skipped duplicate event for {project_id}")
+            else:
+                logger.info(f"Project {project_id} failed - not dispatching completion event to prevent empty deployments")
                     
         except sqlite3.Error as e:
             logger.error(f"Failed to update completion status for project {project_id}: {e}")
@@ -1096,6 +1076,13 @@ class TmuxOrchestratorScheduler:
             return False
     
     def validate_session_liveness(self, session_name: str, grace_period_sec: int = 900, project_id: int = None, spec_path: str = None) -> Tuple[bool, str]:
+        """Phase 2 shim: Delegate to SessionMonitor module."""
+        if hasattr(self, 'session_monitor_module'):
+            return self.session_monitor_module.validate_session_liveness(session_name, grace_period_sec, project_id, spec_path)
+        else:
+            return self.validate_session_liveness_legacy(session_name, grace_period_sec, project_id, spec_path)
+    
+    def validate_session_liveness_legacy(self, session_name: str, grace_period_sec: int = 900, project_id: int = None, spec_path: str = None) -> Tuple[bool, str]:
         """Validate tmux session liveness with multiple checks and pattern matching fallback.
         
         Args:
@@ -1346,6 +1333,16 @@ class TmuxOrchestratorScheduler:
         return False
     
     def _recover_from_reboot(self):
+        """Phase 2 shim: Delegate to RecoveryManager module."""
+        if hasattr(self, 'recovery_manager_module'):
+            # Add dispatch event method if needed
+            if not hasattr(self.recovery_manager_module, '_dispatch_event'):
+                self.recovery_manager_module._dispatch_event = self._dispatch_event
+            return self.recovery_manager_module.recover_from_reboot()
+        else:
+            return self._recover_from_reboot_legacy()
+    
+    def _recover_from_reboot_legacy(self):
         """Recover from system reboot by checking status of projects that were processing"""
         logger.info("🔄 Starting reboot recovery check...")
         
@@ -1537,12 +1534,27 @@ class TmuxOrchestratorScheduler:
 
     def detect_completed_projects(self):
         """Sync completion status from SessionState to project_queue."""
+        # Import validation module
+        try:
+            from tmux_orchestrator.core.validation import ProjectValidator
+            validator_available = True
+        except ImportError:
+            logger.warning("ProjectValidator not available - skipping validation checks")
+            validator_available = False
+            
         with self.queue_lock:
             cursor = self.conn.cursor()
-            cursor.execute("SELECT id, project_path, spec_path FROM project_queue WHERE status = 'processing'")
+            cursor.execute("SELECT id, project_path, spec_path, started_at FROM project_queue WHERE status = 'processing'")
             
             for row in cursor.fetchall():
-                project_id, project_path, spec_path = row
+                project_id, project_path, spec_path, started_at = row
+                
+                # CRITICAL: Don't mark as completed if project just started (less than 5 minutes)
+                if started_at:
+                    time_since_start = time.time() - started_at
+                    if time_since_start < 300:  # 5 minutes minimum
+                        logger.debug(f"Project {project_id} started only {time_since_start:.0f}s ago - skipping completion check")
+                        continue
                 
                 # Derive project name from spec path
                 project_name = None
@@ -1559,19 +1571,94 @@ class TmuxOrchestratorScheduler:
                 if state.completion_status in ['completed', 'failed']:
                     status = state.completion_status
                     error_msg = state.failure_reason if status == 'failed' else None
-                    cursor.execute("""
-                        UPDATE project_queue 
-                        SET status = ?, 
-                            error_message = ?,
-                            completed_at = strftime('%s', 'now')
-                        WHERE id = ?
-                    """, (status, error_msg, project_id))
+                    
+                    # CRITICAL: Validate completion before marking as completed
+                    validation_score = None
+                    validation_details = None
+                    
+                    if status == 'completed' and validator_available and project_path:
+                        try:
+                            # Get full validation report
+                            validator = ProjectValidator()
+                            report = validator.get_validation_report(Path(project_path))
+                            
+                            # More stringent validation - require actual implementation files
+                            has_implementation = False
+                            if Path(project_path).exists():
+                                # Check for implementation files in common locations
+                                implementation_dirs = ['src', 'lib', 'app', 'components', 'modules', 'packages']
+                                code_extensions = [
+                                    '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.h', 
+                                    '.go', '.rs', '.rb', '.php', '.cs', '.swift', '.kt', '.scala',
+                                    '.r', '.m', '.mm', '.vue', '.svelte', '.dart', '.lua', '.ex', '.exs'
+                                ]
+                                
+                                total_code_files = 0
+                                for dir_name in implementation_dirs:
+                                    dir_path = Path(project_path) / dir_name
+                                    if dir_path.exists():
+                                        for ext in code_extensions:
+                                            code_files = list(dir_path.rglob(f'*{ext}'))
+                                            total_code_files += len(code_files)
+                                
+                                # Also check root directory for code files
+                                for ext in code_extensions:
+                                    root_files = list(Path(project_path).glob(f'*{ext}'))
+                                    total_code_files += len(root_files)
+                                
+                                # Require at least 3 implementation files of any type
+                                has_implementation = total_code_files >= 3
+                                
+                                if not has_implementation:
+                                    logger.warning(f"Project {project_id} has only {total_code_files} code files - insufficient implementation")
+                            
+                            if not report.get('passed', False) or not has_implementation:
+                                logger.warning(f"Project {project_id} marked as completed but validation failed - marking as failed instead")
+                                status = 'failed'
+                                error_msg = "Validation failed: No implementation found (empty src/, insufficient commits, or no tests)"
+                            
+                            # Store validation results
+                            if report.get('spec_validation'):
+                                validation_score = report['spec_validation'].get('overall_score', 0)
+                                validation_details = json.dumps(report['spec_validation'])
+                            else:
+                                # Basic validation only
+                                basic_passed = sum(1 for v in report['basic_checks'].values() if v)
+                                validation_score = (basic_passed / 4) * 100
+                                validation_details = json.dumps(report['basic_checks'])
+                                
+                        except Exception as e:
+                            logger.error(f"Validation check failed for project {project_id}: {e}")
+                            # Continue without validation on error
+                    
+                    # Update with validation scores
+                    if validation_score is not None:
+                        cursor.execute("""
+                            UPDATE project_queue 
+                            SET status = ?, 
+                                error_message = ?,
+                                completed_at = strftime('%s', 'now'),
+                                validation_score = ?,
+                                validation_details = ?
+                            WHERE id = ?
+                        """, (status, error_msg, validation_score, validation_details, project_id))
+                    else:
+                        cursor.execute("""
+                            UPDATE project_queue 
+                            SET status = ?, 
+                                error_message = ?,
+                                completed_at = strftime('%s', 'now')
+                            WHERE id = ?
+                        """, (status, error_msg, project_id))
                     logger.info(f"Synced completion for project {project_id} ({project_name}) to {status}")
-                    self._dispatch_event('project_complete', {
-                        'project_id': project_id, 
-                        'status': status,
-                        'project_name': project_name
-                    })
+                    
+                    # Only dispatch complete event for truly completed projects
+                    if status == 'completed':
+                        self._dispatch_event('project_complete', {
+                            'project_id': project_id, 
+                            'status': status,
+                            'project_name': project_name
+                        })
             
             self.conn.commit()
         
@@ -1662,7 +1749,7 @@ class TmuxOrchestratorScheduler:
                 batch_id TEXT,  -- Groups related projects for batch processing
                 retry_count INTEGER DEFAULT 0,  -- Number of retry attempts
                 enhanced_spec_path TEXT,  -- Path to research-enhanced spec for retries
-                orchestrator_session TEXT,  -- Session running auto_orchestrate.py
+                orchestrator_session TEXT,  -- Session running tmux_orchestrator_cli.py run
                 main_session TEXT  -- Main project session created by orchestration
             )
         ''')
@@ -1684,6 +1771,16 @@ class TmuxOrchestratorScheduler:
             self.conn.execute('ALTER TABLE project_queue ADD COLUMN enhanced_spec_path TEXT;')
             self.conn.execute('ALTER TABLE project_queue ADD COLUMN orchestrator_session TEXT;')
             self.conn.execute('ALTER TABLE project_queue ADD COLUMN main_session TEXT;')
+        except sqlite3.OperationalError:
+            pass  # Columns already exist
+        
+        # Add spec validation columns
+        try:
+            self.conn.execute('ALTER TABLE project_queue ADD COLUMN spec_requirements TEXT;')
+            self.conn.execute('ALTER TABLE project_queue ADD COLUMN validation_score REAL DEFAULT 0;')
+            self.conn.execute('ALTER TABLE project_queue ADD COLUMN validation_details TEXT;')
+            self.conn.execute('ALTER TABLE project_queue ADD COLUMN spec_version TEXT;')
+            logger.info("Added spec validation columns to project_queue")
         except sqlite3.OperationalError:
             pass  # Columns already exist
         
@@ -2133,17 +2230,7 @@ class TmuxOrchestratorScheduler:
         """, (cutoff,))
         self.conn.commit()
         
-    def enqueue_project(self, spec_path: str, project_path: Optional[str] = None, priority: int = 0):
-        """Enqueue a project for batch processing"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT INTO project_queue (spec_path, project_path, priority)
-            VALUES (?, ?, ?)
-        """, (spec_path, project_path, priority))
-        self.conn.commit()
-        task_id = cursor.lastrowid
-        logger.info(f"Enqueued project {task_id} with spec {spec_path}")
-        return task_id
+    # NOTE: Removed duplicate enqueue_project method - see line 2788 for the proper implementation with duplicate checking
 
     def get_next_project(self) -> Optional[Dict[str, Any]]:
         """Get the next queued project, ordered by priority and enqueue time"""
@@ -2523,10 +2610,10 @@ class TmuxOrchestratorScheduler:
                             should_resume = False
                             logger.info(f"Fresh start requested for {project_name} - overriding resume mode")
                         
-                        # Build command - FIXED: Call auto_orchestrate.py directly to avoid nested uv execution
+                        # Build command - FIXED: Call tmux_orchestrator_cli.py run directly to avoid nested uv execution
                         # The script has shebang #!/usr/bin/env -S uv run --quiet --script
                         cmd = [
-                            str(self.tmux_orchestrator_path / 'auto_orchestrate.py'),
+                            str(self.tmux_orchestrator_path / 'tmux_orchestrator_cli.py'), 'run',
                             '--spec', next_project['spec_path'],
                             '--project', proj_arg,
                             '--project-id', str(next_project['id']),  # FIXED: Pass project ID for completion callback
@@ -2544,10 +2631,10 @@ class TmuxOrchestratorScheduler:
                             cmd.append('--overwrite')
                             logger.info(f"Adding --overwrite flag for fresh start project {project_name}")
                         # NEW: Use ProcessManager for non-blocking subprocess execution with timeout enforcement
-                        logger.info(f"Starting auto_orchestrate.py for project {next_project['id']}: {' '.join(cmd)}")
+                        logger.info(f"Starting tmux_orchestrator_cli.py run for project {next_project['id']}: {' '.join(cmd)}")
                         
                         # Create logs directory if needed
-                        logs_dir = self.tmux_orchestrator_path / 'logs' / 'auto_orchestrate'
+                        logs_dir = self.tmux_orchestrator_path / 'logs' / 'tmux_orchestrator'
                         logs_dir.mkdir(parents=True, exist_ok=True)
                         
                         # Create log file for this project
@@ -2555,7 +2642,7 @@ class TmuxOrchestratorScheduler:
                         
                         # Use Popen for non-blocking execution with output capture
                         with open(log_file, 'w') as log_handle:
-                            log_handle.write(f"=== auto_orchestrate.py output for Project {next_project['id']} ===\n")
+                            log_handle.write(f"=== tmux_orchestrator_cli.py run output for Project {next_project['id']} ===\n")
                             log_handle.write(f"Command: {' '.join(cmd)}\n")
                             log_handle.write(f"Started at: {datetime.now()}\n")
                             log_handle.write("=" * 80 + "\n\n")
@@ -2569,14 +2656,14 @@ class TmuxOrchestratorScheduler:
                                 cwd=str(self.tmux_orchestrator_path)
                             )
                         
-                        logger.info(f"auto_orchestrate.py output for project {next_project['id']} will be logged to: {log_file}")
+                        logger.info(f"tmux_orchestrator_cli.py run output for project {next_project['id']} will be logged to: {log_file}")
                         
                         # Register process with ProcessManager for monitoring
                         cmd_str = ' '.join(cmd[-4:])  # Last 4 args for logging
                         self.process_manager.register(
                             project_id=next_project['id'],
                             pid=process.pid,
-                            cmd=f"auto_orchestrate.py {cmd_str}"
+                            cmd=f"tmux_orchestrator_cli.py run {cmd_str}"
                         )
                         
                         logger.info(f"Registered process {process.pid} for project {next_project['id']} with ProcessManager")
@@ -2589,11 +2676,11 @@ class TmuxOrchestratorScheduler:
                             poll_result = process.poll()
                             if poll_result is not None:
                                 # Process completed
-                                logger.info(f"auto_orchestrate.py completed for project {next_project['id']} with exit code {poll_result}")
+                                logger.info(f"tmux_orchestrator_cli.py run completed for project {next_project['id']} with exit code {poll_result}")
                                 
                                 # Log file has captured all output
                                 if poll_result != 0:
-                                    logger.error(f"auto_orchestrate.py failed for project {next_project['id']}. Check log file: {log_file}")
+                                    logger.error(f"tmux_orchestrator_cli.py run failed for project {next_project['id']}. Check log file: {log_file}")
                                     # Read last 200 lines from log for error context
                                     try:
                                         with open(log_file, 'r') as f:
@@ -2635,7 +2722,17 @@ class TmuxOrchestratorScheduler:
                         if result.stderr:
                             logger.warning(f"STDERR: {result.stderr[:500]}")
                         
-                        # CRITICAL: Validate that auto_orchestrate.py actually created a tmux session
+                        # In batch mode, projects are queued and don't create tmux sessions immediately
+                        # Skip session validation for batch mode
+                        is_batch_mode = '--batch' in cmd
+                        
+                        if is_batch_mode:
+                            logger.info(f"Batch mode project {next_project['id']} - skipping tmux session validation")
+                            # Project was successfully queued, mark as completed (the queue part, not the project itself)
+                            completed_projects.append(f"{project_name} (ID: {next_project['id']}) - Queued for batch processing")
+                            continue  # Skip to next project
+                        
+                        # CRITICAL: Validate that tmux_orchestrator_cli.py run actually created a tmux session (non-batch mode only)
                         # Wait up to 30 seconds for session creation, then verify AND CAPTURE session name
                         session_validated = False
                         discovered_session_name = None
@@ -2655,7 +2752,12 @@ class TmuxOrchestratorScheduler:
                                         session_lower = session_name.lower()
                                         if any(keyword in session_lower for keyword in project_keywords):
                                             # Found matching session - validate it's actually for this project
-                                            if '-impl-' in session_lower and len(session_name) > 20:  # Reasonable length check
+                                            # Accept sessions with -impl- OR sessions with a hash suffix (modular system)
+                                            # The modular system creates sessions like: project-name-[8char-hash]
+                                            has_impl = '-impl-' in session_lower
+                                            has_hash_suffix = len(session_name) > 20 and '-' in session_name[-10:]
+                                            
+                                            if (has_impl or has_hash_suffix) and len(session_name) > 15:
                                                 discovered_session_name = session_name
                                                 session_validated = True
                                                 logger.info(f"Session validation SUCCESS for project {next_project['id']}: {discovered_session_name}")
@@ -2668,7 +2770,7 @@ class TmuxOrchestratorScheduler:
                         
                         if not session_validated or not discovered_session_name:
                             # Session creation failed - mark project as failed immediately
-                            error_msg = "auto_orchestrate.py completed but no tmux session was created"
+                            error_msg = "tmux_orchestrator_cli.py run completed but no tmux session was created"
                             self.update_project_status(next_project['id'], 'failed', error_msg)
                             logger.error(f"SESSION VALIDATION FAILED for project {next_project['id']}: {error_msg}")
                             failed_projects.append(f"{project_name} (ID: {next_project['id']}) - Session Creation Failed")
@@ -2694,7 +2796,7 @@ class TmuxOrchestratorScheduler:
                         completed_projects.append(f"{project_name} (ID: {next_project['id']}) - Setup Complete")
                         
                         # Send individual project completion email
-                        # Note: auto_orchestrate.py already sends its own email, 
+                        # Note: tmux_orchestrator_cli.py run already sends its own email, 
                         # but we can send an additional batch notification here
                         duration = int(time.time() - project_start_time)
                         
@@ -2811,7 +2913,8 @@ class TmuxOrchestratorScheduler:
         if caller_info:
             logger.debug(f"enqueue_project called from {caller_info.filename}:{caller_info.lineno} in {caller_info.name}")
         
-        # Check if project already exists in active states
+        # Check if project already exists (in any state except explicitly retryable ones)
+        # First check for active projects
         cursor.execute("""
             SELECT id, status, batch_id 
             FROM project_queue 
@@ -2825,12 +2928,35 @@ class TmuxOrchestratorScheduler:
         existing = cursor.fetchone()
         if existing:
             project_id, status, existing_batch = existing
-            logger.warning(f"Duplicate enqueue prevented: ID={project_id}, spec={spec_path}, status={status}, batch={existing_batch}")
+            logger.warning(f"Active project exists: ID={project_id}, spec={spec_path}, status={status}, batch={existing_batch}")
             if caller_info:
                 logger.warning(f"  Called from: {caller_info.filename}:{caller_info.lineno}")
             
             # Don't create duplicate - return existing ID
             return project_id
+        
+        # Also check for recently completed/failed projects to prevent immediate re-queue
+        cursor.execute("""
+            SELECT id, status, completed_at, error_message
+            FROM project_queue 
+            WHERE spec_path = ? 
+            AND (project_path = ? OR (project_path IS NULL AND ? IS NULL))
+            AND status IN ('completed', 'failed', 'recovered', 'COMPLETED', 'FAILED')
+            ORDER BY enqueued_at DESC
+            LIMIT 1
+        """, (spec_path, project_path, project_path))
+        
+        recent = cursor.fetchone()
+        if recent:
+            project_id, status, completed_at, error_msg = recent
+            # Only allow re-queue if it's been more than 5 minutes since completion/failure
+            # or if explicitly requested via retry_count > 0
+            if completed_at and retry_count == 0:
+                time_since = time.time() - completed_at
+                if time_since < 300:  # 5 minutes
+                    logger.warning(f"Recent project exists (completed {time_since:.0f}s ago): ID={project_id}, status={status}")
+                    logger.warning(f"  To force re-queue, wait {300-time_since:.0f}s or use retry mechanism")
+                    return project_id
             
         # If not duplicate, proceed with insertion
         cursor.execute("""
@@ -2975,10 +3101,10 @@ class TmuxOrchestratorScheduler:
                 'timestamp': datetime.now().isoformat()
             }
             
-            # Call auto_orchestrate.py in research mode
+            # Call tmux_orchestrator_cli.py run in research mode
             cmd = [
                 'uv', 'run', '--quiet', '--script',
-                str(self.tmux_orchestrator_path / 'auto_orchestrate.py'),
+                str(self.tmux_orchestrator_path / 'tmux_orchestrator_cli.py'), 'run',
                 '--research', json.dumps(research_data)
             ]
             
@@ -3161,20 +3287,9 @@ These projects require manual review and intervention.
     
     def _get_session_age(self, session_name: str) -> int:
         """Get the age of a tmux session in seconds"""
-        try:
-            # Get session creation time using tmux format
-            result = subprocess.run(
-                ['tmux', 'display-message', '-t', session_name, '-p', '#{session_created}'],
-                capture_output=True, text=True, check=False
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                session_created = int(result.stdout.strip())
-                return int(time.time()) - session_created
-        except Exception as e:
-            logger.debug(f"Could not determine age for session '{session_name}': {e}")
-        
+        age = utils.get_session_age(session_name)
         # Default to old age if we can't determine (err on the side of terminating)
-        return 7200  # 2 hours
+        return age if age >= 0 else 7200  # 2 hours
     
     def _is_system_session(self, session_name: str) -> bool:
         """Check if a session appears to be a system/user session that should be preserved"""
@@ -3307,6 +3422,16 @@ These projects require manual review and intervention.
             return False
     
     def _monitor_batches(self):
+        """Phase 2 shim: Delegate to BatchProcessor module."""
+        if hasattr(self, 'batch_processor_module'):
+            # Run monitoring in a loop like the original
+            while not self._stop_monitoring.is_set():
+                self.batch_processor_module.monitor_batches()
+                self._stop_monitoring.wait(60)  # Check every minute
+        else:
+            return self._monitor_batches_legacy()
+    
+    def _monitor_batches_legacy(self):
         """Enhanced background thread with all monitoring functions"""
         logger.info("Starting enhanced batch monitoring loop")
         
@@ -3318,7 +3443,7 @@ These projects require manual review and intervention.
                 active_count = cursor.fetchone()[0]
                 
                 # Adaptive polling interval - faster when projects are active
-                poll_interval = 10 if active_count > 0 else int(os.getenv('POLL_INTERVAL_SEC', '60'))
+                poll_interval = 10 if active_count > 0 else SchedulerConfig.POLL_INTERVAL_SEC
                 
                 # Run all monitoring functions
                 logger.debug("Running monitoring cycle...")

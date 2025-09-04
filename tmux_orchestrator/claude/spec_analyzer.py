@@ -3,7 +3,7 @@ Specification Analyzer Module
 
 Handles analysis of specification files with Claude to generate detailed implementation plans.
 This module provides advanced spec analysis capabilities that were previously embedded in
-the monolithic auto_orchestrate.py system.
+the legacy monolithic system system.
 
 Key features:
 - Context-aware specification analysis

@@ -1,0 +1,9 @@
+{
+  "test": {
+    "status": "completed"
+  },
+  "project": {
+    "name": "E2E Test Project",
+    "status": "completed"
+  }
+}

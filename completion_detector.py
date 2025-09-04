@@ -270,22 +270,63 @@ class CompletionDetector:
         session_name = project.get('session_name', '')
         project_path = project.get('project_path', '')
         
+        # CRITICAL: First validate actual implementation exists
+        # This prevents marking empty projects as complete
+        if project_path:
+            try:
+                from implementation_validator import validate_project_implementation
+                if not validate_project_implementation(project_path):
+                    logger.warning(f"Project {session_name} has NO valid implementation - cannot mark complete")
+                    return 'processing', 'Implementation validation failed - no actual code found'
+            except Exception as e:
+                logger.error(f"Error validating implementation: {e}")
+                # Don't mark complete if we can't validate
+                return 'processing', 'Unable to validate implementation'
+        
         # Method 1: Check for completion marker (highest priority)
         if self.check_completion_marker(session_name):
+            # Even with marker, validate implementation
+            if project_path:
+                try:
+                    from implementation_validator import validate_project_implementation
+                    if not validate_project_implementation(project_path):
+                        logger.error(f"Completion marker found but NO IMPLEMENTATION - removing marker")
+                        marker_path = self.tmux_orchestrator_path / 'registry' / 'projects' / session_name / 'COMPLETION_MARKER'
+                        marker_path.unlink(missing_ok=True)
+                        return 'processing', 'Marker found but implementation invalid - removed marker'
+                except:
+                    pass
             return 'completed', 'Completion marker file found'
         
         # Method 2: Check git for completion commits
         if project_path and self.check_git_completion(project_path, session_name):
-            # Auto-create marker if git indicates completion but marker missing
-            self.auto_create_marker(project, 'Git commits indicate completion')
-            return 'completed', 'Git commits indicate completion (marker auto-created)'
+            # Validate implementation before accepting git completion
+            try:
+                from implementation_validator import validate_project_implementation
+                if validate_project_implementation(project_path):
+                    # Auto-create marker if git indicates completion but marker missing
+                    self.auto_create_marker(project, 'Git commits indicate completion')
+                    return 'completed', 'Git commits indicate completion (marker auto-created)'
+                else:
+                    return 'processing', 'Git shows completion commits but implementation is invalid'
+            except:
+                return 'processing', 'Unable to validate git completion'
         
         # Method 3: Check phase completion
         phase_complete, completed_phases, total_phases = self.check_phase_completion(session_name)
         if phase_complete:
-            # Auto-create marker if phases complete but marker missing
-            self.auto_create_marker(project, f'All {total_phases} implementation phases completed')
-            return 'completed', f'All {total_phases} implementation phases completed (marker auto-created)'
+            # Validate implementation before accepting phase completion
+            if project_path:
+                try:
+                    from implementation_validator import validate_project_implementation
+                    if validate_project_implementation(project_path):
+                        # Auto-create marker if phases complete but marker missing
+                        self.auto_create_marker(project, f'All {total_phases} implementation phases completed')
+                        return 'completed', f'All {total_phases} implementation phases completed (marker auto-created)'
+                    else:
+                        return 'processing', f'Phases show complete but implementation is invalid'
+                except:
+                    return 'processing', 'Unable to validate phase completion'
         
         # Method 4: Check for stuck agents (NEW)
         active_agent_count = 0

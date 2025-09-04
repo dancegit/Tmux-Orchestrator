@@ -1,0 +1,20 @@
+[Unit]
+Description=Tmux Orchestrator Queue Error Monitor Timer
+Documentation=https://github.com/anthropics/tmux-orchestrator
+Requires=tmux-queue-error-monitor.service
+
+[Timer]
+# Run every 30 minutes
+OnCalendar=*:00/30
+
+# Run immediately on boot if we missed a scheduled run
+Persistent=true
+
+# Randomize start time by up to 60 seconds to avoid thundering herd
+RandomizedDelaySec=60
+
+# If the service is already running, wait for it to finish
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

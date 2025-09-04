@@ -54,17 +54,60 @@ class CompletionManager:
                 logger.warning("No orchestrator worktree found")
                 return None
             
+            # CRITICAL: Check if enough time has passed (minimum 10 minutes of work)
+            if hasattr(state, 'created_at'):
+                from datetime import datetime
+                try:
+                    created_dt = datetime.fromisoformat(state.created_at.replace('Z', '+00:00'))
+                    elapsed = (datetime.now(created_dt.tzinfo) - created_dt).total_seconds()
+                    if elapsed < 600:  # 10 minutes minimum
+                        logger.debug(f"Project started only {elapsed:.0f}s ago - too early to mark complete")
+                        return None
+                except:
+                    pass
+            
+            # Check for actual implementation files (code-agnostic)
+            has_implementation = False
+            developer_worktree = worktree_paths.get('developer')
+            if developer_worktree:
+                # Check common implementation directories
+                implementation_dirs = ['src', 'lib', 'app', 'components', 'modules', 'packages', 'public', 'dist']
+                code_extensions = [
+                    '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.h',
+                    '.go', '.rs', '.rb', '.php', '.cs', '.swift', '.kt', '.scala',
+                    '.r', '.m', '.mm', '.vue', '.svelte', '.dart', '.lua', '.ex', '.exs',
+                    '.html', '.css', '.scss', '.sass', '.sql', '.sh', '.bash', '.zsh'
+                ]
+                
+                total_files = 0
+                for dir_name in implementation_dirs:
+                    dir_path = developer_worktree / dir_name
+                    if dir_path.exists():
+                        for ext in code_extensions:
+                            code_files = list(dir_path.rglob(f'*{ext}'))
+                            total_files += len(code_files)
+                
+                # Also check root for code files
+                for ext in code_extensions:
+                    root_files = list(developer_worktree.glob(f'*{ext}'))
+                    total_files += len(root_files)
+                
+                has_implementation = total_files >= 3  # Require at least 3 files
+                logger.debug(f"Found {total_files} code files in project")
+            
             # Check completion criteria
             marker_exists = self._check_marker_file(orch_worktree)
             git_merged = self._check_git_merged(state, spec, orch_worktree)
             phases_complete = self._check_phases_complete(state, spec)
             
-            logger.debug(f"Completion checks - Marker: {marker_exists}, Git merged: {git_merged}, Phases: {phases_complete}")
+            logger.debug(f"Completion checks - Marker: {marker_exists}, Git merged: {git_merged}, Phases: {phases_complete}, Implementation: {has_implementation}")
             
-            # All checks must pass for completion
-            if marker_exists and (git_merged or phases_complete):
-                logger.info("All completion criteria met")
+            # Require actual implementation in addition to marker/phases
+            if marker_exists and has_implementation and (git_merged or phases_complete):
+                logger.info("All completion criteria met including actual implementation")
                 return 'completed'
+            elif marker_exists and not has_implementation:
+                logger.warning("Marker exists but no implementation found - not marking as complete")
             
             return None
         except Exception as e:

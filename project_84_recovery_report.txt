@@ -1,0 +1,7 @@
+## Project 84 Recovery Complete
+
+**Root Cause**: Race condition between scheduler marking project as 'processing' and tmux_orchestrator_cli.py duplicate check.
+
+**Solution**: Reset project to 'queued' status with retry_count=1. Project is now ready for processing.
+
+**Next Steps**: Project will be picked up by next scheduler run.

@@ -1,8 +1,9 @@
 #!/bin/bash
 # Extended timeout configuration for long-running projects
 
-# Extend the ProcessManager timeout for auto_orchestrate.py
+# Extend the ProcessManager timeout for orchestration
 export MAX_AUTO_ORCHESTRATE_RUNTIME_SEC=7200  # 2 hours (default: 1800 = 30 minutes)
+# Note: This variable name is kept for backward compatibility
 
 # Extend the phantom detection grace period
 export PHANTOM_GRACE_PERIOD_SEC=3600  # 1 hour (default: 900 = 15 minutes)

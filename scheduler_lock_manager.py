@@ -85,31 +85,57 @@ class SchedulerLockManager:
             return False, f"Error checking process {pid}: {e}"
     
     def _find_existing_schedulers(self) -> list[dict]:
-        """Find all running scheduler processes on the system with same mode"""
+        """Enhanced process detection with strict mode filtering and self-exclusion to prevent false conflicts"""
         schedulers = []
         
         for process in psutil.process_iter(['pid', 'cmdline', 'create_time', 'cwd']):
             try:
+                pid = process.pid
                 cmdline = ' '.join(process.info['cmdline'] or [])
-                if 'scheduler.py' in cmdline and '--daemon' in cmdline:
-                    # Only consider processes with same mode as conflicting
-                    if self.mode != "default":
-                        if f'--mode {self.mode}' not in cmdline:
-                            continue  # Skip processes with different modes
-                    elif '--mode' in cmdline:
-                        continue  # Skip processes with explicit modes when we're in default mode
-                    
-                    is_valid, reason = self._is_scheduler_process(process.pid)
-                    schedulers.append({
-                        'pid': process.pid,
-                        'cmdline': cmdline,
-                        'cwd': process.info.get('cwd', 'unknown'),
-                        'create_time': datetime.fromtimestamp(process.info['create_time']),
-                        'valid': is_valid,
-                        'reason': reason
-                    })
+                
+                # Skip non-scheduler processes
+                if 'scheduler.py' not in cmdline or '--daemon' not in cmdline:
+                    continue
+                
+                # CRITICAL: Exclude the current process to avoid self-detection
+                if pid == os.getpid():
+                    logger.debug(f"Excluding self (PID {pid}) from scheduler detection")
+                    continue
+                
+                # ENHANCED: Strict mode filtering to prevent cross-mode conflicts
+                # For queue mode, only consider other queue processes
+                if self.mode == "queue" and '--mode queue' not in cmdline:
+                    logger.debug(f"Queue mode: skipping non-queue process PID {pid}")
+                    continue
+                
+                # For checkin mode, only consider other checkin processes
+                if self.mode == "checkin" and '--mode checkin' not in cmdline:
+                    logger.debug(f"Checkin mode: skipping non-checkin process PID {pid}")
+                    continue
+                
+                # For default mode, only consider processes without explicit mode
+                if self.mode == "default" and '--mode' in cmdline:
+                    logger.debug(f"Default mode: skipping process with explicit mode PID {pid}")
+                    continue
+                
+                # Additional validation
+                is_valid, reason = self._is_scheduler_process(pid)
+                schedulers.append({
+                    'pid': pid,
+                    'cmdline': cmdline,
+                    'cwd': process.info.get('cwd', 'unknown'),
+                    'create_time': datetime.fromtimestamp(process.info['create_time']),
+                    'valid': is_valid,
+                    'reason': reason
+                })
+                
             except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError):
+                # Skip processes that disappear or can't be accessed
                 continue
+        
+        # Log for debugging (helps diagnose remaining races)
+        valid_count = sum(1 for s in schedulers if s['valid'])
+        logger.debug(f"Found {len(schedulers)} scheduler processes, {valid_count} valid (mode: {self.mode}, PID: {os.getpid()})")
         
         return schedulers
     
@@ -230,20 +256,28 @@ class SchedulerLockManager:
             valid_schedulers = [s for s in existing_schedulers if s['valid']]
             
             if valid_schedulers:
-                # FIXED: Handle systemd restart scenario
+                # CRITICAL FIX: Handle simultaneous systemd restarts with mode-aware waiting
                 if systemd_restart:
-                    logger.warning(f"Systemd restart detected - waiting for {len(valid_schedulers)} existing schedulers to shutdown")
-                    # Wait up to 10 seconds for existing schedulers to shutdown
-                    for attempt in range(20):  # 20 attempts * 0.5s = 10 seconds
-                        time.sleep(0.5)
+                    logger.warning(f"Systemd restart detected with {len(valid_schedulers)} existing schedulers (mode: {self.mode})")
+                    
+                    # Mode-specific wait times to break circular waits:
+                    # - Checkin waits 5s (shorter), then proceeds
+                    # - Queue waits 15s (longer, as it's more critical)
+                    # This ensures checkin starts first, preventing deadlock
+                    wait_time = 15 if self.mode == "queue" else 5
+                    logger.info(f"Waiting {wait_time}s for existing schedulers to exit (mode: {self.mode})")
+                    
+                    for attempt in range(wait_time // 2):  # Check every 2s
+                        time.sleep(2)
                         existing_schedulers = self._find_existing_schedulers()
                         valid_schedulers = [s for s in existing_schedulers if s['valid']]
                         if not valid_schedulers:
-                            logger.info("Existing schedulers have shut down - proceeding with startup")
+                            logger.info("Existing schedulers exited; proceeding with startup")
                             break
-                        logger.debug(f"Attempt {attempt + 1}/20: Still waiting for {len(valid_schedulers)} schedulers to exit")
+                        logger.debug(f"Attempt {attempt + 1}/{wait_time//2}: Still waiting for {len(valid_schedulers)} schedulers")
                     else:
-                        logger.warning("Timeout waiting for existing schedulers - forcing startup")
+                        # Timeout: Proceed anyway to prevent deadlock
+                        logger.warning(f"Timeout waiting for schedulers (mode: {self.mode}); proceeding despite {len(valid_schedulers)} remaining")
                 
                 # After wait, check again
                 existing_schedulers = self._find_existing_schedulers()

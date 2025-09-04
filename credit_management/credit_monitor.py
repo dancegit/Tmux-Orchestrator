@@ -271,9 +271,9 @@ class CreditMonitor:
         """Check all active agents for credit status"""
         # Skip if auto_orchestrate is running (setup in progress)
         try:
-            result = subprocess.run(['pgrep', '-f', 'auto_orchestrate.py'], capture_output=True)
+            result = subprocess.run(['pgrep', '-f', 'orchestration'], capture_output=True)
             if result.returncode == 0:
-                logger.info("auto_orchestrate.py is running, skipping agent monitoring")
+                logger.info("orchestration is running, skipping agent monitoring")
                 return {}
         except:
             pass

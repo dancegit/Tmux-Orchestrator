@@ -3,7 +3,7 @@
 Command-line interface for the modularized Tmux Orchestrator system.
 
 This CLI provides access to both the new modular functionality and
-maintains backward compatibility with the original auto_orchestrate.py system.
+maintains backward compatibility with the original the modular orchestrator system.
 """
 
 import argparse
@@ -204,7 +204,7 @@ Examples:
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
-    # Run orchestrator command - with full auto_orchestrate.py compatibility
+    # Run orchestrator command - with full the modular orchestrator compatibility
     run_parser = subparsers.add_parser('run', help='Run the full orchestrator')
     run_parser.add_argument('--project', '-p', type=str, help='Path to the project directory')
     run_parser.add_argument('--spec', '-s', type=str, help='Path to the specification file')
@@ -220,7 +220,7 @@ Examples:
     run_parser.add_argument('--debug', action='store_true', help='Enable debug output')
     run_parser.add_argument('--dry-run', action='store_true', help='Preview actions without executing')
     
-    # Legacy auto_orchestrate.py arguments for backward compatibility with scheduler
+    # Legacy the modular orchestrator arguments for backward compatibility with scheduler
     run_parser.add_argument('--project-id', type=int, help='Project ID for scheduler callbacks')
     run_parser.add_argument('--batch', action='store_true', help='Enable batch mode (non-interactive)')
     run_parser.add_argument('--daemon', action='store_true', help='Run in daemon mode (unattended with auto-defaults)')

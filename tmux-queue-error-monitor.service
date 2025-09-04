@@ -1,0 +1,42 @@
+[Unit]
+Description=Tmux Orchestrator Queue Error Monitoring Service
+Documentation=https://github.com/anthropics/tmux-orchestrator
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Service runs as clauderun user to access tmux sessions
+User=clauderun
+Group=clauderun
+WorkingDirectory=/home/clauderun/Tmux-Orchestrator
+Environment=TMUX_ORCHESTRATOR_HOME=/home/clauderun/Tmux-Orchestrator
+Environment=HOME=/home/clauderun
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/clauderun/.local/bin
+
+# Ensure tmux server is available (removed - handled in script)
+
+# Run the enhanced self-healing modular implementation script
+ExecStart=/home/clauderun/Tmux-Orchestrator/queue_error_monitor_modular_implementation_enhanced.sh
+
+# Resource limits
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tmux-queue-monitor
+
+# Security settings - relaxed for user service
+NoNewPrivileges=false
+PrivateTmp=false
+ProtectSystem=false
+ProtectHome=false
+
+# Restart on failure
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

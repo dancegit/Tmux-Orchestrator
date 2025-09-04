@@ -580,7 +580,11 @@ Examples:
         if merged_at:
             print(f"     Merged: {format_timestamp(merged_at)}")
         if main_session:
-            session_status = "🟢 ACTIVE" if main_session in active_sessions else "🔴 DEAD"
+            # Don't show session status for completed/merged projects
+            if status in ("completed", "failed") and merged_status == "merged":
+                session_status = "✅ COMPLETED"
+            else:
+                session_status = "🟢 ACTIVE" if main_session in active_sessions else "🔴 DEAD"
             print(f"     Session: {main_session} ({session_status})")
         if error_message:
             print(f"     Error: {error_message[:100]}...")

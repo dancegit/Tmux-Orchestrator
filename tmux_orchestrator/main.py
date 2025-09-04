@@ -2,7 +2,7 @@
 Main entry point for the Tmux Orchestrator system.
 
 This module provides the fully integrated modular system that replaces
-the monolithic auto_orchestrate.py with clean, testable components.
+the legacy monolithic system with clean, testable components.
 """
 
 import sys
@@ -108,7 +108,7 @@ def main():
     """
     Main entry point for the modular Tmux Orchestrator.
     
-    This replaces the monolithic auto_orchestrate.py with a clean,
+    This replaces the legacy monolithic system with a clean,
     modular implementation while maintaining full backward compatibility.
     """
     parser = argparse.ArgumentParser(
@@ -116,7 +116,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    # Core arguments (backward compatible with auto_orchestrate.py)
+    # Core arguments (backward compatible with the modular orchestrator)
     parser.add_argument(
         '--project', '-p',
         type=str,
@@ -495,7 +495,7 @@ def run_enhanced_oauth_diagnostics() -> Dict[str, Any]:
     """
     Run comprehensive OAuth diagnostics using the enhanced modular system.
     
-    This replaces the legacy auto_orchestrate.py dependency with full
+    This replaces the legacy the modular orchestrator dependency with full
     modular OAuth management capabilities including:
     - Proactive conflict detection
     - Batch processing optimization  

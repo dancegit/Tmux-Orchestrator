@@ -57,6 +57,46 @@ else
     "$PARENT_DIR/send-claude-message.sh" "$TARGET" "$MESSAGE"
 fi
 
+# Enhanced verification: Check if message was properly delivered
+sleep 2  # Give message time to be processed
+VERIFICATION_RESULT=$(tmux capture-pane -p -t "$TARGET" -S -10 2>/dev/null)
+
+# Check for stuck MCP patterns that indicate Enter wasn't pressed
+if echo "$VERIFICATION_RESULT" | grep -q "TMUX_MCP_START\|TMUX_MCP_DONE"; then
+    echo "⚠️  Message may be stuck in $TARGET, attempting to fix"
+    
+    # Send Enter to complete the stuck message
+    if tmux send-keys -t "$TARGET" Enter 2>/dev/null; then
+        sleep 1
+        
+        # Verify the fix
+        FIXED_RESULT=$(tmux capture-pane -p -t "$TARGET" -S -5 2>/dev/null)
+        if ! echo "$FIXED_RESULT" | grep -q "TMUX_MCP_START\|TMUX_MCP_DONE"; then
+            echo "✅ Successfully cleared stuck message in $TARGET"
+            
+            # Log the fix attempt
+            FIX_LOG_ENTRY=$(jq -c -n \
+              --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+              --arg target "$TARGET" \
+              --arg action "fixed_stuck_message" \
+              --arg success "true" \
+              '{timestamp: $ts, target: $target, action: $action, success: $success}')
+            echo "$FIX_LOG_ENTRY" >> "$LOG_DIR/message_fixes.jsonl"
+        else
+            echo "❌ Failed to clear stuck message in $TARGET"
+            
+            # Log the failed fix attempt  
+            FIX_LOG_ENTRY=$(jq -c -n \
+              --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+              --arg target "$TARGET" \
+              --arg action "failed_to_fix_stuck_message" \
+              --arg success "false" \
+              '{timestamp: $ts, target: $target, action: $action, success: $success}')
+            echo "$FIX_LOG_ENTRY" >> "$LOG_DIR/message_fixes.jsonl"
+        fi
+    fi
+fi
+
 # Trigger async compliance check if monitor is running
 if pgrep -f "compliance_monitor.py" > /dev/null; then
     # Touch a trigger file to notify the monitor

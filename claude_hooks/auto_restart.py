@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 ORCHESTRATOR_PATH = Path(__file__).parent.parent
-AUTO_ORCHESTRATE_SCRIPT = ORCHESTRATOR_PATH / 'auto_orchestrate.py'
+AUTO_ORCHESTRATE_SCRIPT = ORCHESTRATOR_PATH / 'tmux_orchestrator_cli.py'
 MAX_RESTART_ATTEMPTS = 3
 RESTART_COOLDOWN = 300  # 5 minutes between restart attempts
 
@@ -65,11 +65,11 @@ def should_restart(error_info: Dict[str, Any]) -> bool:
     Returns:
         True if restart should be attempted
     """
-    # Check if auto_orchestrate.py is running (setup in progress)
+    # Check if orchestration is running (setup in progress)
     try:
-        result = subprocess.run(['pgrep', '-f', 'auto_orchestrate.py'], capture_output=True)
+        result = subprocess.run(['pgrep', '-f', 'orchestration'], capture_output=True)
         if result.returncode == 0:
-            logger.info("auto_orchestrate.py is running, skipping restart to avoid interference")
+            logger.info("orchestration is running, skipping restart to avoid interference")
             return False
     except:
         pass
@@ -217,7 +217,7 @@ def get_project_path_for_agent(agent_id: str) -> Path:
 
 def restart_agent(agent_id: str, error_info: Dict[str, Any]) -> bool:
     """
-    Restart a failed agent using auto_orchestrate.py.
+    Restart a failed agent using orchestration.
     
     Args:
         agent_id: Agent identifier (session:window)
