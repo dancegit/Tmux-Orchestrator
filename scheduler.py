@@ -139,6 +139,11 @@ class TmuxOrchestratorScheduler:
         
         # Add configurable concurrency limit (default 1 for sequential processing)
         self.max_concurrent = SchedulerConfig.MAX_CONCURRENT_PROJECTS
+        # ENFORCE single project limit for resource management
+        if self.max_concurrent != 1:
+            logger.warning(f"MAX_CONCURRENT_PROJECTS was {self.max_concurrent}, forcing to 1 for resource management")
+            self.max_concurrent = 1
+        logger.info(f"🔒 Enforcing single project processing limit (max_concurrent={self.max_concurrent})")
         
         # NEW: For re-entrance protection to prevent notification loops
         self.processing_events = set()

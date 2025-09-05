@@ -760,6 +760,8 @@ class SessionOrchestrator:
         from ..core.session_manager import SessionManager
         from ..tmux.session_controller import TmuxSessionController
         from ..agents.agent_factory import AgentFactory
+        from ..agents.briefing_system import BriefingSystem, BriefingContext, ProjectSpec
+        from ..agents.agent_factory import RoleConfig
         from ..git.worktree_manager import WorktreeManager
         from ..tmux.messaging import TmuxMessenger
         
@@ -811,6 +813,12 @@ class SessionOrchestrator:
             # Set up git worktrees for isolation
             self.console.print("[cyan]Setting up git worktrees for agent isolation...[/cyan]")
             self.worktree_paths = self._setup_worktrees(spec, roles_to_deploy)
+            
+            # Validate critical resources in worktrees
+            if not self._validate_worktree_resources(roles_to_deploy):
+                self.console.print("[yellow]⚠️  Warning: Some critical resources are missing in worktrees[/yellow]")
+                # Note: Continue execution but log the warning for now
+                # In future, consider making this a hard failure
             
             # Create tmux session with windows
             self.console.print("[cyan]Creating tmux session and windows...[/cyan]")
@@ -906,6 +914,42 @@ class SessionOrchestrator:
         
         return worktree_paths
     
+    def _validate_worktree_resources(self, roles_to_deploy: List[Tuple[str, str]]) -> bool:
+        """
+        Validate that critical resources exist in worktrees.
+        
+        Args:
+            roles_to_deploy: List of (display_name, role_key) tuples
+            
+        Returns:
+            bool: True if all critical resources exist, False otherwise
+        """
+        all_valid = True
+        missing_resources = []
+        
+        for display_name, role_key in roles_to_deploy:
+            if role_key not in self.worktree_paths:
+                continue
+                
+            worktree_path = self.worktree_paths[role_key]
+            
+            # Check for CLAUDE.md (optional but recommended)
+            claude_md_path = worktree_path / 'CLAUDE.md'
+            if not claude_md_path.exists():
+                missing_resources.append(f"{role_key}/CLAUDE.md")
+                self.console.print(f"[yellow]⚠️  Missing CLAUDE.md in {role_key}'s worktree[/yellow]")
+                # Don't fail for missing CLAUDE.md, just warn
+            
+            # Add more critical resource checks here if needed
+            # For example, check for .git directory, required config files, etc.
+            
+        if missing_resources:
+            self.console.print(f"[yellow]Missing resources: {', '.join(missing_resources)}[/yellow]")
+            # For now, we'll return True to continue execution
+            # In future versions, consider making this return False for critical failures
+            
+        return all_valid
+    
     def _create_tmux_session(self, roles_to_deploy: List[Tuple[str, str]]) -> bool:
         """
         Create tmux session with windows for each role.
@@ -964,7 +1008,7 @@ class SessionOrchestrator:
     
     def _brief_agents(self, spec: ImplementationSpec, roles_to_deploy: List[Tuple[str, str]]):
         """
-        Send initial briefings to all agents with proper MCP approval handling.
+        Send initial briefings to all agents using the BriefingSystem.
         
         Args:
             spec: Implementation specification
@@ -972,6 +1016,22 @@ class SessionOrchestrator:
         """
         import subprocess
         import os
+        import time
+        from pathlib import Path
+        # Import BriefingSystem locally to ensure it's in scope
+        from ..agents.briefing_system import BriefingSystem, BriefingContext, ProjectSpec as BriefingProjectSpec
+        
+        # Initialize BriefingSystem
+        briefing_system = BriefingSystem(self.tmux_orchestrator_path)
+        
+        # Create ProjectSpec from ImplementationSpec
+        project_spec = BriefingProjectSpec(
+            name=spec.project.name,
+            path=str(spec.project.path),
+            type=spec.project.project_type or "generic",
+            main_tech=spec.project.tech_stack or [],
+            description=spec.project.description or ""
+        )
         
         for idx, (window_name, role_key) in enumerate(roles_to_deploy):
             window_target = f"{self.unique_session_name}:{idx}"
@@ -1062,49 +1122,100 @@ class SessionOrchestrator:
             # Wait for Claude to start
             time.sleep(5)
             
-            # Send basic briefing
+            # Generate comprehensive briefing using BriefingSystem
             if role_key in spec.roles:
-                role_config = spec.roles[role_key]
-                briefing = f"""You are the {window_name} for {spec.project.name}.
+                role_config_data = spec.roles[role_key]
                 
-Your responsibilities:
-{chr(10).join(f"- {r}" for r in role_config.responsibilities[:5])}
-
-Project: {spec.project.name}
-Path: {spec.project.path}
-Your worktree: {self.worktree_paths.get(role_key, self.project_path)}
-
-Session: {self.unique_session_name}
-Orchestrator: {self.unique_session_name}:0
-
-Begin work according to your responsibilities."""
+                # Create RoleConfig from spec data
+                role_config = RoleConfig(
+                    role_key=role_key,
+                    window_name=window_name,
+                    agent_prompt=role_config_data.agent_prompt if hasattr(role_config_data, 'agent_prompt') else "",
+                    responsibilities=role_config_data.responsibilities if hasattr(role_config_data, 'responsibilities') else [],
+                    constraints=role_config_data.constraints if hasattr(role_config_data, 'constraints') else [],
+                    autonomy_level=role_config_data.autonomy_level if hasattr(role_config_data, 'autonomy_level') else "guided",
+                    enable_code_execution=role_config_data.enable_code_execution if hasattr(role_config_data, 'enable_code_execution') else True,
+                    worktree_branch=role_config_data.worktree_branch if hasattr(role_config_data, 'worktree_branch') else None
+                )
                 
-                # Send briefing (simplified - using send-keys)
-                # In production, would use the messenger component
-                for line in briefing.split('\n'):
-                    if line:
-                        # Prevent hyphen interpretation by adding space prefix if line starts with hyphen
-                        # This avoids tmux treating lines like "- Task item" as command flags
-                        if line.startswith('-'):
-                            safe_line = ' ' + line
-                        else:
-                            safe_line = line
-                        
-                        result = subprocess.run([
-                            'tmux', 'send-keys', '-t', window_target,
-                            safe_line
-                        ], capture_output=True, text=True)
-                        if result.returncode != 0:
-                            self.console.print(f"[yellow]Warning: Failed to send line to {window_name}: {result.stderr}[/yellow]")
-                        
-                        # Send Enter key separately
-                        subprocess.run([
-                            'tmux', 'send-keys', '-t', window_target, 'Enter'
-                        ], capture_output=True, text=True)
-                        time.sleep(0.1)
+                # Build team members list
+                team_members = [(name, i) for i, (name, _) in enumerate(roles_to_deploy)]
                 
-                self.console.print(f"[green]✓ Briefed {window_name}[/green]")
-
+                # Create BriefingContext
+                context = BriefingContext(
+                    project_spec=project_spec,
+                    role_config=role_config,
+                    session_name=self.unique_session_name,
+                    worktree_path=Path(worktree_path),
+                    team_members=team_members,
+                    git_branch=role_config.worktree_branch or "main",
+                    enable_mcp=needs_mcp_approval
+                )
+                
+                # Generate comprehensive briefing
+                briefing = briefing_system.generate_role_briefing(context)
+                
+                # Send the comprehensive briefing
+                self.console.print(f"[cyan]Sending comprehensive briefing to {window_name}...[/cyan]")
+                
+                # Use the send-direct-message.sh script if available
+                send_script = Path("/home/clauderun/.claude/scripts/send-direct-message.sh")
+                if send_script.exists():
+                    # Save briefing to temp file
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
+                        f.write(briefing)
+                        temp_path = f.name
+                    
+                    # Send using the script
+                    result = subprocess.run([
+                        str(send_script),
+                        self.unique_session_name,
+                        str(idx),
+                        f"< {temp_path}"
+                    ], capture_output=True, text=True, shell=True)
+                    
+                    # Clean up temp file
+                    Path(temp_path).unlink()
+                    
+                    if result.returncode != 0:
+                        self.console.print(f"[yellow]Warning: Failed to send briefing via script: {result.stderr}[/yellow]")
+                        # Fallback to line-by-line sending
+                        self._send_briefing_fallback(window_target, briefing)
+                else:
+                    # Fallback to line-by-line sending
+                    self._send_briefing_fallback(window_target, briefing)
+                
+                self.console.print(f"[green]✓ Sent comprehensive briefing to {window_name}[/green]")
+            else:
+                self.console.print(f"[yellow]Warning: No role config found for {role_key}[/yellow]")
+    
+    def _send_briefing_fallback(self, window_target: str, briefing: str):
+        """Fallback method to send briefing line by line."""
+        import subprocess
+        import time
+        
+        for line in briefing.split('\n'):
+            if line:
+                # Prevent hyphen interpretation by adding space prefix if line starts with hyphen
+                if line.startswith('-'):
+                    safe_line = ' ' + line
+                else:
+                    safe_line = line
+                
+                result = subprocess.run([
+                    'tmux', 'send-keys', '-t', window_target,
+                    safe_line
+                ], capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    self.console.print(f"[yellow]Warning: Failed to send line: {result.stderr}[/yellow]")
+                
+                # Send Enter key separately
+                subprocess.run([
+                    'tmux', 'send-keys', '-t', window_target, 'Enter'
+                ], capture_output=True, text=True)
+                time.sleep(0.05)
 
 class OAuthManager:
     """

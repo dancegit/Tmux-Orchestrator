@@ -16,7 +16,8 @@ class SchedulerConfig:
     
     # Process timeouts and intervals
     POLL_INTERVAL_SEC = int(os.getenv('POLL_INTERVAL_SEC', 60))
-    MAX_CONCURRENT_PROJECTS = int(os.getenv('MAX_CONCURRENT_PROJECTS', 1))
+    # HARDCODED to 1 to prevent resource overload - do not allow env override
+    MAX_CONCURRENT_PROJECTS = 1  # Force single project processing only
     MAX_AUTO_ORCHESTRATE_RUNTIME_SEC = int(os.getenv('MAX_AUTO_ORCHESTRATE_RUNTIME_SEC', 10800))  # 3 hours
     PROCESS_MONITOR_INTERVAL_SEC = int(os.getenv('PROCESS_MONITOR_INTERVAL_SEC', 30))
     

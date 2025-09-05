@@ -13,6 +13,8 @@ import json
 import signal
 import sys
 import subprocess
+import fcntl
+import os
 from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
@@ -51,6 +53,10 @@ class CompletionMonitorDaemon:
         self.running = True
         self.tmux_orchestrator_path = tmux_orchestrator_path or Path(__file__).parent
         
+        # Singleton lock to prevent multiple instances
+        self.lock_file = None
+        self._acquire_singleton_lock()
+        
         # Initialize managers
         self.session_state_manager = SessionStateManager(self.tmux_orchestrator_path)
         self.completion_manager = CompletionManager(self.session_state_manager)
@@ -67,10 +73,40 @@ class CompletionMonitorDaemon:
         
         logger.info(f"Completion Monitor Daemon initialized with {poll_interval}s poll interval")
     
+    def _acquire_singleton_lock(self):
+        """Acquire a file lock to ensure only one instance runs"""
+        lock_path = self.tmux_orchestrator_path / '.completion_monitor.lock'
+        
+        try:
+            self.lock_file = open(lock_path, 'w')
+            fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.lock_file.write(str(os.getpid()))
+            self.lock_file.flush()
+            logger.info(f"Acquired singleton lock (PID: {os.getpid()})")
+        except IOError:
+            if self.lock_file:
+                self.lock_file.close()
+            logger.error("Another instance of CompletionMonitorDaemon is already running!")
+            sys.exit(1)
+    
+    def _release_singleton_lock(self):
+        """Release the singleton lock"""
+        if self.lock_file:
+            try:
+                fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_UN)
+                self.lock_file.close()
+                lock_path = self.tmux_orchestrator_path / '.completion_monitor.lock'
+                if lock_path.exists():
+                    lock_path.unlink()
+                logger.info("Released singleton lock")
+            except Exception as e:
+                logger.error(f"Error releasing lock: {e}")
+    
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully"""
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         self.running = False
+        self._release_singleton_lock()
     
     def get_processing_projects(self) -> List[Dict[str, Any]]:
         """Get all projects that are currently PROCESSING, RECOVERED, or FAILED (for completion verification)"""
@@ -755,6 +791,7 @@ class CompletionMonitorDaemon:
                 time.sleep(10)  # Brief pause before retrying
         
         logger.info("🛑 Completion Monitor Daemon stopped")
+        self._release_singleton_lock()
 
 def main():
     parser = argparse.ArgumentParser(description='Tmux Orchestrator Completion Monitor Daemon')

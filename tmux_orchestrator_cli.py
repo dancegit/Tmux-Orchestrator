@@ -38,6 +38,10 @@ def cmd_run_orchestrator(args):
     """Run the full orchestrator using the modular system."""
     print("🚀 Running Tmux Orchestrator (Modular v2.0)...")
     
+    # ALWAYS force batch mode to limit concurrent teams
+    args.batch = True
+    print("📦 Batch mode enforced - limiting to single active team for resource management")
+    
     # Auto-detect project from spec file if not provided
     if hasattr(args, 'spec') and args.spec and (not hasattr(args, 'project') or not args.project):
         from pathlib import Path
@@ -113,8 +117,10 @@ def cmd_run_orchestrator(args):
         os.environ['SCHEDULER_PROJECT_ID'] = str(args.project_id)
         print(f"📋 Running project ID: {args.project_id}")
     
+    # ALWAYS enable batch mode since we force it
     if hasattr(args, 'batch') and args.batch:
         # Enable non-interactive mode
+        import os
         os.environ['BATCH_MODE'] = '1'
         os.environ['CLAUDE_SKIP_ANALYSIS'] = '1'  # Skip Claude analysis in batch mode
         os.environ['AUTO_CONFIRM'] = '1'  # Auto-confirm all prompts
