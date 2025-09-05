@@ -2806,7 +2806,10 @@ class TmuxOrchestratorScheduler:
                         duration = int(time.time() - project_start_time)
                         
                     except subprocess.CalledProcessError as e:
-                        error_msg = f"Subprocess failed: {e.stderr}"
+                        # Enhanced error logging to capture more details
+                        stderr_content = e.stderr if e.stderr else "No stderr captured"
+                        stdout_content = e.stdout if e.stdout else "No stdout captured"
+                        error_msg = f"Subprocess failed with return code {e.returncode}: stderr={stderr_content}, stdout={stdout_content}, cmd={e.cmd}"
                         self.update_project_status(next_project['id'], 'failed', error_msg)
                         logger.error(error_msg)
                         
