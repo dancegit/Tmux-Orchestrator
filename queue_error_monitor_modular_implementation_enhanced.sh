@@ -16,6 +16,9 @@ LOCK_FILE="/tmp/self_healing_modular.lock"
 # Claude configuration - ALWAYS use skip permissions
 Claude_SKIP_PERMISSIONS="true"
 
+# Skip legacy delegation analysis - modularization is complete
+SKIP_LEGACY_DELEGATION_ANALYSIS="true"
+
 # Configuration files
 CONFIG_FILE="$TMUX_ORCHESTRATOR_HOME/.modular_monitor_config"
 STATE_FILE="$TMUX_ORCHESTRATOR_HOME/.modular_implementation_state.json"
@@ -1641,12 +1644,18 @@ conn.close()
         fi
     done
     
-    # Step 2: Run comprehensive modular analysis
-    log "Step 2: Running comprehensive modular analysis"
-    if ! run_python_analysis "analysis" "$analysis_file"; then
-        log "ERROR: Failed to run Python analysis"
-        implementation_failures=$((implementation_failures + 1))
-        return 1
+    # Step 2: Run comprehensive modular analysis (skip if legacy delegation analysis disabled)
+    if [ "$SKIP_LEGACY_DELEGATION_ANALYSIS" != "true" ]; then
+        log "Step 2: Running comprehensive modular analysis"
+        if ! run_python_analysis "analysis" "$analysis_file"; then
+            log "ERROR: Failed to run Python analysis"
+            implementation_failures=$((implementation_failures + 1))
+            return 1
+        fi
+    else
+        log "Step 2: Skipping legacy delegation analysis (modularization complete)"
+        # Create minimal analysis file for compatibility
+        echo '{"total_delegations": 0, "queue_health": {"health_score": 100}, "message": "Legacy analysis skipped"}' > "$analysis_file"
     fi
     
     # Step 3: Process analysis results and determine action

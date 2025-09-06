@@ -2613,7 +2613,18 @@ class TmuxOrchestratorScheduler:
                     
                     try:
                         # Prepare project_path arg ('auto' if None)
-                        proj_arg = next_project['project_path'] or 'auto'
+                        # CIIS Integration: Use ProjectResolver for CIIS batch specs
+                        proj_arg = next_project['project_path']
+                        if not proj_arg:
+                            # Try to resolve using ProjectResolver for CIIS specs
+                            try:
+                                from tmux_orchestrator.project_resolver import resolve_project_for_orchestrator
+                                resolved_path = resolve_project_for_orchestrator(next_project['spec_path'])
+                                proj_arg = resolved_path
+                                logger.info(f"ProjectResolver: Resolved {next_project['spec_path']} to {resolved_path}")
+                            except Exception as e:
+                                logger.warning(f"ProjectResolver failed for {next_project['spec_path']}: {e}")
+                                proj_arg = 'auto'  # Fallback to original behavior
                         
                         # NEW: Enhanced default resume mode - always attempt auto-resume first
                         logger.info(f"Checking for existing orchestration to resume for {project_name}")

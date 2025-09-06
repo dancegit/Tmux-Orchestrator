@@ -852,21 +852,15 @@ def main():
     
     args = parser.parse_args()
     
-    # SINGLETON PROTECTION: Prevent multiple completion monitor instances
-    lock_manager = SchedulerLockManager(mode="completion")
+    # SINGLETON PROTECTION: The daemon has its own internal lock mechanism
+    # Comment out SchedulerLockManager since it conflicts with scheduler processes
+    # lock_manager = SchedulerLockManager(mode="completion")
     
     try:
-        logger.info("Acquiring completion monitor lock...")
-        if not lock_manager.acquire_lock():
-            logger.error("Another completion monitor daemon is already running!")
-            logger.error("Check with: systemctl status tmux-orchestrator-completion")
-            logger.error("Or kill duplicate processes: ps aux | grep completion_monitor")
-            sys.exit(1)
-        
-        logger.info("✅ Completion monitor lock acquired successfully")
-        
-        # Create and run the daemon
+        logger.info("Starting completion monitor daemon...")
+        # The daemon will acquire its own singleton lock in __init__
         daemon = CompletionMonitorDaemon(poll_interval=args.poll_interval)
+        logger.info("✅ Completion monitor daemon initialized successfully")
         
         if args.test:
             logger.info("Running test monitoring cycle...")
@@ -881,12 +875,8 @@ def main():
         logger.error(f"Completion monitor daemon error: {e}")
         raise
     finally:
-        # Always release the lock
-        try:
-            lock_manager.release_lock()
-            logger.info("Completion monitor lock released")
-        except Exception as e:
-            logger.warning(f"Error releasing completion monitor lock: {e}")
+        # The daemon releases its own lock in its destructor
+        logger.info("Completion monitor daemon shutting down")
 
 if __name__ == '__main__':
     main()

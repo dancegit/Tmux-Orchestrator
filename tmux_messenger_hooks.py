@@ -16,6 +16,15 @@ from typing import Optional, Dict, Any
 sys.path.insert(0, str(Path(__file__).parent / 'claude_hooks'))
 from enqueue_message import enqueue_message, enqueue_batch, get_queue_status
 
+# Import MCP utilities for centralized cleaning and detection
+from mcp_utils import (
+    clean_mcp_wrappers, 
+    detect_mcp_usage, 
+    validate_message_for_queue,
+    log_mcp_violation,
+    add_enter_key_safety
+)
+
 logger = logging.getLogger(__name__)
 
 class TmuxMessengerHooks:
@@ -52,14 +61,26 @@ class TmuxMessengerHooks:
     
     def _send_via_queue(self, target: str, message: str, priority: int = 0,
                        project_name: Optional[str] = None) -> bool:
-        """Send message via hooks-based queue."""
+        """Send message via hooks-based queue with MCP detection."""
         try:
-            # Clean message before enqueueing
-            clean_message = self.clean_message_from_mcp_wrappers(message)
+            # Validate and clean message using centralized MCP utilities
+            is_valid, clean_message, rejection_reason = validate_message_for_queue(message, target)
             
-            if not clean_message:
-                logger.warning(f"Message was empty after cleaning, skipping enqueue to {target}")
-                return True
+            if not is_valid:
+                if rejection_reason.startswith("MCP contamination"):
+                    # Log MCP violation for monitoring
+                    log_mcp_violation(target, message, "Queue enqueue blocked")
+                    logger.error(f"MCP usage detected in message to {target}. Message rejected.")
+                    # Send warning to agent
+                    warning_msg = "WARNING: MCP tmux commands detected. Use scm or send-monitored-message.sh instead."
+                    enqueue_message(agent_id=target, message=warning_msg, priority=90)
+                    return False
+                else:
+                    logger.warning(f"Message rejected for {target}: {rejection_reason}")
+                    return True  # Empty message is not an error
+            
+            # Add Enter key safety for execution
+            clean_message = add_enter_key_safety(clean_message)
             
             # Enqueue the message
             msg_id = enqueue_message(
@@ -84,12 +105,16 @@ class TmuxMessengerHooks:
             return self._send_direct(target, message)
     
     def _send_direct(self, target: str, message: str) -> bool:
-        """Send message directly using existing push-based method."""
-        # Clean message first
-        clean_message = self.clean_message_from_mcp_wrappers(message)
+        """Send message directly using existing push-based method with MCP blocking."""
+        # Validate and clean message using centralized utilities
+        is_valid, clean_message, rejection_reason = validate_message_for_queue(message, target)
         
-        if not clean_message:
-            logger.warning(f"Message was empty after cleaning, skipping send to {target}")
+        if not is_valid:
+            if "MCP" in rejection_reason:
+                log_mcp_violation(target, message, "Direct send blocked")
+                logger.error(f"MCP detected in direct send to {target} - aborting")
+                return False
+            logger.warning(f"Message rejected for {target}: {rejection_reason}")
             return True
         
         # Use enhanced send script
@@ -160,12 +185,18 @@ class TmuxMessengerHooks:
         """
         if self.use_hooks:
             try:
-                # Clean all messages first
+                # Validate and clean all messages using centralized utilities
+                valid_messages = []
                 for msg in messages:
-                    msg['message'] = self.clean_message_from_mcp_wrappers(msg['message'])
+                    is_valid, cleaned, reason = validate_message_for_queue(msg['message'], msg['agent_id'])
+                    if is_valid:
+                        msg['message'] = add_enter_key_safety(cleaned)
+                        valid_messages.append(msg)
+                    elif "MCP" in reason:
+                        log_mcp_violation(msg['agent_id'], msg['message'], "Batch send blocked")
+                        logger.error(f"MCP detected in batch message to {msg['agent_id']}")
                 
-                # Filter out empty messages
-                messages = [m for m in messages if m['message']]
+                messages = valid_messages
                 
                 if not messages:
                     logger.warning("All messages were empty after cleaning")
@@ -203,57 +234,8 @@ class TmuxMessengerHooks:
             return {"mode": "push", "queue_enabled": False, "note": "Hooks disabled - using legacy push mode"}
     
     def clean_message_from_mcp_wrappers(self, message: str) -> str:
-        """Enhanced MCP wrapper removal to handle all contamination patterns."""
-        import re
-        
-        original = message
-        
-        # Comprehensive MCP wrapper patterns
-        patterns = [
-            # Common MCP wrappers
-            r'^echo\s+[\'"]TMUX_MCP_START[\'"];\s*',
-            r';\s*echo\s+[\'"]TMUX_MCP_DONE_\$\?[\'"]$',
-            r'echo\s+[\'"]TMUX_MCP_START[\'"];\s*',
-            r';\s*echo\s+[\'"]TMUX_MCP_DONE_\$\?[\'"]',
-            
-            # Alternative wrapper patterns  
-            r'echo\s+TMUX_MCP_START;\s*',
-            r';\s*echo\s+TMUX_MCP_DONE_\$\?',
-            r'echo\s+[\'"]MCP_EXECUTE_START[\'"];\s*',
-            r';\s*echo\s+[\'"]MCP_EXECUTE_END_\$\?[\'"]',
-            
-            # Shell execution wrappers
-            r'bash\s+-c\s+[\'"]echo\s+[\'"]?TMUX_MCP_START[\'"]?;\s*',
-            r';\s*echo\s+[\'"]?TMUX_MCP_DONE_\$\?[\'"]?[\'"]',
-            
-            # Command substitution patterns
-            r'\$\(\s*echo\s+[\'"]TMUX_MCP_START[\'"];\s*',
-            r';\s*echo\s+[\'"]TMUX_MCP_DONE_\$\?[\'"]?\s*\)',
-            
-            # Inline wrapper remnants
-            r'TMUX_MCP_START\s*;?\s*',
-            r';\s*TMUX_MCP_DONE_\$\?\s*',
-        ]
-        
-        # Apply patterns iteratively
-        for _ in range(3):
-            before = message
-            for pattern in patterns:
-                message = re.sub(pattern, '', message)
-            if message == before:
-                break
-        
-        # Clean up artifacts
-        message = re.sub(r';\s*;', ';', message)  # Double semicolons
-        message = re.sub(r'^\s*;\s*', '', message)  # Leading semicolon
-        message = re.sub(r'\s*;\s*$', '', message)  # Trailing semicolon
-        message = re.sub(r'\s+', ' ', message)  # Multiple spaces
-        message = message.strip()
-        
-        if len(original) > len(message) + 20:
-            logger.debug(f"Cleaned MCP wrappers: {len(original)} → {len(message)} chars")
-        
-        return message
+        """Legacy wrapper for backward compatibility. Uses centralized MCP utilities."""
+        return clean_mcp_wrappers(message)
 
 # Create a backward-compatible class that can be imported as TmuxMessenger
 class TmuxMessenger(TmuxMessengerHooks):

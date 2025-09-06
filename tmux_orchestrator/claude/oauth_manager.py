@@ -64,7 +64,10 @@ class Project(BaseModel):
     name: str
     path: str
     type: str
+    project_type: Optional[str] = None  # Alias for type, used by briefing system
+    tech_stack: Optional[List[str]] = None  # Alias for main_tech, used by briefing system
     main_tech: List[str]
+    description: Optional[str] = None  # Project description for briefings
 
 class GitWorkflow(BaseModel):
     """Git workflow configuration for the project."""
@@ -1226,14 +1229,17 @@ class OAuthManager:
     extensive testing and should not be modified without comprehensive testing.
     """
     
-    def __init__(self, oauth_port: int = None):
+    def __init__(self, oauth_port: int = None, port_pool: List[int] = None):
         """
-        Initialize OAuth manager.
+        Initialize OAuth manager with port pooling support.
         
         Args:
-            oauth_port: OAuth port to manage (defaults to CLAUDE_OAUTH_PORT env var or 3000)
+            oauth_port: Primary OAuth port to manage (defaults to CLAUDE_OAUTH_PORT env var or 3000)
+            port_pool: Pool of ports for parallel agent initialization (defaults to [3000, 3001, 3002, 3003, 3004])
         """
         self.oauth_port = oauth_port or int(os.environ.get('CLAUDE_OAUTH_PORT', '3000'))
+        self.port_pool = port_pool or [3000, 3001, 3002, 3003, 3004]
+        console.print(f"[blue]🔧 OAuth Manager initialized with port pool: {self.port_pool}[/blue]")
     
     def is_port_free(self, port: int = None) -> bool:
         """
@@ -1286,7 +1292,7 @@ class OAuthManager:
             # If all commands fail, assume port is free (optimistic)
             return True
 
-    def wait_for_port_free(self, port: int = None, max_wait: int = 60) -> bool:
+    def wait_for_port_free(self, port: int = None, max_wait: int = 120) -> bool:
         """
         Wait for OAuth port to become free with enhanced batch processing support.
         
@@ -1366,7 +1372,7 @@ class OAuthManager:
         console.print(f"[green]✓ OAuth port {self.oauth_port} is available - proceeding with MCP initialization[/green]")
         return True
 
-    def wait_after_window_kill(self, max_wait: int = 45) -> bool:
+    def wait_after_window_kill(self, max_wait: int = 120) -> bool:
         """
         Wait for OAuth port release after killing a tmux window.
         
@@ -1407,44 +1413,60 @@ class OAuthManager:
         
         return True
 
-    def wait_after_claude_exit(self, max_wait: int = 60) -> bool:
+    def wait_after_claude_exit(self, max_wait: int = 120) -> bool:
         """
-        Wait for OAuth port release after Claude exits.
+        Wait for OAuth port release after Claude exits with exponential backoff.
         
-        CRITICAL OAUTH PORT WAIT AFTER CLAUDE EXIT - DO NOT REDUCE THESE TIMEOUTS!
+        CRITICAL OAUTH PORT WAIT AFTER CLAUDE EXIT - Enhanced with exponential backoff!
         
         After sending /exit to Claude, the OAuth server needs time to shut down
         and release port 3000. This is ESPECIALLY critical during BATCH PROCESSING
         where multiple projects are starting Claude instances in rapid succession.
         
-        Technical details requiring the 60-second timeout:
+        Technical details requiring the 120-second timeout:
         1. Claude graceful shutdown process (10-20s)
         2. OAuth server cleanup and socket release (10-20s)
         3. Node.js event loop cleanup (5-10s)
         4. System socket release under load (10-30s)
         5. Buffer for batch processing delays (additional 15-20s)
+        6. ENHANCED: Exponential backoff for efficiency (NEW)
         
-        MINIMUM 60 SECONDS REQUIRED for reliable batch processing
+        MINIMUM 120 SECONDS REQUIRED for reliable batch processing
         
         Args:
-            max_wait: Maximum wait time in seconds (default 60s)
+            max_wait: Maximum wait time in seconds (default 120s)
             
         Returns:
             bool: True if port became free, False if timeout
         """
         console.print(f"[yellow]⏳ Waiting for Claude OAuth server on port {self.oauth_port} to shut down...[/yellow]")
         
-        success = self.wait_for_port_free(self.oauth_port, max_wait=max_wait)
+        # Enhanced exponential backoff implementation
+        backoff = 1  # Start with 1s delay
+        total_wait = 0
+        port = self.oauth_port
         
-        if not success:
-            console.print(f"[red]⚠️ CRITICAL: OAuth port {self.oauth_port} still in use after {max_wait}s![/red]")
-            console.print(f"[red]This WILL cause batch processing failures and port conflicts![/red]")
+        while total_wait < max_wait:
+            # Check if port is free using multiple detection methods
+            if self.is_port_free(port):
+                console.print(f"[green]✓ OAuth port {port} available after {total_wait}s[/green]")
+                return True
             
-            # Enhanced debugging for persistent port blocks
-            self._diagnose_persistent_port_block()
-            return False
+            console.print(f"[yellow]⏳ Waiting for OAuth port {port} release... ({total_wait}s/{max_wait}s)[/yellow]")
+            
+            # Exponential backoff with cap
+            time.sleep(backoff)
+            total_wait += backoff
+            backoff = min(backoff * 2, 10)  # Double delay, cap at 10s
         
-        return True
+        # Timeout reached - enhanced diagnostics
+        console.print(f"[red]⚠️ CRITICAL: OAuth port {self.oauth_port} still in use after {max_wait}s![/red]")
+        console.print(f"[red]This WILL cause batch processing failures and port conflicts![/red]")
+        console.print("[red]Suggestion: Check for stuck Claude processes with 'ps aux | grep claude' and kill if needed[/red]")
+        
+        # Enhanced debugging for persistent port blocks
+        self._diagnose_persistent_port_block()
+        return False
 
     def _diagnose_port_conflict(self):
         """Provide diagnostic information for OAuth port conflicts."""
@@ -1537,7 +1559,7 @@ class OAuthManager:
         console.print(f"[green]✓ OAuth port {self.oauth_port} is available - proceeding with MCP initialization[/green]")
         return True
     
-    def wait_after_claude_shutdown(self, max_wait: int = 60) -> bool:
+    def wait_after_claude_shutdown(self, max_wait: int = 120) -> bool:
         """
         Critical OAuth port wait after Claude /exit command.
         
@@ -1642,7 +1664,7 @@ class OAuthManager:
             'recommendations': recommendations
         }
     
-    def wait_for_port_available(self, max_wait: int = 60) -> bool:
+    def wait_for_port_available(self, max_wait: int = 120) -> bool:
         """
         Enhanced port availability check with comprehensive diagnostics.
         
@@ -1677,3 +1699,46 @@ class OAuthManager:
                 console.print(f"  - {rec}")
         
         return success
+    
+    def acquire_port_from_pool(self) -> Optional[int]:
+        """
+        Acquire a free port from the pool for parallel agent initialization.
+        
+        This enables multiple agents to start simultaneously without OAuth conflicts.
+        Essential for future parallel deployment capabilities.
+        
+        Returns:
+            int: Available port from pool, None if all ports busy
+        """
+        console.print("[cyan]🔍 Acquiring port from pool for agent initialization...[/cyan]")
+        
+        for port in self.port_pool:
+            if self.is_port_free(port):
+                console.print(f"[green]✓ Acquired port {port} from pool[/green]")
+                return port
+        
+        console.print("[red]❌ No ports available in pool - reverting to sequential mode[/red]")
+        return None
+    
+    def release_port_to_pool(self, port: int, max_wait: int = 120) -> bool:
+        """
+        Release a port back to the pool after agent initialization.
+        
+        Args:
+            port: Port to release
+            max_wait: Maximum wait time for release
+            
+        Returns:
+            bool: True if port was successfully released
+        """
+        console.print(f"[cyan]🔓 Releasing port {port} back to pool...[/cyan]")
+        return self.wait_for_port_free(port, max_wait)
+    
+    def get_available_ports(self) -> List[int]:
+        """
+        Get list of currently available ports from the pool.
+        
+        Returns:
+            List of available port numbers
+        """
+        return [port for port in self.port_pool if self.is_port_free(port)]

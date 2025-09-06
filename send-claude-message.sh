@@ -96,6 +96,13 @@ verify_message_delivered() {
         # Capture recent pane content
         local captured=$(tmux capture-pane -p -t "$window" -S -50 2>/dev/null | tail -30)
         
+        # Check for MCP patterns that indicate unexecuted commands
+        if echo "$captured" | grep -q "TMUX_MCP_DONE"; then
+            echo "⚠️  MCP pattern detected in pane - message likely unexecuted. Sending Enter key."
+            tmux send-keys -t "$window" C-m
+            sleep 1
+        fi
+        
         # Check if our message appears in the captured content
         if echo "$captured" | grep -F "$message" >/dev/null 2>&1; then
             # Check for Claude response indicators
