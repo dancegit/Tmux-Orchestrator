@@ -85,6 +85,108 @@ class ClaudeInitializer:
         console.print(f"[green]✅ MCP initialization complete for {role_key}[/green]")
         return True
     
+    def initialize_claude_with_preapproved_mcp(self, session_name: str, window_idx: int, role_key: str, worktree_path: str) -> bool:
+        """
+        IMPROVED: Initialize Claude with pre-approved MCP configuration.
+        
+        This method uses the simplified approach with settings.local.json pre-approval:
+        
+        1. Ensure .claude directory exists in worktree
+        2. Copy pre-approved settings.local.json to worktree/.claude/
+        3. Start Claude with --dangerously-skip-permissions
+        4. MCP tools are immediately available (no manual approval needed)
+        
+        This eliminates the complex two-phase initialization and OAuth timing issues.
+        
+        Args:
+            session_name: Tmux session name
+            window_idx: Window index for the agent
+            role_key: Role identifier (for logging)
+            worktree_path: Path to agent's worktree directory
+            
+        Returns:
+            bool: True if initialization succeeded, False otherwise
+        """
+        console.print(f"[blue]🚀 Starting simplified MCP initialization for {role_key}...[/blue]")
+        
+        # Step 1: Set up pre-approved MCP settings
+        success = self._setup_preapproved_mcp_settings(worktree_path, role_key)
+        if not success:
+            console.print(f"[red]❌ Failed to setup MCP settings for {role_key}[/red]")
+            return False
+        
+        # Step 2: Start Claude with --dangerously-skip-permissions
+        success = self._start_claude_with_mcp(session_name, window_idx, role_key)
+        if not success:
+            console.print(f"[red]❌ Failed to start Claude for {role_key}[/red]")
+            return False
+            
+        console.print(f"[green]✅ Simplified MCP initialization complete for {role_key}[/green]")
+        return True
+    
+    def _setup_preapproved_mcp_settings(self, worktree_path: str, role_key: str) -> bool:
+        """Set up pre-approved MCP settings in agent worktree."""
+        import json
+        import shutil
+        from pathlib import Path
+        
+        try:
+            worktree = Path(worktree_path)
+            claude_dir = worktree / ".claude"
+            settings_file = claude_dir / "settings.local.json"
+            
+            # Create .claude directory
+            claude_dir.mkdir(exist_ok=True)
+            
+            # Master settings path
+            master_settings = Path("/home/clauderun/Tmux-Orchestrator/.claude/settings.local.json")
+            
+            if master_settings.exists():
+                shutil.copy2(master_settings, settings_file)
+                console.print(f"[blue]📋 Copied master MCP settings to {role_key} worktree[/blue]")
+            else:
+                # Default MCP configuration
+                default_config = {
+                    "enabledMcpjsonServers": [
+                        "grok", "tmux", "context7", "supabase", 
+                        "brave-search", "puppeteer", "firecrawl", "playwright"
+                    ],
+                    "enableAllProjectMcpServers": True
+                }
+                
+                with open(settings_file, 'w') as f:
+                    json.dump(default_config, f, indent=2)
+                console.print(f"[blue]📋 Created default MCP settings for {role_key}[/blue]")
+            
+            return True
+            
+        except Exception as e:
+            console.print(f"[red]❌ Error setting up MCP settings for {role_key}: {e}[/red]")
+            return False
+    
+    def _start_claude_with_mcp(self, session_name: str, window_idx: int, role_key: str) -> bool:
+        """Start Claude with --dangerously-skip-permissions (MCP pre-approved)."""
+        import subprocess
+        import time
+        
+        try:
+            # Start Claude with --dangerously-skip-permissions
+            subprocess.run([
+                'tmux', 'send-keys', '-t', f'{session_name}:{window_idx}',
+                'claude --dangerously-skip-permissions', 'Enter'
+            ])
+            
+            console.print(f"[blue]⚡ Starting Claude with pre-approved MCP for {role_key}...[/blue]")
+            
+            # Brief wait for Claude startup (much shorter than the old method)
+            time.sleep(5)
+            
+            return True
+            
+        except Exception as e:
+            console.print(f"[red]❌ Error starting Claude for {role_key}: {e}[/red]")
+            return False
+    
     def _phase1_mcp_configuration(self, session_name: str, window_idx: int, role_key: str) -> bool:
         """
         Phase 1: Start Claude and accept MCP configuration.

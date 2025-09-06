@@ -48,6 +48,20 @@ from tmux_session_manager import TmuxSessionManager  # Required for safe tmux op
 # Phase 1: Import from modular components
 from scheduler_modules.dependency_checker import DependencyChecker
 from scheduler_modules.config import SchedulerConfig
+
+# Default check-in intervals for agent roles (in minutes)
+DEFAULT_CHECK_IN_INTERVALS = {
+    'orchestrator': 20,  # minutes
+    'project_manager': 25,
+    'pm': 25,  # alias for compatibility
+    'developer': 30,
+    'tester': 30,
+    'testrunner': 30,
+    'sysadmin': 30,
+    'devops': 30,
+    'securityops': 30,
+}
+DEFAULT_FALLBACK_INTERVAL = 30  # For unknown roles
 from scheduler_modules import utils
 
 # Phase 2: Import monitoring and recovery modules
@@ -1500,6 +1514,85 @@ class TmuxOrchestratorScheduler:
             except Exception as e:
                 logger.error(f"Error in event callback {callback.__name__}: {e}")
     
+    def _auto_schedule_check_ins(self, project_id: int, session_name: str):
+        """
+        Automatically schedule check-in tasks for all agents in a project.
+        Called after tmux session creation and validation.
+        
+        Args:
+            project_id: The project ID from the queue.
+            session_name: The tmux session name.
+        """
+        logger.info(f"🤖 Auto-scheduling check-ins for project {project_id} ({session_name})")
+        
+        # Standard roles with their window indices
+        standard_roles = [
+            {'role': 'orchestrator', 'window_idx': 0},
+            {'role': 'project_manager', 'window_idx': 1},
+            {'role': 'developer', 'window_idx': 2},
+            {'role': 'tester', 'window_idx': 3},
+            {'role': 'testrunner', 'window_idx': 4},
+        ]
+        
+        try:
+            with self.queue_lock:  # Use existing lock for thread safety
+                cursor = self.conn.cursor()
+                
+                # Prepare batch insert data
+                check_in_tasks = []
+                for role_info in standard_roles:
+                    role = role_info.get('role', '').lower().replace('-', '_')
+                    window_idx = role_info.get('window_idx', 0)
+                    interval = DEFAULT_CHECK_IN_INTERVALS.get(role, DEFAULT_FALLBACK_INTERVAL)
+                    
+                    # Check for existing task to avoid duplicates (idempotency)
+                    cursor.execute("""
+                        SELECT id FROM tasks 
+                        WHERE session_name = ? AND agent_role = ? AND window_index = ?
+                    """, (session_name, role.title().replace('_', ' '), window_idx))
+                    
+                    if cursor.fetchone():
+                        logger.debug(f"Check-in already exists for {role} in {session_name} - skipping")
+                        continue
+                    
+                    # Prepare task data
+                    next_run_time = time.time() + (interval * 60)
+                    note = f"{role.title().replace('_', ' ')} regular check-in"
+                    
+                    check_in_tasks.append((
+                        session_name,
+                        role.title().replace('_', ' '),  # Convert to title case for display
+                        window_idx,
+                        next_run_time,
+                        interval,
+                        note,
+                        None,  # last_run
+                        time.time()  # created_at
+                    ))
+                
+                if check_in_tasks:
+                    # Batch insert for performance
+                    cursor.executemany("""
+                        INSERT INTO tasks (session_name, agent_role, window_index, next_run, 
+                                         interval_minutes, note, last_run, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, check_in_tasks)
+                    
+                    self.conn.commit()
+                    logger.info(f"✅ Auto-scheduled {len(check_in_tasks)} check-in tasks for project {project_id} ({session_name})")
+                    
+                    # Log the scheduled tasks for visibility
+                    for task in check_in_tasks:
+                        logger.debug(f"  - {task[1]} (window {task[2]}): every {task[4]} minutes")
+                else:
+                    logger.debug(f"No new check-in tasks needed for project {project_id} (all already exist)")
+                    
+        except sqlite3.Error as e:
+            logger.error(f"Failed to auto-schedule check-ins for project {project_id}: {e}")
+            self.conn.rollback()  # Rollback on error
+        except Exception as e:
+            logger.error(f"Unexpected error in check-in scheduling for project {project_id}: {e}", exc_info=True)
+    
     def process_signal_files(self) -> int:
         """Process signal files for reset operations"""
         processed = 0
@@ -2818,6 +2911,10 @@ class TmuxOrchestratorScheduler:
                             """, (discovered_session_name, next_project['id']))
                             self.conn.commit()
                             logger.info(f"✅ FIXED: Stored session name '{discovered_session_name}' for project {next_project['id']}")
+                            
+                            # AUTO-SCHEDULE CHECK-INS: Create scheduled check-ins for all agents
+                            self._auto_schedule_check_ins(next_project['id'], discovered_session_name)
+                            
                         except Exception as e:
                             logger.error(f"❌ Failed to store session name for project {next_project['id']}: {e}")
                         
@@ -3541,6 +3638,99 @@ These projects require manual review and intervention.
             cursor = self.conn.cursor()
             cursor.execute("UPDATE project_queue SET session_name = ? WHERE id = ?", (session_name, project_id))
             logger.info(f"Updated session_name for project {project_id} to {session_name}")
+    
+    def discover_and_update_session_names(self):
+        """Proactively discover and update missing session names for processing projects"""
+        try:
+            # Get active tmux sessions
+            result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                logger.debug("No active tmux sessions found")
+                return
+                
+            active_sessions = set(result.stdout.strip().split('\n')) if result.stdout.strip() else set()
+            if not active_sessions:
+                return
+            
+            with self.queue_lock:
+                cursor = self.conn.cursor()
+                # Find processing projects with NULL session names
+                cursor.execute("""
+                    SELECT id, project_name, spec_path, project_path 
+                    FROM project_queue 
+                    WHERE session_name IS NULL 
+                    AND status = 'processing'
+                """)
+                
+                projects_to_update = cursor.fetchall()
+                if not projects_to_update:
+                    return
+                
+                logger.info(f"🔍 Discovering session names for {len(projects_to_update)} projects with NULL session_name")
+                updated_count = 0
+                
+                for project_id, project_name, spec_path, project_path in projects_to_update:
+                    matching_session = None
+                    
+                    # Strategy 1: Direct project name matching
+                    if project_name:
+                        matching_session = next((s for s in active_sessions if project_name in s), None)
+                    
+                    # Strategy 2: CIIS batch pattern matching
+                    if not matching_session and spec_path:
+                        from pathlib import Path
+                        spec_name = Path(spec_path).stem
+                        
+                        if 'batch_prop-' in spec_name:
+                            # Extract date from batch spec (e.g., batch_prop-20250905165836-1)
+                            parts = spec_name.split('-')
+                            if len(parts) >= 3:
+                                date_part = parts[1][:8]  # Take first 8 chars (YYYYMMDD)
+                                # Look for batch-prop-YYYYMMDD pattern in session names
+                                matching_session = next((s for s in active_sessions 
+                                                       if s.startswith('batch-prop-') and date_part in s), None)
+                        
+                        elif 'prop-' in spec_name:
+                            # Handle standalone proposals
+                            prop_parts = spec_name.replace('prop-', '').split('_')[0]
+                            if len(prop_parts) >= 8:
+                                date_part = prop_parts[:8]
+                                matching_session = next((s for s in active_sessions 
+                                                       if 'prop-' in s and date_part in s), None)
+                    
+                    # Strategy 3: Project path basename matching
+                    if not matching_session and project_path:
+                        from pathlib import Path
+                        project_basename = Path(project_path).name
+                        # Try matching parts of the project path
+                        path_parts = project_basename.split('-')[:3]  # Take first 3 parts
+                        for part in path_parts:
+                            if len(part) > 4:  # Only meaningful parts
+                                matching_session = next((s for s in active_sessions if part in s), None)
+                                if matching_session:
+                                    break
+                    
+                    if matching_session:
+                        cursor.execute("""
+                            UPDATE project_queue 
+                            SET session_name = ?, orchestrator_session = ?
+                            WHERE id = ?
+                        """, (matching_session, matching_session, project_id))
+                        logger.info(f"✅ Discovered session name for project {project_id}: {matching_session}")
+                        updated_count += 1
+                        active_sessions.discard(matching_session)  # Prevent duplicate assignments
+                    else:
+                        logger.debug(f"No session found for project {project_id} (spec: {spec_path})")
+                
+                if updated_count > 0:
+                    self.conn.commit()
+                    logger.info(f"📝 Updated session names for {updated_count} processing projects")
+                else:
+                    logger.debug("No session names discovered for NULL projects")
+                        
+        except Exception as e:
+            logger.error(f"Failed to discover session names: {e}")
     
     def stop_monitoring(self):
         """Stop the batch monitoring thread"""

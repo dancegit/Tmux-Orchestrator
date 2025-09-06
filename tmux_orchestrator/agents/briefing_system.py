@@ -67,12 +67,13 @@ class BriefingSystem:
         modules_path = tmux_orchestrator_path / 'docs' / 'claude_modules'
         self.module_loader = ModuleLoader(modules_path)
     
-    def generate_role_briefing(self, context: BriefingContext) -> str:
+    def generate_role_briefing(self, context: BriefingContext, write_claude_md: bool = True) -> str:
         """
         Generate a comprehensive briefing for a specific role.
         
         Args:
             context: Briefing context with project and role information
+            write_claude_md: Whether to write role-specific CLAUDE.md to worktree
             
         Returns:
             str: Complete briefing text for the agent
@@ -132,8 +133,115 @@ class BriefingSystem:
         
         briefing = "\n\n".join(components)
         
+        # Write role-specific CLAUDE.md file to worktree if requested
+        if write_claude_md:
+            try:
+                claude_md_content = self._create_role_specific_claude_md(context, briefing)
+                claude_md_path = context.worktree_path / 'CLAUDE.md'
+                
+                with open(claude_md_path, 'w', encoding='utf-8') as f:
+                    f.write(claude_md_content)
+                
+                console.print(f"[green]✓ Created role-specific CLAUDE.md for {role} at {claude_md_path}[/green]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not write role-specific CLAUDE.md: {e}[/yellow]")
+        
         console.print(f"[green]✓ Generated {len(briefing)} character briefing for {role}[/green]")
         return briefing
+    
+    def _create_role_specific_claude_md(self, context: BriefingContext, briefing: str) -> str:
+        """
+        Create a role-specific CLAUDE.md file with relevant modular content.
+        
+        Args:
+            context: Briefing context with project and role information
+            briefing: The generated briefing content
+            
+        Returns:
+            str: Complete CLAUDE.md content for the role
+        """
+        role_key = context.role_config.window_name.lower().replace('-', '_') if context.role_config.window_name else "generic"
+        role_name = context.role_config.window_name or "Agent"
+        
+        # Load role-specific modules from the modular knowledge base
+        role_specific_content = ""
+        try:
+            role_modules = self.module_loader.load_for_role(role_key)
+            if role_modules and not role_modules.get('legacy_notice'):
+                # Format the loaded modules into a comprehensive CLAUDE.md
+                if role_modules.get('core_modules'):
+                    role_specific_content += "\n## Core Principles\n\n"
+                    for module_name, content in role_modules['core_modules'].items():
+                        role_specific_content += f"### {module_name.replace('_', ' ').title()}\n\n{content}\n\n"
+                
+                if role_modules.get('role_modules'):
+                    role_specific_content += "\n## Role-Specific Instructions\n\n"
+                    for module_name, content in role_modules['role_modules'].items():
+                        role_specific_content += f"### {module_name.replace('_', ' ').title()}\n\n{content}\n\n"
+                
+                if role_modules.get('workflow_modules'):
+                    role_specific_content += "\n## Workflow Guidelines\n\n"
+                    for module_name, content in role_modules['workflow_modules'].items():
+                        role_specific_content += f"### {module_name.replace('_', ' ').title()}\n\n{content}\n\n"
+                        
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load modular content for CLAUDE.md: {e}[/yellow]")
+            # Fall back to basic project information
+            role_specific_content = f"""
+## Role Instructions
+
+As the {role_name} for this project, focus on your core responsibilities:
+{chr(10).join(f'- {r}' for r in context.role_config.responsibilities)}
+
+Refer to the main Tmux Orchestrator documentation at `{self.tmux_orchestrator_path}/CLAUDE.md` for general guidance.
+"""
+
+        # Create the complete CLAUDE.md content
+        claude_md_content = f"""# {context.project_spec.name} - {role_name} Instructions
+
+## Project Overview
+You are working as the **{role_name}** on the {context.project_spec.name} project.
+
+- **Project Type**: {context.project_spec.type}
+- **Technologies**: {', '.join(context.project_spec.main_tech)}
+- **Project Path**: {context.project_spec.path}
+- **Your Worktree**: {context.worktree_path}
+- **Session**: {context.session_name}
+
+{context.project_spec.description}
+
+{role_specific_content}
+
+## Current Briefing Context
+
+The following briefing was generated for your role:
+
+---
+
+{briefing}
+
+---
+
+## Important Notes
+
+- **Autonomy**: You have full authorization to begin work immediately
+- **Communication**: Use the team communication channels outlined above
+- **Completion**: Always report task completion as specified in the completion protocol
+- **Quality**: Follow existing project patterns and maintain high code quality
+- **Documentation**: This file contains your complete role context and instructions
+
+## Getting Started
+
+1. Read through this entire file to understand your role
+2. Check the project structure and existing code patterns
+3. Begin your assigned responsibilities immediately
+4. Report progress regularly to the team
+
+---
+**Generated**: {context.session_name} | **Role**: {role_name} | **Worktree**: {context.worktree_path}
+"""
+        
+        return claude_md_content
     
     def _create_briefing_header(self, context: BriefingContext) -> str:
         """Create briefing header with project context."""

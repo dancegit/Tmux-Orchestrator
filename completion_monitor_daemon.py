@@ -713,9 +713,12 @@ class CompletionMonitorDaemon:
         return cleanup_status
 
     def cleanup_verification_cycle(self):
-        """Verify cleanup for the last 3 completed projects"""
+        """Verify cleanup for the last 3 completed projects and handle zombie sessions"""
         try:
             logger.debug("Starting cleanup verification cycle...")
+            
+            # First handle zombie sessions (completed projects with active sessions)
+            self.zombie_session_cleanup()
             
             recent_completed = self.get_recent_completed_projects(3)
             if not recent_completed:
@@ -759,6 +762,133 @@ class CompletionMonitorDaemon:
                 
         except Exception as e:
             logger.error(f"Error during cleanup verification cycle: {e}")
+
+    def zombie_session_cleanup(self):
+        """Find and clean up zombie sessions (completed projects with active tmux sessions)"""
+        try:
+            logger.debug("Checking for zombie sessions...")
+            
+            # Get all active tmux sessions
+            result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                logger.debug("No active tmux sessions found")
+                return
+                
+            active_sessions = set(result.stdout.strip().split('\n')) if result.stdout.strip() else set()
+            if not active_sessions:
+                logger.debug("No active sessions to check")
+                return
+            
+            # Get completed projects from database
+            db_path = self.tmux_orchestrator_path / 'task_queue.db'
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                # Look for completed projects that might have lingering sessions
+                cursor.execute("""
+                    SELECT id, session_name, orchestrator_session, main_session, 
+                           project_name, status, completed_at
+                    FROM project_queue 
+                    WHERE status = 'completed' 
+                    AND completed_at > datetime('now', '-48 hours')
+                    ORDER BY completed_at DESC
+                """)
+                
+                zombie_sessions_found = []
+                
+                for row in cursor.fetchall():
+                    project_id = row['id']
+                    possible_sessions = [
+                        row['session_name'], 
+                        row['orchestrator_session'], 
+                        row['main_session'],
+                        row['project_name']  # Sometimes session matches project name
+                    ]
+                    
+                    # Check if any session names from the completed project are still active
+                    for session_candidate in possible_sessions:
+                        if session_candidate and session_candidate in active_sessions:
+                            zombie_sessions_found.append({
+                                'project_id': project_id,
+                                'session_name': session_candidate,
+                                'completed_at': row['completed_at'],
+                                'status': row['status']
+                            })
+                            active_sessions.discard(session_candidate)  # Remove to avoid duplicates
+                            break  # Found one match, move to next project
+                
+                # Also check for pattern-based matches for projects with NULL session names
+                cursor.execute("""
+                    SELECT id, spec_path, status, completed_at
+                    FROM project_queue 
+                    WHERE status = 'completed' 
+                    AND session_name IS NULL
+                    AND completed_at > datetime('now', '-48 hours')
+                """)
+                
+                for row in cursor.fetchall():
+                    project_id = row['id']
+                    spec_path = row['spec_path']
+                    
+                    if spec_path:
+                        # Extract pattern from spec path (e.g., batch-prop-* from batch_specs)
+                        spec_name = Path(spec_path).stem
+                        if 'batch_prop-' in spec_name or 'prop-' in spec_name:
+                            # Look for sessions matching batch pattern
+                            pattern_matches = [s for s in active_sessions 
+                                             if s.startswith('batch-') and any(part in s for part in spec_name.split('-'))]
+                            
+                            for match in pattern_matches:
+                                zombie_sessions_found.append({
+                                    'project_id': project_id,
+                                    'session_name': match,
+                                    'completed_at': row['completed_at'],
+                                    'status': row['status'],
+                                    'pattern_match': True
+                                })
+                                active_sessions.discard(match)
+                                break  # One match per project
+                
+                # Kill identified zombie sessions
+                if zombie_sessions_found:
+                    logger.warning(f"🧟 Found {len(zombie_sessions_found)} zombie sessions")
+                    
+                    for zombie in zombie_sessions_found:
+                        session_name = zombie['session_name']
+                        project_id = zombie['project_id']
+                        
+                        logger.warning(f"Killing zombie session {session_name} (completed project {project_id})")
+                        
+                        try:
+                            kill_result = subprocess.run(['tmux', 'kill-session', '-t', session_name], 
+                                                       capture_output=True, text=True, timeout=10)
+                            if kill_result.returncode == 0:
+                                logger.info(f"✅ Successfully killed zombie session {session_name}")
+                                
+                                # Update database to record the cleanup
+                                conn.execute("""
+                                    UPDATE project_queue 
+                                    SET session_name = COALESCE(session_name, ?),
+                                        error_message = COALESCE(error_message, '') || 
+                                                       CASE WHEN error_message IS NOT NULL AND error_message != '' 
+                                                            THEN '; ' ELSE '' END || 
+                                                       'Zombie session cleanup: ' || ? || ' killed at ' || datetime('now')
+                                    WHERE id = ?
+                                """, (session_name, session_name, project_id))
+                                conn.commit()
+                                
+                            else:
+                                logger.error(f"Failed to kill zombie session {session_name}: {kill_result.stderr}")
+                                
+                        except Exception as e:
+                            logger.error(f"Error killing zombie session {session_name}: {e}")
+                else:
+                    logger.debug("No zombie sessions found")
+                    
+        except Exception as e:
+            logger.error(f"Error during zombie session cleanup: {e}")
 
     def health_monitoring_cycle(self):
         """Check health of all active agent sessions"""

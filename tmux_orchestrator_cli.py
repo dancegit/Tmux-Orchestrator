@@ -35,12 +35,12 @@ def find_git_root(start_path):
     return None
 
 def cmd_run_orchestrator(args):
-    """Run the full orchestrator using the modular system."""
-    print("🚀 Running Tmux Orchestrator (Modular v2.0)...")
+    """Add project to queue instead of running directly (QUEUE-ONLY ENFORCEMENT)."""
+    print("🚀 Tmux Orchestrator (Queue-Only v2.1)...")
     
-    # ALWAYS force batch mode to limit concurrent teams
-    args.batch = True
-    print("📦 Batch mode enforced - limiting to single active team for resource management")
+    # ENFORCE QUEUE-ONLY BEHAVIOR - NO DIRECT EXECUTION ALLOWED
+    print("📋 QUEUE-ONLY MODE: All projects must be processed through the batch queue")
+    print("🚫 Direct orchestration execution is disabled to prevent concurrent violations")
     
     # Auto-detect project from spec file if not provided
     if hasattr(args, 'spec') and args.spec and (not hasattr(args, 'project') or not args.project):
@@ -134,7 +134,75 @@ def cmd_run_orchestrator(args):
         os.environ['DAEMON_MODE'] = '1'
         print("👻 Running in daemon mode (unattended)")
         
-    return orchestrator_main()
+    # QUEUE-ONLY ENFORCEMENT: Replace direct execution with queue addition
+    print("\n🚫 DIRECT EXECUTION DISABLED")
+    print("📋 Adding project to queue for daemon processing...")
+    
+    # Validate required arguments
+    if not hasattr(args, 'spec') or not args.spec:
+        print("❌ Error: Specification file is required")
+        print("   Use --spec /path/to/spec.md")
+        return 1
+    
+    if not hasattr(args, 'project') or not args.project:
+        print("❌ Error: Project directory is required")
+        print("   Use --project /path/to/project or ensure spec is detectable")
+        return 1
+    
+    try:
+        # Import queue addition functionality
+        import sqlite3
+        import time
+        from pathlib import Path
+        
+        # Validate paths
+        spec_path = Path(args.spec).resolve()
+        project_path = Path(args.project).resolve()
+        
+        if not spec_path.exists():
+            print(f"❌ Spec file not found: {spec_path}")
+            return 1
+            
+        print(f"📋 Adding to queue:")
+        print(f"   Spec: {spec_path}")
+        print(f"   Project: {project_path}")
+        
+        # Add project to queue using the existing queue system
+        conn = sqlite3.connect('task_queue.db')
+        cursor = conn.cursor()
+        
+        # Check for duplicate active projects (enforce unique constraint)
+        cursor.execute('''
+            SELECT COUNT(*) FROM project_queue 
+            WHERE spec_path = ? AND status IN ('queued', 'processing')
+        ''', (str(spec_path),))
+        
+        if cursor.fetchone()[0] > 0:
+            print(f"⚠️  Project already queued or processing: {spec_path}")
+            print("   Use './qs' to check queue status")
+            conn.close()
+            return 1
+        
+        # Add to queue
+        cursor.execute('''
+            INSERT INTO project_queue (spec_path, project_path, status, enqueued_at)
+            VALUES (?, ?, 'queued', ?)
+        ''', (str(spec_path), str(project_path), time.time()))
+        
+        project_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Project added to queue with ID: {project_id}")
+        print(f"🔄 Queue daemon will process this project automatically")
+        print(f"📊 Use './qs' to monitor progress")
+        print(f"\n💡 Queue-only mode enforces max_concurrent=1 for system stability")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"❌ Failed to add project to queue: {e}")
+        return 1
 
 
 def cmd_check_oauth(args):
@@ -210,8 +278,8 @@ Examples:
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
-    # Run orchestrator command - with full the modular orchestrator compatibility
-    run_parser = subparsers.add_parser('run', help='Run the full orchestrator')
+    # Run orchestrator command - QUEUE-ONLY MODE (v2.1)  
+    run_parser = subparsers.add_parser('run', help='Add project to processing queue (queue-only mode)')
     run_parser.add_argument('--project', '-p', type=str, help='Path to the project directory')
     run_parser.add_argument('--spec', '-s', type=str, help='Path to the specification file')
     run_parser.add_argument('--resume', action='store_true', help='Resume an existing orchestration')

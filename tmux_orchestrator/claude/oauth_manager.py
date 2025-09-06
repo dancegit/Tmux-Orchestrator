@@ -781,6 +781,56 @@ class SessionOrchestrator:
         self.unique_session_name = None
         self.worktree_paths = {}
     
+    def _find_existing_session(self, spec: ImplementationSpec) -> Optional[str]:
+        """
+        Check for existing tmux sessions for the same project to prevent duplicates.
+        
+        Args:
+            spec: Implementation specification with project details
+            
+        Returns:
+            str: Existing session name if found, None otherwise
+        """
+        import subprocess
+        import re
+        
+        try:
+            # Get all tmux sessions
+            result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], 
+                                 capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                return None
+                
+            existing_sessions = result.stdout.strip().split('\n')
+            if not existing_sessions or existing_sessions == ['']:
+                return None
+            
+            # Create pattern to match project-related sessions
+            project_name = re.sub(r'[^a-zA-Z0-9-]', '-', spec.project.name)[:20]
+            pattern = re.compile(f"^{re.escape(project_name)}-[a-f0-9]{{8}}$")
+            
+            # Check for existing sessions matching this project
+            for session in existing_sessions:
+                session = session.strip()
+                if pattern.match(session):
+                    # Verify the session is still active and has windows
+                    check_result = subprocess.run(
+                        ['tmux', 'list-windows', '-t', session, '-F', '#{window_name}'],
+                        capture_output=True, text=True
+                    )
+                    if check_result.returncode == 0:
+                        windows = check_result.stdout.strip().split('\n')
+                        if windows and len(windows) > 1:  # Has multiple windows (likely agents)
+                            self.console.print(f"[yellow]⚠️  Found existing session for this project: {session}[/yellow]")
+                            return session
+            
+            return None
+            
+        except Exception as e:
+            self.console.print(f"[yellow]Warning: Could not check for existing sessions: {e}[/yellow]")
+            return None
+
     def setup_tmux_session(self, spec: ImplementationSpec, team_config: Optional[Dict[str, Any]] = None) -> str:
         """
         Set up the tmux session with roles based on project specification.
@@ -796,6 +846,14 @@ class SessionOrchestrator:
             str: Session name if successful, None otherwise
         """
         try:
+            # Check for existing session first
+            existing_session = self._find_existing_session(spec)
+            if existing_session:
+                self.console.print(f"[blue]🔄 Found existing session for project: {existing_session}[/blue]")
+                self.console.print(f"[blue]Reusing existing session instead of creating duplicate[/blue]")
+                self.unique_session_name = existing_session
+                return existing_session
+            
             # Generate unique session name
             import uuid
             import re
