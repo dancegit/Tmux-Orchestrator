@@ -3585,8 +3585,9 @@ def main():
     
     args = parser.parse_args()
     
-    # Determine if this is a read-only operation
-    read_only = args.list or args.queue_list or (args.queue_status is not None)
+    # Determine if this is a read-only operation  
+    # Include queue-add as read-only to allow adding to queue while scheduler is running
+    read_only = args.list or args.queue_list or (args.queue_status is not None) or args.queue_add
     
     # FIXED: Ensure daemon mode is not read-only so it uses the lock manager
     if args.daemon or args.queue_daemon:
