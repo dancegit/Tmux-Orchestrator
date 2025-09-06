@@ -98,26 +98,55 @@ class ProjectValidator:
     
     @staticmethod
     def _check_src_files(project_path: Path) -> bool:
-        """Check that src/ directory exists and contains implementation files."""
+        """Check that implementation files exist (src/ directory or slice structure)."""
+        # Check for standard src/ directory
         src_dir = project_path / 'src'
-        if not src_dir.exists():
-            logger.warning(f"No src/ directory found in {project_path}")
+        
+        # Also check for SignalMatrix slice structures (e.g., elliott_wave_slice/)
+        slice_dirs = list(project_path.glob('*_slice'))
+        
+        # Check if this is a worktree for a slice (has infrastructure/, modal/, etc.)
+        has_slice_structure = any([
+            (project_path / 'elliott_wave_slice').exists(),
+            (project_path / 'reporting_slice').exists(),
+            (project_path / 'market_data_slice').exists(),
+            # Add other known slice patterns
+            len(slice_dirs) > 0
+        ])
+        
+        if not src_dir.exists() and not has_slice_structure:
+            logger.warning(f"No src/ directory or slice structure found in {project_path}")
             return False
+        
+        # Determine which directory to check
+        check_dirs = []
+        if src_dir.exists():
+            check_dirs.append(src_dir)
+        if has_slice_structure:
+            check_dirs.extend(slice_dirs)
+            # Also check infrastructure directories within slices
+            for slice_dir in slice_dirs:
+                if (slice_dir / 'infrastructure').exists():
+                    check_dirs.append(slice_dir / 'infrastructure')
+                if (slice_dir / 'modal').exists():
+                    check_dirs.append(slice_dir / 'modal')
         
         # Check for meaningful Python files (not just __init__.py)
-        py_files = list(src_dir.rglob('*.py'))
-        meaningful_files = [f for f in py_files if '__init__' not in f.name and f.stat().st_size > 100]  # >100 bytes
+        meaningful_files = []
+        for check_dir in check_dirs:
+            py_files = list(check_dir.rglob('*.py'))
+            meaningful_files.extend([f for f in py_files if '__init__' not in f.name and f.stat().st_size > 100])  # >100 bytes
+            
+            # Also check for other implementation files
+            js_files = list(check_dir.rglob('*.js'))
+            ts_files = list(check_dir.rglob('*.ts'))
+            meaningful_files.extend(js_files + ts_files)
         
-        # Also check for other implementation files
-        js_files = list(src_dir.rglob('*.js'))
-        ts_files = list(src_dir.rglob('*.ts'))
-        other_files = meaningful_files + js_files + ts_files
-        
-        if len(other_files) < 1:  # Require at least 1 substantial file
-            logger.warning(f"Insufficient implementation files in src/: {len(other_files)}")
+        if len(meaningful_files) < 1:  # Require at least 1 substantial file
+            logger.warning(f"Insufficient implementation files: {len(meaningful_files)}")
             return False
         
-        logger.debug(f"✓ Found {len(other_files)} implementation files in src/")
+        logger.debug(f"✓ Found {len(meaningful_files)} implementation files")
         return True
     
     @staticmethod
