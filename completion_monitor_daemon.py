@@ -26,6 +26,7 @@ from scheduler import TmuxOrchestratorScheduler
 from completion_detector import CompletionDetector, create_completion_marker
 from agent_health_monitor import AgentHealthMonitor, AgentHealthDatabase
 from scheduler_lock_manager import SchedulerLockManager
+from session_restoration_system import SessionRestorer
 
 # Configure logging
 logging.basicConfig(
@@ -66,6 +67,9 @@ class CompletionMonitorDaemon:
         # Initialize health monitoring
         self.health_monitor = AgentHealthMonitor()
         self.health_database = AgentHealthDatabase(str(self.tmux_orchestrator_path / 'task_queue.db'))
+        
+        # Initialize session restoration system
+        self.session_restorer = SessionRestorer(self.tmux_orchestrator_path)
         
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -562,12 +566,33 @@ class CompletionMonitorDaemon:
         except Exception as e:
             logger.error(f"Failed to populate missing sessions: {e}")
     
+    def session_restoration_cycle(self):
+        """Check for and restore lost tmux sessions"""
+        try:
+            logger.debug("Checking for lost sessions...")
+            restored_count = self.session_restorer.restore_all_lost_sessions()
+            
+            if restored_count > 0:
+                logger.info(f"🔄 Restored {restored_count} lost session(s)")
+                
+                # After restoration, update our processing projects list
+                # to include the newly restored sessions
+                logger.debug("Refreshing processing projects after restoration")
+            else:
+                logger.debug("No lost sessions found")
+                
+        except Exception as e:
+            logger.error(f"Error during session restoration cycle: {e}")
+    
     def monitoring_cycle(self):
         """Run one monitoring cycle - check all processing projects"""
         logger.debug("Starting monitoring cycle...")
         
         # First, fix any NULL session names
         self.populate_missing_sessions()
+        
+        # Check for and restore any lost sessions
+        self.session_restoration_cycle()
         
         processing_projects = self.get_processing_projects()
         if not processing_projects:
