@@ -474,6 +474,11 @@ Examples:
     # Reconcile missing sessions (projects PROCESSING but sessions gone)
     reconciled_missing = reconcile_missing_sessions(cursor, conn, projects, active_sessions)
     
+    # Warn if reconciliation is disabled
+    if os.getenv('DISABLE_RECONCILIATION', 'false').lower() == 'true':
+        print("⚠️  WARNING: Reconciliation is DISABLED via DISABLE_RECONCILIATION env var")
+        print("   This may lead to mismatches between DB status and actual tmux sessions!")
+    
     reconciled_sessions = reconciled_orphaned + reconciled_missing
     
     # If we reconciled any sessions, re-fetch projects to include them

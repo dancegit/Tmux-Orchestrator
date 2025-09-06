@@ -2252,9 +2252,26 @@ class TmuxOrchestratorScheduler:
         return None
 
     def update_project_status(self, project_id: int, status: str, error_message: Optional[str] = None):
-        """Update the status of a queued project"""
+        """Update the status of a queued project with real-time validation"""
         now = time.time()
         cursor = self.conn.cursor()
+        
+        # Real-time validation: Check tmux session status before marking completed
+        if status in ('completed', 'failed'):
+            cursor.execute("SELECT session_name, orchestrator_session, main_session FROM project_queue WHERE id = ?", (project_id,))
+            row = cursor.fetchone()
+            if row:
+                session_name = row[0] or row[1] or row[2]
+                if session_name:
+                    try:
+                        import subprocess
+                        result = subprocess.run(['tmux', 'has-session', '-t', session_name], 
+                                              capture_output=True, text=True, timeout=2)
+                        if result.returncode == 0:
+                            logger.warning(f"Session {session_name} still exists for project {project_id} marked as {status}")
+                    except Exception as e:
+                        logger.debug(f"Could not verify session status: {e}")
+        
         if status == 'processing':
             cursor.execute("UPDATE project_queue SET status = ?, started_at = ? WHERE id = ?", (status, now, project_id))
         elif status in ('completed', 'failed'):
