@@ -623,6 +623,9 @@ class CompletionMonitorDaemon:
         # Check for wrongly failed projects that might actually be completed
         self.failed_project_recovery_cycle()
         
+        # Check for orphaned sessions (sessions without DB entries)
+        self.orphaned_session_detection()
+        
         logger.debug("Monitoring cycle completed")
     
     def get_recent_completed_projects(self, limit: int = 3) -> List[Dict[str, Any]]:
@@ -763,6 +766,123 @@ class CompletionMonitorDaemon:
         except Exception as e:
             logger.error(f"Error during cleanup verification cycle: {e}")
 
+    def orphaned_session_detection(self):
+        """Detect and recover orphaned sessions (active tmux sessions without database entries)"""
+        try:
+            logger.debug("Checking for orphaned sessions (sessions without DB entries)...")
+            
+            # Get all active tmux sessions
+            result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                logger.debug("No tmux sessions found or tmux error")
+                return
+            
+            active_sessions = set(result.stdout.strip().split('\n')) if result.stdout.strip() else set()
+            
+            # Get all tracked sessions from database
+            db_path = self.tmux_orchestrator_path / 'task_queue.db'
+            tracked_sessions = set()
+            
+            with sqlite3.connect(str(db_path)) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT DISTINCT session_name 
+                    FROM project_queue 
+                    WHERE session_name IS NOT NULL
+                """)
+                tracked_sessions = {row[0] for row in cursor.fetchall()}
+            
+            # Find orphaned sessions (active but not in DB)
+            # Filter to only orchestration sessions (containing 'impl', 'android', or hash patterns)
+            orphaned_sessions = []
+            for session in active_sessions:
+                if session not in tracked_sessions:
+                    # Check if it looks like an orchestration session
+                    if any(pattern in session.lower() for pattern in ['impl', 'android', 'monitor', 'orchestrator']):
+                        orphaned_sessions.append(session)
+                    elif '-' in session and len(session) > 20:  # Hash-based session names
+                        orphaned_sessions.append(session)
+            
+            if orphaned_sessions:
+                logger.warning(f"🚨 Found {len(orphaned_sessions)} orphaned sessions without DB entries!")
+                
+                for session in orphaned_sessions:
+                    logger.warning(f"  - Orphaned session: {session}")
+                    
+                    # Auto-recover by adding to database
+                    self._recover_orphaned_session(session)
+            else:
+                logger.debug("No orphaned sessions detected")
+                
+        except Exception as e:
+            logger.error(f"Error during orphaned session detection: {e}", exc_info=True)
+    
+    def _recover_orphaned_session(self, session_name: str):
+        """Recover an orphaned session by adding it to the database"""
+        try:
+            logger.info(f"Attempting to recover orphaned session: {session_name}")
+            
+            # Get session creation time from tmux
+            result = subprocess.run(
+                ['tmux', 'display-message', '-p', '-t', session_name, '#{session_created}'],
+                capture_output=True, text=True, timeout=5
+            )
+            
+            created_timestamp = int(result.stdout.strip()) if result.returncode == 0 else int(time.time())
+            
+            # Infer project details from session name
+            project_name = session_name.split('--')[0] if '--' in session_name else session_name
+            spec_path = f"ORPHANED_SESSION_{session_name}"  # Placeholder
+            project_path = f"/home/clauderun/{project_name}"  # Best guess
+            
+            # Add to database
+            db_path = self.tmux_orchestrator_path / 'task_queue.db'
+            with sqlite3.connect(str(db_path)) as conn:
+                cursor = conn.cursor()
+                
+                # Check if already exists (race condition prevention)
+                cursor.execute("""
+                    SELECT id FROM project_queue WHERE session_name = ?
+                """, (session_name,))
+                
+                if cursor.fetchone():
+                    logger.debug(f"Session {session_name} already in database (race condition)")
+                    return
+                
+                # Insert new entry
+                cursor.execute("""
+                    INSERT INTO project_queue (
+                        spec_path, project_path, status, 
+                        enqueued_at, started_at, session_name,
+                        orchestrator_session, main_session, 
+                        priority, retry_count, error_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    spec_path, project_path, 'processing',
+                    created_timestamp - 10, created_timestamp, session_name,
+                    session_name, session_name,
+                    1, 0, f'AUTO-RECOVERED: Orphaned session detected at {datetime.now()}'
+                ))
+                
+                conn.commit()
+                project_id = cursor.lastrowid
+                
+                logger.info(f"✅ Successfully recovered orphaned session {session_name} as project ID {project_id}")
+                
+                # Send alert
+                if self.email_notifier:
+                    self.email_notifier.send_notification(
+                        f"Orphaned Session Recovered: {session_name}",
+                        f"An orphaned tmux session '{session_name}' was detected and added to the database as project ID {project_id}.\n\n"
+                        f"This session was running without database tracking, violating the queue-only architecture.\n"
+                        f"Please investigate how this session was created outside the normal queue system."
+                    )
+                
+        except Exception as e:
+            logger.error(f"Failed to recover orphaned session {session_name}: {e}", exc_info=True)
+    
     def zombie_session_cleanup(self):
         """Find and clean up zombie sessions (completed projects with active tmux sessions)"""
         try:
