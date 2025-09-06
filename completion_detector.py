@@ -269,19 +269,24 @@ class CompletionDetector:
         """
         session_name = project.get('session_name', '')
         project_path = project.get('project_path', '')
+        project_id = project.get('id', 'unknown')
         
-        # CRITICAL: First validate actual implementation exists
-        # This prevents marking empty projects as complete
+        # CRITICAL FIX: Enforce implementation validation BEFORE any other checks
+        # This prevents empty projects from being marked complete via any path
         if project_path:
             try:
                 from implementation_validator import validate_project_implementation
-                if not validate_project_implementation(project_path):
-                    logger.warning(f"Project {session_name} has NO valid implementation - cannot mark complete")
-                    return 'processing', 'Implementation validation failed - no actual code found'
+                is_valid = validate_project_implementation(project_path)
+                if not is_valid:
+                    logger.warning(f"Project {project_id} (session: {session_name or 'NULL'}) has NO valid implementation - blocking completion")
+                    return 'processing', 'Implementation validation failed - no actual code found, cannot mark complete'
             except Exception as e:
-                logger.error(f"Error validating implementation: {e}")
-                # Don't mark complete if we can't validate
-                return 'processing', 'Unable to validate implementation'
+                logger.error(f"Implementation validation error for project {project_id}: {e}")
+                return 'processing', f'Unable to validate implementation: {e}'
+        else:
+            # If no project_path provided, we cannot validate - don't mark complete
+            logger.warning(f"Project {project_id} has no project_path - cannot validate implementation")
+            return 'processing', 'No project path provided for validation'
         
         # Method 1: Check for completion marker (highest priority)
         if self.check_completion_marker(session_name):
@@ -448,6 +453,21 @@ class CompletionDetector:
         
         if not session_name:
             logger.warning("Cannot auto-create marker: missing session_name")
+            return
+        
+        # CRITICAL FIX: Re-validate implementation before creating ANY marker
+        # Prevents markers for empty/invalid projects
+        if project_path:
+            try:
+                from implementation_validator import validate_project_implementation
+                if not validate_project_implementation(project_path):
+                    logger.error(f"Refusing to auto-create marker for project {project_id}: invalid implementation")
+                    return
+            except Exception as e:
+                logger.error(f"Validation error in auto_create_marker for project {project_id}: {e}")
+                return
+        else:
+            logger.warning(f"Cannot validate project {project_id} before marker creation - no project_path")
             return
             
         try:

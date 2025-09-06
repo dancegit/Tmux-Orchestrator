@@ -540,9 +540,34 @@ class CompletionMonitorDaemon:
         except Exception as e:
             logger.error(f"Error during failed project recovery cycle: {e}")
     
+    def populate_missing_sessions(self):
+        """Fix NULL session names by querying active tmux sessions"""
+        try:
+            result = subprocess.run(['tmux', 'list-sessions', '-F', '#{session_name}'], capture_output=True, text=True)
+            active_sessions = set(result.stdout.strip().split('\n')) if result.returncode == 0 else set()
+            
+            db_path = self.tmux_orchestrator_path / 'task_queue.db'
+            with sqlite3.connect(str(db_path)) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, project_name FROM project_queue WHERE session_name IS NULL AND status = 'processing'")
+                for row in cursor.fetchall():
+                    project_id, project_name = row
+                    # Match by name pattern (e.g., for batch projects)
+                    matching_session = next((s for s in active_sessions if project_name and project_name in s), None)
+                    if matching_session:
+                        conn.execute("UPDATE project_queue SET session_name = ?, orchestrator_session = ? WHERE id = ?", 
+                                   (matching_session, matching_session, project_id))
+                        logger.info(f"Populated session_name for project {project_id}: {matching_session}")
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to populate missing sessions: {e}")
+    
     def monitoring_cycle(self):
         """Run one monitoring cycle - check all processing projects"""
         logger.debug("Starting monitoring cycle...")
+        
+        # First, fix any NULL session names
+        self.populate_missing_sessions()
         
         processing_projects = self.get_processing_projects()
         if not processing_projects:

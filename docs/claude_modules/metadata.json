@@ -1,0 +1,61 @@
+{
+  "version": "1.0.0",
+  "created": "2025-01-06",
+  "modules": {
+    "core/principles.md": {
+      "tokens": 516,
+      "lines": 48,
+      "size_bytes": 2064
+    },
+    "core/communication.md": {
+      "tokens": 259,
+      "lines": 29,
+      "size_bytes": 1038
+    },
+    "core/completion.md": {
+      "tokens": 268,
+      "lines": 36,
+      "size_bytes": 1072
+    },
+    "roles/core_roles.md": {
+      "tokens": 552,
+      "lines": 56,
+      "size_bytes": 2209
+    },
+    "roles/optional_roles.md": {
+      "tokens": 393,
+      "lines": 47,
+      "size_bytes": 1573
+    },
+    "roles/system_ops_roles.md": {
+      "tokens": 553,
+      "lines": 68,
+      "size_bytes": 2212
+    },
+    "workflows/git_workflow.md": {
+      "tokens": 493,
+      "lines": 63,
+      "size_bytes": 1974
+    },
+    "workflows/worktree_setup.md": {
+      "tokens": 452,
+      "lines": 59,
+      "size_bytes": 1810
+    },
+    "configuration/team_detection.md": {
+      "tokens": 327,
+      "lines": 47,
+      "size_bytes": 1308
+    },
+    "configuration/scaling.md": {
+      "tokens": 327,
+      "lines": 38,
+      "size_bytes": 1311
+    },
+    "index.md": {
+      "tokens": 452,
+      "lines": 43,
+      "size_bytes": 1810
+    }
+  }
+}

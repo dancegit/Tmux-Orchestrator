@@ -26,6 +26,25 @@ class ImplementationValidator:
         self.project_path = Path(project_path)
         self.src_path = self.project_path / 'src'
         self.tests_path = self.project_path / 'tests'
+        
+        # Also check for worktree directories (project-tmux-worktrees pattern)
+        self.worktree_paths = []
+        project_name = self.project_path.name
+        parent_dir = self.project_path.parent
+        
+        # Look for worktree directories following the naming pattern
+        worktree_patterns = [
+            parent_dir / f"{project_name}-tmux-worktrees",
+            parent_dir / f"{project_name}-worktrees",
+            self.project_path / "worktrees"
+        ]
+        
+        for pattern in worktree_patterns:
+            if pattern.exists() and pattern.is_dir():
+                # Find agent worktrees inside
+                for agent_dir in pattern.iterdir():
+                    if agent_dir.is_dir() and not agent_dir.name.startswith('.'):
+                        self.worktree_paths.append(agent_dir)
     
     def validate_implementation(self) -> Tuple[bool, List[str], Dict[str, int]]:
         """
@@ -88,36 +107,65 @@ class ImplementationValidator:
         return is_valid, reasons, metrics
     
     def _count_source_files(self) -> int:
-        """Count Python source files in src directory"""
-        if not self.src_path.exists():
-            return 0
-        
+        """Count Python source files in src directory and worktrees"""
         count = 0
-        for file in self.src_path.rglob('*.py'):
-            # Skip __pycache__ and empty __init__ files
-            if '__pycache__' not in str(file):
-                if file.name != '__init__.py' or file.stat().st_size > 10:
-                    count += 1
+        
+        # Check main src directory
+        if self.src_path.exists():
+            for file in self.src_path.rglob('*.py'):
+                # Skip __pycache__ and empty __init__ files
+                if '__pycache__' not in str(file):
+                    if file.name != '__init__.py' or file.stat().st_size > 10:
+                        count += 1
+        
+        # Also check worktree directories
+        for worktree in self.worktree_paths:
+            # Check both src/ subdirectory and root of worktree
+            paths_to_check = [worktree / 'src', worktree]
+            for path in paths_to_check:
+                if path.exists():
+                    for file in path.rglob('*.py'):
+                        if '__pycache__' not in str(file) and '.git' not in str(file):
+                            if file.name != '__init__.py' or file.stat().st_size > 10:
+                                count += 1
+        
         return count
     
     def _count_lines_of_code(self) -> int:
         """Count actual lines of code (excluding comments and blank lines)"""
-        if not self.src_path.exists():
-            return 0
-        
         total_lines = 0
-        for file in self.src_path.rglob('*.py'):
-            if '__pycache__' in str(file):
-                continue
-            try:
-                with open(file, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        # Count non-empty, non-comment lines
-                        if line and not line.startswith('#'):
-                            total_lines += 1
-            except Exception as e:
-                logger.debug(f"Error reading {file}: {e}")
+        
+        # Check main src directory
+        if self.src_path.exists():
+            for file in self.src_path.rglob('*.py'):
+                if '__pycache__' in str(file):
+                    continue
+                try:
+                    with open(file, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            # Count non-empty, non-comment lines
+                            if line and not line.startswith('#'):
+                                total_lines += 1
+                except Exception as e:
+                    logger.debug(f"Error reading {file}: {e}")
+        
+        # Also check worktree directories
+        for worktree in self.worktree_paths:
+            paths_to_check = [worktree / 'src', worktree]
+            for path in paths_to_check:
+                if path.exists():
+                    for file in path.rglob('*.py'):
+                        if '__pycache__' in str(file) or '.git' in str(file):
+                            continue
+                        try:
+                            with open(file, 'r') as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if line and not line.startswith('#'):
+                                        total_lines += 1
+                        except Exception as e:
+                            logger.debug(f"Error reading {file}: {e}")
         
         return total_lines
     

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from rich.console import Console
 
 from .agent_factory import RoleConfig
+from .module_loader import ModuleLoader
 from ..claude.mcp_manager import MCPManager
 
 console = Console()
@@ -61,6 +62,10 @@ class BriefingSystem:
         """
         self.tmux_orchestrator_path = tmux_orchestrator_path
         self.mcp_manager = MCPManager()
+        
+        # Initialize module loader for modularized CLAUDE knowledge base
+        modules_path = tmux_orchestrator_path / 'docs' / 'claude_modules'
+        self.module_loader = ModuleLoader(modules_path)
     
     def generate_role_briefing(self, context: BriefingContext) -> str:
         """
@@ -104,6 +109,22 @@ class BriefingSystem:
         else:
             components.append(self._create_generic_briefing(context))
         
+        # Add modular CLAUDE knowledge base content
+        try:
+            role_modules = self.module_loader.load_for_role(role_key)
+            if not role_modules.get('legacy_notice'):  # Only add if not in legacy mode
+                module_context = self.module_loader.format_role_context(role_modules)
+                if module_context:
+                    components.append("📖 **Knowledge Base Context**:\n" + module_context)
+            
+            # Add module references for the agent
+            module_refs = self.module_loader.get_module_reference(role_key)
+            components.append(module_refs)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load modular knowledge base: {e}[/yellow]")
+            # Fall back to suggesting CLAUDE.md
+            components.append("📚 **Reference**: Read CLAUDE.md for detailed instructions (if available)")
+        
         # Common footer components
         components.append(self._create_communication_channels(context))
         components.append(self._create_completion_protocol(context))
@@ -139,7 +160,7 @@ Since context-prime.md is not available, please familiarize yourself with the pr
 
 1. **Read essential documentation** (use the Read tool):
    - README.md - Project overview and setup instructions
-   - CLAUDE.md - Project-specific Claude instructions (if exists)
+   - docs/claude_modules/index.md - Modular knowledge base index
    - Any docs/ directory content
    
 2. **Understand project structure**:
